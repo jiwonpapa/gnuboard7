@@ -1,0 +1,54 @@
+# Local-only files
+- /.git/
+- /.github/
+- /.env
+- /.env.*
+- /auth.json
+- /.idea/
+- /.vscode/
+- /.zed/
+- /.nova/
+- /.fleet/
+- /.api-test/
+- /.serena/
+- /.claudeignore
+- /.mcp.json
+- /boost.json
+
+# Build and dependency artifacts generated per environment
+- /vendor/***
+- /node_modules/***
+- /bootstrap/cache/***
+- /storage/***
+- /public/storage/***
+
+# Server-managed tools / utilities must survive deploy syncs
+- /pma/***
+- /phpmyadmin/***
+- /phpMyAdmin/***
+- /public/pma/***
+- /public/phpmyadmin/***
+- /public/phpMyAdmin/***
+
+# Non-runtime project files
+- /docs/***
+- /tests/***
+- /cypress/***
+
+# Active extension copies are server-managed. Deploy only bundled sources.
++ /modules/
++ /modules/_bundled/***
+- /modules/***
++ /plugins/
++ /plugins/_bundled/***
+- /plugins/***
++ /templates/
++ /templates/_bundled/***
+- /templates/***
+
+# Bundled dependency directories stay server/local managed
+- /modules/_bundled/*/vendor/***
+- /modules/_bundled/*/node_modules/***
+- /plugins/_bundled/*/vendor/***
+- /plugins/_bundled/*/node_modules/***
+- /templates/_bundled/*/node_modules/***

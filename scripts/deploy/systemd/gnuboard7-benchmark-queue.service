@@ -1,0 +1,15 @@
+[Unit]
+Description=Gnuboard7 benchmark queue worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gnuboard7/public_html
+ExecStart=/usr/bin/php /home/gnuboard7/public_html/artisan queue:work database --queue=benchmark,default --sleep=1 --tries=1 --timeout=900 --backoff=3
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/gnuboard7/public_html/storage/logs/benchmark-queue.log
+StandardError=append:/home/gnuboard7/public_html/storage/logs/benchmark-queue.log
+
+[Install]
+WantedBy=default.target
