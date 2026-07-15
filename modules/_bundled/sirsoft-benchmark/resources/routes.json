@@ -1,0 +1,21 @@
+{
+    "version": "1.0.0",
+    "routes": [
+        {
+            "path": "*/admin/benchmark/dummy-data",
+            "layout": "admin_benchmark_dashboard",
+            "auth_required": true,
+            "meta": {
+                "title": "대용량 더미데이터 생성"
+            }
+        },
+        {
+            "path": "*/admin/benchmark/dummy-data/:id",
+            "layout": "admin_benchmark_dashboard",
+            "auth_required": true,
+            "meta": {
+                "title": "대용량 더미데이터 생성"
+            }
+        }
+    ]
+}

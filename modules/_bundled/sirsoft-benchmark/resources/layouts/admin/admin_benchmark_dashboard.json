@@ -1,0 +1,1959 @@
+{
+    "version": "1.0.0",
+    "layout_name": "admin_benchmark_dashboard",
+    "permissions": [
+        "sirsoft-benchmark.jobs.read"
+    ],
+    "extends": "_admin_base",
+    "meta": {
+        "title": "대용량 더미데이터 생성",
+        "description": "게시판 또는 쇼핑몰 대용량 벤치마크 데이터를 생성합니다."
+    },
+    "init_actions": [
+        {
+            "handler": "setState",
+            "params": {
+                "target": "local",
+                "submitting": false,
+                "estimating": false,
+                "errors": null,
+                "estimate": null,
+                "selectedBoardIndex": {},
+                "form": {
+                    "dataset_name": "benchmark-dataset",
+                    "workload_type": "board",
+                    "total_users": 10000,
+                    "total_boards": 0,
+                    "total_posts": 0,
+                    "selected_boards": [],
+                    "comment_rate": 0.35,
+                    "avg_comments_per_post": 2.4,
+                    "max_comments_per_post": 20,
+                    "batch_size": 3000,
+                    "chunk_size": 20000,
+                    "seed": 20260402,
+                    "dry_run": false,
+                    "time_distribution": "recent_burst",
+                    "activity_profile": "skewed"
+                    ,"total_products": 10000
+                    ,"total_categories": 100
+                    ,"total_brands": 50
+                    ,"category_depth": 3
+                    ,"category_distribution": "skewed"
+                    ,"image_pool_size": 100
+                    ,"image_coverage": 1
+                    ,"max_images_per_product": 1
+                    ,"image_source": "picsum"
+                    ,"image_mode": "shared"
+                }
+            }
+        },
+        {
+            "handler": "sirsoft-benchmark.startAutoRefresh",
+            "params": {
+                "enabled": "{{!!route?.id}}",
+                "routeId": "{{route?.id ?? ''}}",
+                "interval": 2000
+            }
+        }
+    ],
+    "data_sources": [
+        {
+            "id": "jobs",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-benchmark/admin/generation-jobs",
+            "method": "GET",
+            "auth_required": true,
+            "auto_fetch": true,
+            "params": {
+                "per_page": 10
+            },
+            "fallback": {
+                "data": {
+                    "data": [],
+                    "meta": {
+                        "current_page": 1,
+                        "last_page": 1,
+                        "per_page": 10,
+                        "total": 0
+                    }
+                }
+            }
+        },
+        {
+            "id": "availableBoards",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-benchmark/admin/generation-jobs/boards",
+            "method": "GET",
+            "auth_required": true,
+            "auto_fetch": true,
+            "params": {
+                "limit": 200
+            },
+            "fallback": {
+                "data": {
+                    "data": []
+                }
+            }
+        },
+        {
+            "id": "selectedJob",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{route?.id}}",
+            "method": "GET",
+            "auth_required": true,
+            "auto_fetch": true,
+            "if": "{{route?.id}}",
+            "fallback": {
+                "data": null
+            }
+        },
+        {
+            "id": "selectedLogs",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{route?.id}}/logs",
+            "method": "GET",
+            "auth_required": true,
+            "auto_fetch": true,
+            "if": "{{route?.id}}",
+            "fallback": {
+                "data": {
+                    "data": []
+                }
+            }
+        }
+    ],
+    "slots": {
+        "content": [
+            {
+                "id": "benchmark_root",
+                "type": "basic",
+                "name": "Div",
+                "props": {
+                    "className": "p-6 bg-gray-50 dark:bg-gray-900 space-y-6"
+                },
+                "children": [
+                    {
+                        "id": "header",
+                        "type": "composite",
+                        "name": "PageHeader",
+                        "props": {
+                            "title": "대용량 더미데이터 생성",
+                            "description": "게시판 또는 쇼핑몰 부하 데이터를 큐 기반 배치 작업으로 생성합니다."
+                        },
+                        "children": [
+                            {
+                                "id": "refresh_button",
+                                "type": "basic",
+                                "name": "Button",
+                                "props": {
+                                    "className": "px-4 py-2 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg"
+                                },
+                                "actions": [
+                                    {
+                                        "type": "click",
+                                        "handler": "navigate",
+                                        "params": {
+                                            "path": "{{route?.id ? ('/admin/benchmark/dummy-data/' + route?.id) : '/admin/benchmark/dummy-data'}}",
+                                            "mergeQuery": false
+                                        }
+                                    }
+                                ],
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "Span",
+                                        "text": "상태 조회"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "main_grid",
+                        "type": "basic",
+                        "name": "Div",
+                        "props": {
+                            "className": "grid grid-cols-1 xl:grid-cols-2 gap-6"
+                        },
+                        "children": [
+                            {
+                                "id": "create_card",
+                                "type": "basic",
+                                "name": "Div",
+                                "props": {
+                                    "className": "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl"
+                                },
+                                "children": [
+                                    {
+                                        "id": "create_card_body",
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": {
+                                            "className": "p-6 space-y-4"
+                                        },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "H3",
+                                                "props": {
+                                                    "className": "text-lg font-semibold text-gray-900 dark:text-white"
+                                                },
+                                                "text": "작업 생성"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "P",
+                                                "props": {
+                                                    "className": "text-sm text-gray-500 dark:text-gray-400"
+                                                },
+                                                "text": "작업 유형과 규모를 선택하면 실제 적재는 큐 워커가 배치 단위로 처리합니다."
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "grid grid-cols-1 md:grid-cols-2 gap-4"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "space-y-2 md:col-span-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "데이터셋 이름"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "text",
+                                                                    "value": "{{_local.form?.dataset_name ?? ''}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.dataset_name": "{{$event.target.value}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "space-y-2 md:col-span-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "작업 유형"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{_local.form?.workload_type ?? 'board'}}",
+                                                                    "options": [
+                                                                        { "label": "게시판 데이터", "value": "board" },
+                                                                        { "label": "쇼핑몰 상품 데이터", "value": "commerce" }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.workload_type": "{{$event.target.value}}",
+                                                                            "form.batch_size": "{{$event.target.value === 'commerce' ? 500 : 3000}}",
+                                                                            "form.chunk_size": "{{$event.target.value === 'commerce' ? 5000 : 20000}}",
+                                                                            "estimate": null
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'commerce'}}",
+                                                        "props": {
+                                                            "className": "md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "상품 수" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.total_products ?? 10000)}}",
+                                                                            "options": [
+                                                                                { "label": "500", "value": "500" },
+                                                                                { "label": "1,000", "value": "1000" },
+                                                                                { "label": "5,000", "value": "5000" },
+                                                                                { "label": "10,000", "value": "10000" },
+                                                                                { "label": "50,000", "value": "50000" },
+                                                                                { "label": "100,000", "value": "100000" },
+                                                                                { "label": "200,000", "value": "200000" }
+                                                                            ],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.total_products": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "상품 분류 수" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.total_categories ?? 100)}}",
+                                                                            "options": [
+                                                                                { "label": "20", "value": "20" }, { "label": "50", "value": "50" },
+                                                                                { "label": "100", "value": "100" }, { "label": "200", "value": "200" },
+                                                                                { "label": "500", "value": "500" }
+                                                                            ],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.total_categories": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "브랜드 수" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.total_brands ?? 50)}}",
+                                                                            "options": [
+                                                                                { "label": "없음", "value": "0" }, { "label": "20", "value": "20" },
+                                                                                { "label": "50", "value": "50" }, { "label": "100", "value": "100" }
+                                                                            ],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.total_brands": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "분류 깊이 / 분포" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.category_depth ?? 3)}}",
+                                                                            "options": [{ "label": "2단계", "value": "2" }, { "label": "3단계", "value": "3" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.category_depth": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "이미지 풀" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.image_pool_size ?? 100)}}",
+                                                                            "options": [{ "label": "20장", "value": "20" }, { "label": "50장", "value": "50" }, { "label": "100장", "value": "100" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.image_pool_size": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "이미지 적용률 / 최대 수" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.image_coverage ?? 1)}}",
+                                                                            "options": [{ "label": "50%", "value": "0.5" }, { "label": "80%", "value": "0.8" }, { "label": "100%", "value": "1" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.image_coverage": "{{parseFloat($event.target.value)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "상품당 최대 이미지" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.max_images_per_product ?? 1)}}",
+                                                                            "options": [{ "label": "1장", "value": "1" }, { "label": "2장", "value": "2" }, { "label": "3장", "value": "3" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.max_images_per_product": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "이미지 소스" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{_local.form?.image_source ?? 'picsum'}}",
+                                                                            "options": [{ "label": "Picsum 사진", "value": "picsum" }, { "label": "로컬 생성 이미지", "value": "generated" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.image_source": "{{$event.target.value}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "상품 배치 크기" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.batch_size ?? 500)}}",
+                                                                            "options": [{ "label": "250", "value": "250" }, { "label": "500", "value": "500" }, { "label": "1,000", "value": "1000" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.batch_size": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "Div", "props": { "className": "space-y-2" },
+                                                                "children": [
+                                                                    { "type": "basic", "name": "Label", "text": "작업 청크 크기" },
+                                                                    {
+                                                                        "type": "composite", "name": "Select",
+                                                                        "props": {
+                                                                            "value": "{{String(_local.form?.chunk_size ?? 5000)}}",
+                                                                            "options": [{ "label": "2,500", "value": "2500" }, { "label": "5,000", "value": "5000" }, { "label": "10,000", "value": "10000" }],
+                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                        },
+                                                                        "actions": [{ "type": "change", "handler": "setState", "params": { "target": "local", "form.chunk_size": "{{parseInt($event.target.value, 10)}}" } }]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic", "name": "P",
+                                                                "props": { "className": "md:col-span-2 text-xs text-emerald-800 dark:text-emerald-300" },
+                                                                "text": "상품마다 기본 옵션과 대표 분류를 생성합니다. 실제 이미지 파일은 작업별 풀을 공유해 대량 파일 생성을 방지합니다."
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "회원 수"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "number",
+                                                                    "value": "{{String(_local.form?.total_users ?? 0)}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.total_users": "{{$event.target.value ? parseInt($event.target.value, 10) : 0}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "선택 게시판 수"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "props": {
+                                                                    "className": "w-full px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{String(_local.form?.total_boards ?? 0)}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2 md:col-span-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "선택 게시판 총 게시글 수"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "props": {
+                                                                    "className": "w-full px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{String(_local.form?.total_posts ?? 0)}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "아래 선택한 게시판별 목표 게시글 수 합계입니다."
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-3 md:col-span-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "대상 게시판 선택"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "기존 게시판을 선택하고 게시판별 목표 게시글 수를 입력합니다. 선택한 게시판에만 데이터를 적재합니다."
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "if": "{{(availableBoards?.data?.data ?? []).length === 0}}",
+                                                                "props": {
+                                                                    "className": "px-3 py-4 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "선택 가능한 게시판이 없습니다."
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "props": {
+                                                                    "className": "max-h-[26rem] overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-xl divide-y divide-gray-200 dark:divide-gray-700"
+                                                                },
+                                                                "children": [
+                                                                    {
+                                                                        "type": "basic",
+                                                                        "name": "Div",
+                                                                        "iteration": {
+                                                                            "source": "availableBoards?.data?.data",
+                                                                            "item_var": "board"
+                                                                        },
+                                                                        "props": {
+                                                                            "className": "p-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                                                                        },
+                                                                        "children": [
+                                                                            {
+                                                                                "type": "basic",
+                                                                                "name": "Div",
+                                                                                "props": {
+                                                                                    "className": "flex items-start gap-3"
+                                                                                },
+                                                                                "children": [
+                                                                                    {
+                                                                                        "type": "basic",
+                                                                                        "name": "Checkbox",
+                                                                                        "props": {
+                                                                                            "checked": "{{!!_local.selectedBoardIndex?.[String(board.id)]}}",
+                                                                                            "className": "mt-1"
+                                                                                        },
+                                                                                        "actions": [
+                                                                                            {
+                                                                                                "type": "change",
+                                                                                                "handler": "sirsoft-benchmark.toggleBoardTarget",
+                                                                                                "params": {
+                                                                                                    "board": "{{board}}",
+                                                                                                    "checked": "{{$event.target.checked}}",
+                                                                                                    "defaultTargetPosts": "{{_local.selectedBoardIndex?.[String(board.id)]?.target_posts ?? 10000}}"
+                                                                                                }
+                                                                                            }
+                                                                                        ]
+                                                                                    },
+                                                                                    {
+                                                                                        "type": "basic",
+                                                                                        "name": "Div",
+                                                                                        "children": [
+                                                                                            {
+                                                                                                "type": "basic",
+                                                                                                "name": "P",
+                                                                                                "props": {
+                                                                                                    "className": "font-medium text-gray-900 dark:text-white"
+                                                                                                },
+                                                                                                "text": "{{board.name}}"
+                                                                                            },
+                                                                                            {
+                                                                                                "type": "basic",
+                                                                                                "name": "P",
+                                                                                                "props": {
+                                                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                                                },
+                                                                                                "text": "{{board.slug}} / {{board.type}} / {{board.is_active ? 'active' : 'inactive'}}"
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                ]
+                                                                            },
+                                                                            {
+                                                                                "type": "basic",
+                                                                                "name": "Div",
+                                                                                "props": {
+                                                                                    "className": "w-full md:w-56 space-y-1"
+                                                                                },
+                                                                                "children": [
+                                                                                    {
+                                                                                        "type": "basic",
+                                                                                        "name": "Label",
+                                                                                        "props": {
+                                                                                            "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                                        },
+                                                                                        "text": "목표 게시글 수"
+                                                                                    },
+                                                                                    {
+                                                                                        "type": "basic",
+                                                                                        "name": "Input",
+                                                                                        "props": {
+                                                                                            "type": "number",
+                                                                                            "min": "0",
+                                                                                            "value": "{{String(_local.selectedBoardIndex?.[String(board.id)]?.target_posts ?? 10000)}}",
+                                                                                            "disabled": "{{!_local.selectedBoardIndex?.[String(board.id)]}}",
+                                                                                            "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:text-gray-400"
+                                                                                        },
+                                                                                        "actions": [
+                                                                                            {
+                                                                                                "type": "change",
+                                                                                                "handler": "sirsoft-benchmark.updateBoardTargetPosts",
+                                                                                                "params": {
+                                                                                                    "boardId": "{{board.id}}",
+                                                                                                    "targetPosts": "{{$event.target.value ? parseInt($event.target.value, 10) : 0}}"
+                                                                                                }
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                ]
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "댓글 비율"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "number",
+                                                                    "step": "0.01",
+                                                                    "value": "{{String(_local.form?.comment_rate ?? 0)}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.comment_rate": "{{$event.target.value ? parseFloat($event.target.value) : 0}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "평균 댓글 수"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "number",
+                                                                    "step": "0.1",
+                                                                    "value": "{{String(_local.form?.avg_comments_per_post ?? 0)}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.avg_comments_per_post": "{{$event.target.value ? parseFloat($event.target.value) : 0}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "최대 댓글 수"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "number",
+                                                                    "value": "{{String(_local.form?.max_comments_per_post ?? 0)}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.max_comments_per_post": "{{$event.target.value ? parseInt($event.target.value, 10) : 0}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "배치 크기"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{String(_local.form?.batch_size ?? 3000)}}",
+                                                                    "options": [
+                                                                        {
+                                                                            "label": "2000",
+                                                                            "value": "2000"
+                                                                        },
+                                                                        {
+                                                                            "label": "3000",
+                                                                            "value": "3000"
+                                                                        }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.batch_size": "{{$event.target.value ? parseInt($event.target.value, 10) : 3000}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "검증된 삽입 배치만 선택할 수 있습니다."
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "청크 크기"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{String(_local.form?.chunk_size ?? 20000)}}",
+                                                                    "options": [
+                                                                        {
+                                                                            "label": "5000",
+                                                                            "value": "5000"
+                                                                        },
+                                                                        {
+                                                                            "label": "10000",
+                                                                            "value": "10000"
+                                                                        },
+                                                                        {
+                                                                            "label": "20000",
+                                                                            "value": "20000"
+                                                                        }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.chunk_size": "{{$event.target.value ? parseInt($event.target.value, 10) : 20000}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "청크는 5000, 10000, 20000만 허용합니다."
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "시드"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Input",
+                                                                "props": {
+                                                                    "type": "number",
+                                                                    "value": "{{String(_local.form?.seed ?? 0)}}",
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.seed": "{{$event.target.value ? parseInt($event.target.value, 10) : null}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "선택 기준"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Div",
+                                                                "props": {
+                                                                    "className": "w-full px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900 text-sm text-gray-600 dark:text-gray-300"
+                                                                },
+                                                                "text": "기존 게시판 선택 + 게시판별 목표 수동 입력"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "시간 분포"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{_local.form?.time_distribution ?? 'recent_burst'}}",
+                                                                    "options": [
+                                                                        {
+                                                                            "label": "균등",
+                                                                            "value": "uniform"
+                                                                        },
+                                                                        {
+                                                                            "label": "최근 집중",
+                                                                            "value": "recent_burst"
+                                                                        },
+                                                                        {
+                                                                            "label": "장기 분산",
+                                                                            "value": "long_span"
+                                                                        }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.time_distribution": "{{$event.target.value}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{_local.form?.workload_type === 'board'}}",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "활동 편차"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{_local.form?.activity_profile ?? 'skewed'}}",
+                                                                    "options": [
+                                                                        {
+                                                                            "label": "완만",
+                                                                            "value": "balanced"
+                                                                        },
+                                                                        {
+                                                                            "label": "기본",
+                                                                            "value": "skewed"
+                                                                        },
+                                                                        {
+                                                                            "label": "극단",
+                                                                            "value": "extreme"
+                                                                        }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.activity_profile": "{{$event.target.value}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "space-y-2"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Label",
+                                                                "text": "dry-run"
+                                                            },
+                                                            {
+                                                                "type": "composite",
+                                                                "name": "Select",
+                                                                "props": {
+                                                                    "value": "{{String(_local.form?.dry_run ?? false)}}",
+                                                                    "options": [
+                                                                        {
+                                                                            "label": "실제 적재",
+                                                                            "value": "false"
+                                                                        },
+                                                                        {
+                                                                            "label": "계획만 계산",
+                                                                            "value": "true"
+                                                                        }
+                                                                    ],
+                                                                    "className": "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-sm"
+                                                                },
+                                                                "actions": [
+                                                                    {
+                                                                        "type": "change",
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "form.dry_run": "{{$event.target.value === 'true'}}"
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "flex flex-wrap gap-3 pt-2"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "props": {
+                                                            "type": "button",
+                                                            "className": "{{_local.estimating ? 'px-4 py-2 bg-gray-200 text-gray-500 rounded-lg cursor-not-allowed' : 'px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg'}}",
+                                                            "disabled": "{{_local.estimating}}"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "sequence",
+                                                                "actions": [
+                                                                    {
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "estimating": true
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "apiCall",
+                                                                        "auth_required": true,
+                                                                        "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs/estimate",
+                                                                        "params": {
+                                                                            "method": "POST",
+                                                                            "body": "{{_local.form}}"
+                                                                        },
+                                                                        "onSuccess": [
+                                                                            {
+                                                                                "handler": "setState",
+                                                                                "params": {
+                                                                                    "target": "local",
+                                                                                    "estimating": false,
+                                                                                    "estimate": "{{response.data}}"
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "handler": "toast",
+                                                                                "params": {
+                                                                                    "type": "success",
+                                                                                    "message": "예상 생성량을 계산했습니다."
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "onError": [
+                                                                            {
+                                                                                "handler": "setState",
+                                                                                "params": {
+                                                                                    "target": "local",
+                                                                                    "estimating": false
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "handler": "toast",
+                                                                                "params": {
+                                                                                    "type": "error",
+                                                                                    "message": "{{error.message ?? '예상 생성량 계산에 실패했습니다.'}}"
+                                                                                }
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "예상 생성량 계산"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "props": {
+                                                            "type": "button",
+                                                            "className": "{{_local.submitting ? 'px-4 py-2 bg-blue-300 text-white rounded-lg cursor-not-allowed' : 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'}}",
+                                                            "disabled": "{{_local.submitting}}"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "sequence",
+                                                                "actions": [
+                                                                    {
+                                                                        "handler": "setState",
+                                                                        "params": {
+                                                                            "target": "local",
+                                                                            "submitting": true,
+                                                                            "errors": null
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "apiCall",
+                                                                        "auth_required": true,
+                                                                        "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs",
+                                                                        "params": {
+                                                                            "method": "POST",
+                                                                            "body": "{{_local.form}}"
+                                                                        },
+                                                                        "onSuccess": [
+                                                                            {
+                                                                                "handler": "setState",
+                                                                                "params": {
+                                                                                    "target": "local",
+                                                                                    "submitting": false
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "handler": "toast",
+                                                                                "params": {
+                                                                                    "type": "success",
+                                                                                    "message": "생성 작업을 등록했습니다."
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "handler": "navigate",
+                                                                                "params": {
+                                                                                    "path": "/admin/benchmark/dummy-data/{{response.data.id}}"
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "onError": [
+                                                                            {
+                                                                                "handler": "setState",
+                                                                                "params": {
+                                                                                    "target": "local",
+                                                                                    "submitting": false,
+                                                                                    "errors": "{{error.errors}}"
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "handler": "toast",
+                                                                                "params": {
+                                                                                    "type": "error",
+                                                                                    "message": "{{error.message ?? '작업 생성에 실패했습니다.'}}"
+                                                                                }
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "생성 시작"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "id": "selected_job_card",
+                                "type": "basic",
+                                "name": "Div",
+                                "if": "{{!!route?.id && !!selectedJob?.data}}",
+                                "props": {
+                                    "className": "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl"
+                                },
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": {
+                                            "className": "p-6 space-y-4"
+                                        },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "H3",
+                                                "props": {
+                                                    "className": "text-lg font-semibold text-gray-900 dark:text-white"
+                                                },
+                                                "text": "{{selectedJob?.data?.dataset_name}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "grid grid-cols-2 md:grid-cols-3 gap-3"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "상태"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.status}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "단계"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.current_stage}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "진행률"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.progress_percent}}%"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? '상품 생성' : '댓글 생성'}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? ((selectedJob?.data?.generated?.products ?? 0) + ' / ' + (selectedJob?.data?.totals?.products ?? 0)) : ((selectedJob?.data?.generated?.comments ?? 0) + ' / ' + (selectedJob?.data?.totals?.estimated_comments ?? 0))}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? '이미지 연결' : '카운트 동기화'}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? ((selectedJob?.data?.generated?.product_images ?? 0) + ' / 약 ' + (selectedJob?.data?.totals?.estimated_product_images ?? 0)) : ((selectedJob?.data?.sync?.synced_boards ?? 0) + ' / ' + (selectedJob?.data?.sync?.total_boards ?? 0))}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "if": "{{!!selectedJob?.data?.verification}}",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "검증"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.verification?.status}}"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "P",
+                                                "props": {
+                                                    "className": "text-sm text-gray-600 dark:text-gray-300"
+                                                },
+                                                "text": "{{selectedJob?.data?.current_step || '진행 상태 대기 중'}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "if": "{{!!selectedJob?.data?.verification}}",
+                                                "props": {
+                                                    "className": "grid grid-cols-1 md:grid-cols-2 gap-3"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-emerald-700 dark:text-emerald-300"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? '상품 / 기본 옵션 검증' : '데이터셋 게시글 검증'}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? ((selectedJob?.data?.verification?.products ?? 0) + ' / ' + (selectedJob?.data?.verification?.product_options ?? 0)) : ((selectedJob?.data?.verification?.actual_dataset_posts ?? 0) + ' / ' + (selectedJob?.data?.verification?.expected_dataset_posts ?? 0))}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900"
+                                                        },
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-xs text-emerald-700 dark:text-emerald-300"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? '분류 / 브랜드 검증' : '데이터셋 댓글 검증'}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{selectedJob?.data?.workload_type === 'commerce' ? ((selectedJob?.data?.verification?.categories ?? 0) + ' / ' + (selectedJob?.data?.verification?.brands ?? 0)) : ((selectedJob?.data?.verification?.actual_dataset_comments ?? 0) + ' / ' + (selectedJob?.data?.verification?.expected_dataset_comments ?? 0))}}"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "h-3 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "props": {
+                                                            "className": "h-full bg-blue-600 rounded-full",
+                                                            "style": {
+                                                                "width": "{{(selectedJob?.data?.progress_percent || 0) + '%'}}"
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "flex flex-wrap gap-3"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "if": "{{selectedJob?.data?.status === 'running' || selectedJob?.data?.status === 'pending'}}",
+                                                        "props": {
+                                                            "className": "px-4 py-2 bg-amber-500 text-white rounded-lg"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "apiCall",
+                                                                "auth_required": true,
+                                                                "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{selectedJob?.data?.id}}/stop",
+                                                                "params": {
+                                                                    "method": "POST"
+                                                                },
+                                                                "onSuccess": [
+                                                                    {
+                                                                        "handler": "toast",
+                                                                        "params": {
+                                                                            "type": "success",
+                                                                            "message": "중단 요청을 등록했습니다."
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "navigate",
+                                                                        "params": {
+                                                                            "path": "/admin/benchmark/dummy-data/{{selectedJob?.data?.id}}",
+                                                                            "mergeQuery": false
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "중단 요청"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "if": "{{selectedJob?.data?.status === 'stopped' || selectedJob?.data?.status === 'failed'}}",
+                                                        "props": {
+                                                            "className": "px-4 py-2 bg-green-600 text-white rounded-lg"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "apiCall",
+                                                                "auth_required": true,
+                                                                "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{selectedJob?.data?.id}}/resume",
+                                                                "params": {
+                                                                    "method": "POST"
+                                                                },
+                                                                "onSuccess": [
+                                                                    {
+                                                                        "handler": "toast",
+                                                                        "params": {
+                                                                            "type": "success",
+                                                                            "message": "작업 재개를 요청했습니다."
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "navigate",
+                                                                        "params": {
+                                                                            "path": "/admin/benchmark/dummy-data/{{selectedJob?.data?.id}}",
+                                                                            "mergeQuery": false
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "재개"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "if": "{{selectedJob?.data?.status === 'completed' || selectedJob?.data?.status === 'stopped' || selectedJob?.data?.status === 'failed'}}",
+                                                        "props": {
+                                                            "className": "px-4 py-2 bg-blue-600 text-white rounded-lg"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "apiCall",
+                                                                "auth_required": true,
+                                                                "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{selectedJob?.data?.id}}/rerun",
+                                                                "params": {
+                                                                    "method": "POST"
+                                                                },
+                                                                "onSuccess": [
+                                                                    {
+                                                                        "handler": "toast",
+                                                                        "params": {
+                                                                            "type": "success",
+                                                                            "message": "새 작업을 생성했습니다."
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "navigate",
+                                                                        "params": {
+                                                                            "path": "/admin/benchmark/dummy-data/{{response.data.id}}",
+                                                                            "mergeQuery": false
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "재실행"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "if": "{{selectedJob?.data?.status === 'completed' || selectedJob?.data?.status === 'stopped' || selectedJob?.data?.status === 'failed'}}",
+                                                        "props": {
+                                                            "className": "px-4 py-2 bg-red-600 text-white rounded-lg"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "apiCall",
+                                                                "auth_required": true,
+                                                                "target": "/api/modules/sirsoft-benchmark/admin/generation-jobs/{{selectedJob?.data?.id}}/reset",
+                                                                "params": {
+                                                                    "method": "POST"
+                                                                },
+                                                                "onSuccess": [
+                                                                    {
+                                                                        "handler": "toast",
+                                                                        "params": {
+                                                                            "type": "success",
+                                                                            "message": "초기화 작업을 등록했습니다."
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "handler": "navigate",
+                                                                        "params": {
+                                                                            "path": "/admin/benchmark/dummy-data/{{selectedJob?.data?.id}}",
+                                                                            "mergeQuery": false
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "초기화"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "estimate_card",
+                        "type": "basic",
+                        "name": "Div",
+                        "if": "{{!!_local.estimate}}",
+                        "props": {
+                            "className": "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl"
+                        },
+                        "children": [
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": {
+                                    "className": "p-6 space-y-3"
+                                },
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "H3",
+                                        "props": {
+                                            "className": "text-lg font-semibold text-gray-900 dark:text-white"
+                                        },
+                                        "text": "예상 생성량"
+                                    },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": {
+                                            "className": "grid grid-cols-2 md:grid-cols-4 gap-3"
+                                        },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                },
+                                                "text": "{{_local.form?.workload_type === 'commerce' ? ('이미지 풀 ' + (_local.estimate?.estimated_batches?.image_pool ?? 0) + ' 배치') : ('회원 ' + (_local.estimate?.estimated_batches?.users ?? 0) + ' 배치')}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                },
+                                                "text": "{{_local.form?.workload_type === 'commerce' ? ('상품 ' + (_local.estimate?.estimated_batches?.products ?? 0) + ' 배치') : ('게시글 ' + (_local.estimate?.estimated_batches?.posts ?? 0) + ' 배치')}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                },
+                                                "text": "{{_local.form?.workload_type === 'commerce' ? ('이미지 연결 약 ' + (_local.estimate?.estimated_product_images ?? 0) + '건') : ('댓글 예상 ' + (_local.estimate?.estimated_comments ?? 0) + '건')}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900"
+                                                },
+                                                "text": "{{_local.form?.workload_type === 'commerce' ? ('분류 ' + (_local.estimate?.estimated_batches?.categories ?? 0) + ' / 브랜드 ' + (_local.estimate?.estimated_batches?.brands ?? 0) + ' 배치') : ('댓글 스캔 ' + (_local.estimate?.estimated_batches?.comment_scans ?? 0) + ' 회')}}"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "jobs_card",
+                        "type": "basic",
+                        "name": "Div",
+                        "props": {
+                            "className": "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl"
+                        },
+                        "children": [
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": {
+                                    "className": "p-6 space-y-4"
+                                },
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "H3",
+                                        "props": {
+                                            "className": "text-lg font-semibold text-gray-900 dark:text-white"
+                                        },
+                                        "text": "최근 작업"
+                                    },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "iteration": {
+                                            "source": "jobs?.data?.data",
+                                            "item_var": "job"
+                                        },
+                                        "props": {
+                                            "className": "border border-gray-200 dark:border-gray-700 rounded-xl p-4 mb-3"
+                                        },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "props": {
+                                                    "className": "flex items-start justify-between gap-4"
+                                                },
+                                                "children": [
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Div",
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "font-semibold text-gray-900 dark:text-white"
+                                                                },
+                                                                "text": "{{job.dataset_name}}"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "{{job.status}} / {{job.current_stage}} / {{job.progress_percent}}%"
+                                                            },
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "P",
+                                                                "props": {
+                                                                    "className": "text-sm text-gray-500 dark:text-gray-400"
+                                                                },
+                                                                "text": "{{job.workload_type === 'commerce' ? ('products ' + (job.generated.products ?? 0) + ' / ' + (job.totals.products ?? 0) + ', images ' + (job.generated.product_images ?? 0)) : ('posts ' + (job.generated.posts ?? 0) + ' / ' + (job.totals.posts ?? 0) + ', comments ' + (job.generated.comments ?? 0))}}"
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        "type": "basic",
+                                                        "name": "Button",
+                                                        "props": {
+                                                            "className": "px-3 py-2 bg-blue-600 text-white rounded-lg"
+                                                        },
+                                                        "actions": [
+                                                            {
+                                                                "type": "click",
+                                                                "handler": "navigate",
+                                                                "params": {
+                                                                    "path": "/admin/benchmark/dummy-data/{{job.id}}"
+                                                                }
+                                                            }
+                                                        ],
+                                                        "children": [
+                                                            {
+                                                                "type": "basic",
+                                                                "name": "Span",
+                                                                "text": "상세 보기"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "logs_card",
+                        "type": "basic",
+                        "name": "Div",
+                        "if": "{{!!route?.id && !!selectedLogs?.data?.data}}",
+                        "props": {
+                            "className": "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl"
+                        },
+                        "children": [
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": {
+                                    "className": "p-6 space-y-3"
+                                },
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "H3",
+                                        "props": {
+                                            "className": "text-lg font-semibold text-gray-900 dark:text-white"
+                                        },
+                                        "text": "작업 로그"
+                                    },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "iteration": {
+                                            "source": "selectedLogs?.data?.data",
+                                            "item_var": "log"
+                                        },
+                                        "props": {
+                                            "className": "p-3 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 mb-2"
+                                        },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "P",
+                                                "props": {
+                                                    "className": "text-xs text-gray-500 dark:text-gray-400"
+                                                },
+                                                "text": "{{log.created_at}} / {{log.level}} / {{log.stage || '-'}}"
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "P",
+                                                "props": {
+                                                    "className": "text-sm text-gray-900 dark:text-white"
+                                                },
+                                                "text": "{{log.message}}"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

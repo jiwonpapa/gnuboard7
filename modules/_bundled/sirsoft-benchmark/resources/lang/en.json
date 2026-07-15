@@ -1,0 +1,8 @@
+{
+  "admin": {
+    "dummy_data": {
+      "title": "Large Dummy Data Generator",
+      "description": "Generate benchmark users, boards, posts, and comments."
+    }
+  }
+}

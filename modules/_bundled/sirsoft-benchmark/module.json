@@ -1,0 +1,35 @@
+{
+    "identifier": "sirsoft-benchmark",
+    "vendor": "sirsoft",
+    "name": {
+        "ko": "벤치마크 더미데이터",
+        "en": "Benchmark Dummy Data"
+    },
+    "version": "0.2.2",
+    "license": "MIT",
+    "description": {
+        "ko": "대용량 게시판 및 쇼핑몰 상품 벤치마크 데이터 생성 모듈",
+        "en": "Module for generating large benchmark datasets for boards and ecommerce products"
+    },
+    "g7_version": ">=7.0.3",
+    "dependencies": {
+        "modules": {
+            "sirsoft-board": ">=1.0.1",
+            "sirsoft-ecommerce": ">=1.0.3"
+        },
+        "plugins": {}
+    },
+    "assets": {
+        "js": {
+            "entry": "resources/js/index.ts",
+            "output": "dist/js/module.iife.js"
+        },
+        "handlers": true
+    },
+    "loading": {
+        "strategy": "global",
+        "priority": 100
+    },
+    "github_url": "",
+    "github_changelog_url": ""
+}

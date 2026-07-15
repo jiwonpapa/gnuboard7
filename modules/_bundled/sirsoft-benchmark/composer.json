@@ -1,0 +1,15 @@
+{
+    "name": "modules/sirsoft-benchmark",
+    "description": "Benchmark dummy data generation module for Gnuboard7",
+    "type": "library",
+    "version": "0.2.2",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Modules\\Sirsoft\\Benchmark\\": "src/"
+        }
+    },
+    "require": {
+        "php": "^8.2"
+    }
+}
