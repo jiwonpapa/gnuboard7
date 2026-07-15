@@ -7,6 +7,7 @@ use App\Search\Engines\DatabaseFulltextEngine;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Ecommerce\Enums\ProductDisplayStatus;
 use Modules\Sirsoft\Ecommerce\Models\Category;
@@ -378,9 +379,6 @@ class ProductRepository implements ProductRepositoryInterface
     public function getPublicList(array $filters, int $perPage = 20): LengthAwarePaginator
     {
         $query = $this->model->newQuery()
-            ->with(['images', 'categories', 'brand', 'activeLabelAssignments.label'])
-            ->withCount('visibleReviews as review_count')
-            ->withAvg('visibleReviews as rating_avg', 'rating')
             ->where('display_status', 'visible');
 
         // 카테고리 필터 (ID) — 선택 카테고리 + 모든 하위 카테고리 포함
@@ -437,7 +435,40 @@ class ProductRepository implements ProductRepositoryInterface
             default => $query->orderBy('created_at', 'desc'), // latest
         };
 
-        return $query->paginate($perPage);
+        if (config('benchmark.ecommerce_variant') !== 'optimized' || $sort === 'sales') {
+            return $this->withPublicListRelations($query)->paginate($perPage);
+        }
+
+        $query->orderBy('ecommerce_products.id', $sort === 'price_asc' ? 'asc' : 'desc');
+        $page = Paginator::resolveCurrentPage('page');
+        $total = (clone $query)->toBase()->getCountForPagination();
+        $ids = (clone $query)
+            ->forPage($page, $perPage)
+            ->pluck('ecommerce_products.id')
+            ->all();
+
+        $products = $ids === []
+            ? $this->model->newCollection()
+            : $this->withPublicListRelations($this->model->newQuery())
+                ->whereIn('ecommerce_products.id', $ids)
+                ->get();
+
+        $idOrder = array_flip($ids);
+        $products = $products
+            ->sortBy(fn (Product $product) => $idOrder[$product->id] ?? PHP_INT_MAX)
+            ->values();
+        $this->primeProductBreadcrumbs($products);
+
+        return new \Illuminate\Pagination\LengthAwarePaginator(
+            $products,
+            $total,
+            $perPage,
+            $page,
+            [
+                'path' => Paginator::resolveCurrentPath(),
+                'pageName' => 'page',
+            ]
+        );
     }
 
     /**
@@ -446,6 +477,35 @@ class ProductRepository implements ProductRepositoryInterface
     public function getPopularProducts(int $limit = 10): Collection
     {
         $thirtyDaysAgo = now()->subDays(30);
+
+        if (config('benchmark.ecommerce_variant') === 'optimized') {
+            $recentSalesAlias = DB::getTablePrefix().'recent_sales';
+            $recentSales = OrderOption::query()
+                ->select('product_id')
+                ->selectRaw('SUM(quantity) as recent_sold')
+                ->where('created_at', '>=', $thirtyDaysAgo)
+                ->groupBy('product_id');
+
+            $products = $this->model->newQuery()
+                ->leftJoinSub($recentSales, 'recent_sales', function ($join) {
+                    $join->on('recent_sales.product_id', '=', 'ecommerce_products.id');
+                })
+                ->select('ecommerce_products.*')
+                ->selectRaw("COALESCE({$recentSalesAlias}.recent_sold, 0) as recent_sold")
+                ->with(['images', 'categories', 'activeLabelAssignments.label'])
+                ->withCount('visibleReviews as review_count')
+                ->withAvg('visibleReviews as rating_avg', 'rating')
+                ->where('display_status', 'visible')
+                ->orderByDesc('recent_sold')
+                ->orderByDesc('ecommerce_products.created_at')
+                ->orderByDesc('ecommerce_products.id')
+                ->limit($limit)
+                ->get();
+
+            $this->primeProductBreadcrumbs($products);
+
+            return $products;
+        }
 
         return $this->model->newQuery()
             ->with(['images', 'categories', 'activeLabelAssignments.label'])
@@ -466,7 +526,7 @@ class ProductRepository implements ProductRepositoryInterface
      */
     public function getNewProducts(int $limit = 10): Collection
     {
-        return $this->model->newQuery()
+        $products = $this->model->newQuery()
             ->with(['images', 'categories', 'activeLabelAssignments.label'])
             ->withCount('visibleReviews as review_count')
             ->withAvg('visibleReviews as rating_avg', 'rating')
@@ -474,6 +534,34 @@ class ProductRepository implements ProductRepositoryInterface
             ->orderBy('created_at', 'desc')
             ->limit($limit)
             ->get();
+
+        $this->primeProductBreadcrumbs($products);
+
+        return $products;
+    }
+
+    /**
+     * 공개 목록에 필요한 관계와 집계를 실제 페이지 행에만 적용합니다.
+     */
+    private function withPublicListRelations(Builder $query): Builder
+    {
+        return $query
+            ->with(['images', 'categories', 'brand', 'activeLabelAssignments.label'])
+            ->withCount('visibleReviews as review_count')
+            ->withAvg('visibleReviews as rating_avg', 'rating');
+    }
+
+    /**
+     * 상품별 카테고리 브레드크럼 조상 조회를 한 번의 쿼리로 준비합니다.
+     */
+    public function primeProductBreadcrumbs(Collection $products): void
+    {
+        $categories = $products
+            ->flatMap(fn (Product $product) => $product->relationLoaded('categories') ? $product->categories : [])
+            ->unique('id')
+            ->values();
+
+        Category::primeAncestorLookup($categories);
     }
 
     /**

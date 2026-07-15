@@ -1,0 +1,142 @@
+# 게시판 성능 개선 ON/OFF 하네스
+
+## 목적
+
+동일 스테이징 서버와 동일 데이터에서 그누보드7 7.0.4 원본 목록 경로와 성능 개선 경로를 반복 전환한다.
+
+실행 파일:
+
+`scripts/benchmark/board-performance-toggle.sh`
+
+## 기본 명령
+
+### 개선 적용
+
+```bash
+scripts/benchmark/board-performance-toggle.sh on
+```
+
+다음을 한 번에 수행한다.
+
+- 현재 로컬의 optimized 소스 스냅샷 업로드
+- 번들·활성 `sirsoft-board` 동기화
+- `G7_BOARD_PERFORMANCE_VARIANT=optimized`
+- 신규 인덱스가 없으면 생성, invisible이면 visible 전환
+- module DB 버전 1.1.1 반영
+- Laravel production 캐시 재생성과 PHP-FPM reload
+- 게시판 첫 페이지 HTTP smoke
+- 최종 상태 출력
+
+### 빠른 원본 비교
+
+```bash
+scripts/benchmark/board-performance-toggle.sh off
+```
+
+소스는 optimized-capable 상태로 유지하지만 실행 분기를 공식 7.0.4 원본 로직으로 바꾼다.
+
+- 넓은 컬럼을 직접 OFFSET하는 원본 페이지네이션
+- 공지·답글 상한 없는 원본 로직
+- 답글이 없어도 답글 확인 SQL을 실행하는 원본 로직
+- 필터 COUNT 단기 캐시 미사용
+- guest 권한별 `EXISTS` 실행
+- 활성 모듈·언어팩 원본 조회
+- 신규 인덱스 두 개는 `INVISIBLE`
+
+이 모드는 빠른 읽기 성능 A/B 비교용이다. invisible index도 INSERT/UPDATE 시 유지되므로 **쓰기 비용과 디스크까지 원본과 같지는 않다**.
+
+### 현재 상태
+
+```bash
+scripts/benchmark/board-performance-toggle.sh status
+```
+
+출력 항목:
+
+- `source`: optimized 전환 가능 소스인지 공식 7.0.4 소스인지
+- `source_integrity`: 마지막 스냅샷 체크섬 일치 여부
+- `runtime`: 실제 선택된 `optimized` 또는 `baseline`
+- `schema`: 신규 인덱스 visible, invisible, 제거 상태
+- 신규 인덱스별 visibility
+- 번들 모듈과 활성 모듈 소스 일치 여부
+- `sirsoft-board` DB 버전과 활성 상태
+- PHP-FPM 상태
+- 마지막 변경 시각과 하네스 상태
+
+### 정확한 원본 복구
+
+```bash
+scripts/benchmark/board-performance-toggle.sh restore-original --yes
+```
+
+다음을 수행한다.
+
+- 공식 Git tag `7.0.4`에서 성능 패치 대상 파일 복원
+- `config/benchmark.php` 제거
+- 신규 migration 파일 제거
+- 신규 인덱스 두 개 실제 삭제
+- migration 기록 삭제
+- module DB 버전 1.0.2 복원
+- 성능 variant 환경값 제거
+
+이 상태에서 다시 `on`을 실행하면 optimized 소스와 인덱스를 재생성한다. 180만 행 테이블의 인덱스 재생성은 시간이 걸리고 metadata lock을 유발할 수 있으므로 반복 비교에는 `off`를 사용한다.
+
+## 상태 표
+
+| 명령 | 실행 코드 | 신규 인덱스 | 소스 | 용도 |
+|---|---|---|---|---|
+| `on` | optimized | visible | optimized-capable | 개선 성능 측정 |
+| `off` | G7 7.0.4 baseline | invisible | optimized-capable | 빠른 읽기 A/B 비교 |
+| `restore-original --yes` | G7 7.0.4 baseline | 없음 | 공식 7.0.4 | 코드·DB 정확 복구 |
+
+## 안전장치
+
+- 동시에 두 전환이 실행되지 않도록 원격 `flock`을 사용한다.
+- 5초 이상 실행 중인 DB 작업이 있으면 DDL 전에 중단한다.
+- 자동으로 장기 쿼리를 죽이지 않는다.
+- 소스 전환 전 백업을 생성하고 최근 10개만 유지한다.
+- 번들 모듈과 활성 모듈을 함께 교체한다.
+- `.env`의 기존 소유권과 권한을 유지한다.
+- 전환 후 `config`, `route`, `view`, `hooks` 캐시를 재생성하고 PHP-FPM reload와 HTTP smoke를 수행한다.
+- exact restore는 `--yes` 없이는 실행되지 않는다.
+
+## 측정 주의
+
+2026-07-15 하네스 초기판은 `optimize:clear` 후 production 캐시를 재생성하지 않았습니다. 초기판으로 `on/off` 전환한 뒤 측정한 A/B는 양쪽 모두 비캐시 조건의 상대 비교로만 참고하고, 운영 절대 성능 수치로 사용하지 않습니다. 현재판부터 전환마다 production 캐시를 재생성합니다.
+
+백업 위치:
+
+`/home/g7devops/backups/board-performance-harness/`
+
+## 환경 오버라이드
+
+기본 대상은 `g7devops` SSH alias와 `/home/g7devops/public_html`이다.
+
+```bash
+G7_BOARD_PERF_HOST=g7devops \
+G7_BOARD_PERF_ROOT=/home/g7devops/public_html \
+G7_BOARD_PERF_DB_NAME=g7devops \
+G7_BOARD_PERF_DB_PREFIX=g7_ \
+scripts/benchmark/board-performance-toggle.sh status
+```
+
+명령 옵션으로도 `--host`, `--root`, `--app-user`, `--php-bin`, `--db`, `--db-prefix`, `--baseline`, `--base-url`을 지정할 수 있다.
+
+## 테스트 근거
+
+타깃 테스트는 optimized와 baseline 분기를 같은 테스트 프로세스에서 모두 검증한다.
+
+- optimized: ID-only 선조회, 공지 10건, 답글 SQL 생략, COUNT·권한·언어팩 재사용
+- baseline: 넓은 OFFSET, 공지 전체, 답글 확인 SQL, 반복 COUNT·권한·언어팩 쿼리
+- 결과: 75 tests, 143 assertions 통과
+
+스테이징 왕복 검증:
+
+| 단계 | source | runtime | schema | module | 결과 |
+|---|---|---|---|---|---|
+| `off` | optimized-capable | baseline | 신규 인덱스 invisible | 1.1.1 | 성공 |
+| `on` | optimized-capable | optimized | 신규 인덱스 visible | 1.1.1 | 성공 |
+| `restore-original --yes` | official-7.0.4 | baseline | 신규 인덱스 없음 | 1.0.2 | 성공 |
+| 원본 복구 후 `on` | optimized-capable | optimized | 신규 인덱스 재생성 | 1.1.1 | 성공 |
+
+동일 `freebd` 1,000페이지 요청은 `off`에서 11.594초, `on`에서 0.579초로 측정돼 실제 서버에서도 실행 분기가 바뀌는 것을 확인했다. 최종 서버 상태는 `on`이다.

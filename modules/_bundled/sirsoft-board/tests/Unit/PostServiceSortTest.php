@@ -5,9 +5,11 @@ namespace Modules\Sirsoft\Board\Tests\Unit;
 // ModuleTestCase를 수동으로 require (autoload 전에 로드 필요)
 require_once __DIR__.'/../ModuleTestCase.php';
 
+use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Board\Enums\BoardOrderBy;
 use Modules\Sirsoft\Board\Enums\OrderDirection;
 use Modules\Sirsoft\Board\Models\Board;
+use Modules\Sirsoft\Board\Models\Post;
 use Modules\Sirsoft\Board\Services\PostService;
 use Modules\Sirsoft\Board\Tests\ModuleTestCase;
 use PHPUnit\Framework\Attributes\Test;
@@ -19,12 +21,12 @@ use PHPUnit\Framework\Attributes\Test;
  */
 class PostServiceSortTest extends ModuleTestCase
 {
-
     private PostService $postService;
 
     protected function setUp(): void
     {
         parent::setUp();
+        config()->set('benchmark.board_list_variant', 'optimized');
         $this->postService = app(PostService::class);
     }
 
@@ -119,7 +121,7 @@ class PostServiceSortTest extends ModuleTestCase
     #[Test]
     public function extract_sort_params_uses_title_from_board_settings(): void
     {
-        $board = new Board();
+        $board = new Board;
         $board->order_by = BoardOrderBy::Title;
         $board->order_direction = OrderDirection::Asc;
 
@@ -135,7 +137,7 @@ class PostServiceSortTest extends ModuleTestCase
     #[Test]
     public function extract_sort_params_uses_author_from_board_settings(): void
     {
-        $board = new Board();
+        $board = new Board;
         $board->order_by = BoardOrderBy::Author;
         $board->order_direction = OrderDirection::Desc;
 
@@ -248,6 +250,77 @@ class PostServiceSortTest extends ModuleTestCase
         $this->assertEquals('created_at', $result['filters']['order_by']);
         $this->assertEquals('desc', $result['filters']['order_direction']);
         $this->assertEquals(15, $result['perPage']); // admin 기본값
+    }
+
+    #[Test]
+    public function filtered_post_count_is_reused_for_sixty_seconds(): void
+    {
+        $board = Board::factory()->create();
+        Post::create([
+            'board_id' => $board->id,
+            'title' => '캐시 대상 글',
+            'content' => '내용',
+            'ip_address' => '127.0.0.1',
+            'status' => 'published',
+        ]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $first = $this->postService->getCachedNormalPostCount(
+            $board->slug,
+            $board->id,
+            ['status' => 'published'],
+            context: 'user'
+        );
+        $second = $this->postService->getCachedNormalPostCount(
+            $board->slug,
+            $board->id,
+            ['status' => 'published'],
+            context: 'user'
+        );
+        $countQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_contains(strtolower($query['query']), 'count(*)')
+                && str_contains($query['query'], 'board_posts'));
+        DB::disableQueryLog();
+
+        $this->assertSame(1, $first);
+        $this->assertSame($first, $second);
+        $this->assertCount(1, $countQueries);
+    }
+
+    #[Test]
+    public function baseline_variant_executes_each_filtered_post_count(): void
+    {
+        config()->set('benchmark.board_list_variant', 'baseline');
+        $board = Board::factory()->create();
+        Post::create([
+            'board_id' => $board->id,
+            'title' => '원본 카운트 대상 글',
+            'content' => '내용',
+            'ip_address' => '127.0.0.1',
+            'status' => 'published',
+        ]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->postService->getCachedNormalPostCount(
+            $board->slug,
+            $board->id,
+            ['status' => 'published'],
+            context: 'user'
+        );
+        $this->postService->getCachedNormalPostCount(
+            $board->slug,
+            $board->id,
+            ['status' => 'published'],
+            context: 'user'
+        );
+        $countQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_contains(strtolower($query['query']), 'count(*)')
+                && str_contains($query['query'], 'board_posts'));
+        DB::disableQueryLog();
+
+        $this->assertCount(2, $countQueries);
     }
 
     // =========================================================================

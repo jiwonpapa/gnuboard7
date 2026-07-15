@@ -7,6 +7,7 @@ use App\Enums\PermissionType;
 use App\Enums\ScheduleType;
 use App\Enums\ScopeType;
 use App\Helpers\PermissionHelper;
+use App\Http\Middleware\PermissionMiddleware;
 use App\Models\Menu;
 use App\Models\Permission;
 use App\Models\Role;
@@ -14,6 +15,7 @@ use App\Models\Schedule;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
@@ -40,6 +42,7 @@ class PermissionMiddlewareTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config()->set('benchmark.board_list_variant', 'optimized');
 
         // PermissionHelper static 캐시 초기화 (테스트 간 격리)
         $reflection = new \ReflectionClass(PermissionHelper::class);
@@ -48,7 +51,7 @@ class PermissionMiddlewareTest extends TestCase
         $prop->setValue(null, []);
 
         // PermissionMiddleware guest role 캐시 초기화
-        $middlewareReflection = new \ReflectionClass(\App\Http\Middleware\PermissionMiddleware::class);
+        $middlewareReflection = new \ReflectionClass(PermissionMiddleware::class);
         $guestProp = $middlewareReflection->getProperty('guestRoleCache');
         $guestProp->setAccessible(true);
         $guestProp->setValue(null, null);
@@ -413,6 +416,73 @@ class PermissionMiddlewareTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJson(['message' => 'Public access']);
+    }
+
+    /**
+     * guest 권한은 역할과 권한을 한 번 불러온 뒤 메모리에서 확인해야 합니다.
+     */
+    public function test_guest_permission_checks_reuse_eager_loaded_permissions(): void
+    {
+        $guestRole = Role::create([
+            'identifier' => 'guest',
+            'name' => ['ko' => '비회원', 'en' => 'Guest'],
+            'description' => ['ko' => '비회원 역할', 'en' => 'Guest role'],
+            'extension_type' => ExtensionOwnerType::Core,
+            'extension_identifier' => 'core',
+            'is_active' => true,
+        ]);
+        $guestRole->permissions()->attach([$this->userPermission->id, $this->additionalAdminPermission->id]);
+
+        $middleware = new class extends PermissionMiddleware
+        {
+            public function check(string $permission, PermissionType $type): bool
+            {
+                return $this->checkGuestPermission($permission, $type);
+            }
+        };
+
+        $this->assertTrue($middleware->check('test.user.permission', PermissionType::User));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertTrue($middleware->check('test.additional', PermissionType::Admin));
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertCount(0, $queries);
+    }
+
+    public function test_baseline_variant_runs_the_original_guest_permission_query(): void
+    {
+        config()->set('benchmark.board_list_variant', 'baseline');
+        $guestRole = Role::create([
+            'identifier' => 'guest',
+            'name' => ['ko' => '비회원', 'en' => 'Guest'],
+            'description' => ['ko' => '비회원 역할', 'en' => 'Guest role'],
+            'extension_type' => ExtensionOwnerType::Core,
+            'extension_identifier' => 'core',
+            'is_active' => true,
+        ]);
+        $guestRole->permissions()->attach([$this->userPermission->id, $this->additionalAdminPermission->id]);
+
+        $middleware = new class extends PermissionMiddleware
+        {
+            public function check(string $permission, PermissionType $type): bool
+            {
+                return $this->checkGuestPermission($permission, $type);
+            }
+        };
+
+        $this->assertTrue($middleware->check('test.user.permission', PermissionType::User));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertTrue($middleware->check('test.additional', PermissionType::Admin));
+        $queries = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_contains($query['query'], 'role_permissions'));
+        DB::disableQueryLog();
+
+        $this->assertCount(1, $queries);
     }
 
     /**
@@ -1163,7 +1233,6 @@ class PermissionMiddlewareTest extends TestCase
      * @param  string  $routeKey  resource_route_key 값
      * @param  string  $ownerKey  owner_key 값
      * @param  ScopeType|null  $scopeType  scope_type 값
-     * @return void
      */
     private function setupScopePermission(string $routeKey, string $ownerKey, ?ScopeType $scopeType): void
     {

@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Enums\PermissionType;
 use App\Helpers\PermissionHelper;
 use App\Helpers\ResponseHelper;
+use App\Models\Permission;
 use App\Models\Role;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
@@ -125,10 +126,17 @@ class PermissionMiddleware
             return false;
         }
 
-        return $guestRole->permissions()
-            ->where('identifier', $permission)
-            ->where('type', $type)
-            ->exists();
+        if (config('benchmark.board_list_variant', 'optimized') !== 'optimized') {
+            return $guestRole->permissions()
+                ->where('identifier', $permission)
+                ->where('type', $type)
+                ->exists();
+        }
+
+        return $guestRole->permissions->contains(
+            fn (Permission $candidate) => $candidate->identifier === $permission
+                && $candidate->type === $type
+        );
     }
 
     /**
@@ -153,8 +161,6 @@ class PermissionMiddleware
      * RolePermissionSeeder 실행 후 자동 호출 — 시드 직후 권한 변경이 즉시 반영되도록 보장.
      * 운영 환경에서는 권한 재시드 (코어 업데이트 / 확장 install) 시점에 캐시 정합 유지.
      * 테스트 환경에서는 RefreshDatabase 트랜잭션 rollback 후 새 시드의 stale id 회귀 방지.
-     *
-     * @return void
      */
     public static function clearGuestRoleCache(): void
     {

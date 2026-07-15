@@ -106,8 +106,8 @@ class PostService
     /**
      * 일반 게시글(원글) 수를 캐시에서 조회합니다.
      *
-     * 필터가 없는 기본 목록은 캐시를 사용하고 (TTL: cache.default_ttl 설정값),
-     * 필터(검색/카테고리 등)가 적용된 경우 실제 COUNT를 실행합니다.
+     * 필터가 없는 기본 목록은 장기 캐시를 사용하고, 필터가 적용된 목록은
+     * 동일 조건의 반복 COUNT를 막기 위해 60초 단기 캐시를 사용합니다.
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $boardId  게시판 ID
@@ -118,7 +118,7 @@ class PostService
      */
     public function getCachedNormalPostCount(string $slug, int $boardId, array $filters = [], bool $withTrashed = false, string $context = 'admin'): int
     {
-        // 필터가 적용된 경우 캐시 미사용 — 실제 COUNT 실행
+        // 필터가 적용된 목록과 삭제글 포함 목록은 조건별 단기 캐시 사용
         $hasActiveFilters = ! empty($filters['search'])
             || (isset($filters['category']) && $filters['category'] !== '' && $filters['category'] !== null)
             || ! empty($filters['status'])
@@ -127,7 +127,30 @@ class PostService
             || ! empty($filters['created_at_to']);
 
         if ($hasActiveFilters || $withTrashed) {
-            return $this->getTotalNormalPosts($slug, $filters, $withTrashed, $context);
+            if (config('benchmark.board_list_variant', 'optimized') !== 'optimized') {
+                return $this->getTotalNormalPosts($slug, $filters, $withTrashed, $context);
+            }
+
+            $countFilters = array_intersect_key($filters, array_flip([
+                'search', 'search_field', 'category', 'board_categories', 'status',
+                'user_id', 'created_at_from', 'created_at_to',
+            ]));
+            $cacheContext = $this->normalizeCountCacheValue([
+                'context' => $context,
+                'with_trashed' => $withTrashed,
+                'filters' => $countFilters,
+            ]);
+            $cacheKey = 'board_filtered_count_'.$boardId.'_'.hash(
+                'sha256',
+                json_encode($cacheContext, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
+            );
+
+            return $this->cache->remember(
+                $cacheKey,
+                fn () => $this->getTotalNormalPosts($slug, $filters, $withTrashed, $context),
+                60,
+                tags: ['board-stats']
+            );
         }
 
         $cacheKey = "board_normal_count_{$boardId}";
@@ -138,6 +161,30 @@ class PostService
             (int) g7_core_settings('cache.default_ttl', 86400),
             tags: ['board-stats']
         );
+    }
+
+    /**
+     * COUNT 캐시 키에 사용할 값을 결정론적인 배열로 정규화합니다.
+     */
+    private function normalizeCountCacheValue(mixed $value): mixed
+    {
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->normalizeCountCacheValue($item);
+        }
+
+        if (! array_is_list($value)) {
+            ksort($value);
+        }
+
+        return $value;
     }
 
     /**

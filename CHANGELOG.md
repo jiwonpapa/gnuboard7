@@ -4,6 +4,13 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [Unreleased]
+
+### Changed
+
+- 비회원 권한을 확인할 때 이미 불러온 역할 권한을 재사용하고, 활성 모듈과 코어 언어팩도 요청 중 캐시를 재사용하도록 변경해 게시판 목록 등 공개 API의 반복 데이터베이스 조회를 줄였습니다.
+- 게시판 목록 성능 개선 전체를 원본 조회 경로와 즉시 전환하고, 인덱스 표시 상태까지 함께 관리하는 반복 성능 비교 하네스를 추가했습니다.
+
 ## [7.0.5] - 2026-07-16
 
 ### Added

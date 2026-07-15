@@ -182,6 +182,13 @@ class Product extends Model implements FulltextSearchable
      */
     public function getThumbnailUrl(): ?string
     {
+        if (config('benchmark.ecommerce_variant') === 'optimized' && $this->relationLoaded('images')) {
+            $thumbnailImage = $this->images->firstWhere('is_thumbnail', true)
+                ?? $this->images->first();
+
+            return $thumbnailImage?->download_url;
+        }
+
         $thumbnailImage = $this->images()->where('is_thumbnail', true)->first()
             ?? $this->images()->first();
 

@@ -79,7 +79,13 @@ Route::prefix('categories')->group(function () {
 // GET /api/modules/sirsoft-ecommerce/products/new - 신상품 조회
 // GET /api/modules/sirsoft-ecommerce/products/recent - 최근 본 상품 조회
 // GET /api/modules/sirsoft-ecommerce/products/{id} - 공개 상품 상세 조회
-Route::prefix('products')->middleware(['optional.sanctum', 'permission:user,sirsoft-ecommerce.user-products.read'])->group(function () {
+$publicProductMiddleware = ['optional.sanctum', 'permission:user,sirsoft-ecommerce.user-products.read'];
+
+Route::get('storefront', [PublicProductController::class, 'storefront'])
+    ->middleware($publicProductMiddleware)
+    ->name('storefront.index');
+
+Route::prefix('products')->middleware($publicProductMiddleware)->group(function () {
     Route::get('/', [PublicProductController::class, 'index'])
         ->name('products.index');
 

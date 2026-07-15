@@ -2,6 +2,7 @@
 
 namespace Modules\Sirsoft\Ecommerce\Services;
 
+use App\Contracts\Extension\CacheInterface;
 use App\Extension\HookManager;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -16,14 +17,14 @@ class CategoryService
 {
     public function __construct(
         protected CategoryRepositoryInterface $repository,
-        protected CategoryImageRepositoryInterface $imageRepository
+        protected CategoryImageRepositoryInterface $imageRepository,
+        protected ?CacheInterface $cache = null
     ) {}
 
     /**
      * 계층형 카테고리 목록 조회
      *
-     * @param array $filters 필터 조건
-     * @return Collection
+     * @param  array  $filters  필터 조건
      */
     public function getHierarchicalCategories(array $filters = []): Collection
     {
@@ -34,9 +35,9 @@ class CategoryService
         $filters = HookManager::applyFilters('sirsoft-ecommerce.category.filter_list_query', $filters);
 
         // hierarchical 플래그가 true이면 전체 트리 구조 반환
-        if (!empty($filters['hierarchical'])) {
+        if (! empty($filters['hierarchical'])) {
             $categories = Category::getTree(null, $filters['is_active'] ?? false);
-        } elseif (!empty($filters['flat'])) {
+        } elseif (! empty($filters['flat'])) {
             // flat 플래그가 true이면 평면 리스트 반환 (TagInput 등에 사용)
             $categories = $this->repository->getFlatList($filters, ['images']);
         } else {
@@ -56,14 +57,12 @@ class CategoryService
      * 공개 카테고리 트리 조회 (활성 카테고리만)
      *
      * 프론트엔드 사용자 페이지에서 카테고리 필터에 사용합니다.
-     *
-     * @return Collection
      */
     public function getPublicCategoryTree(): Collection
     {
         HookManager::doAction('sirsoft-ecommerce.category.before_public_list');
 
-        $categories = Category::getTree(null, true);
+        $categories = $this->getCachedPublicCategoryTree();
 
         $categories = HookManager::applyFilters('sirsoft-ecommerce.category.filter_public_list_result', $categories);
 
@@ -73,10 +72,29 @@ class CategoryService
     }
 
     /**
+     * 공개 카테고리 트리는 변경 빈도보다 조회 빈도가 높아 짧게 재사용합니다.
+     */
+    private function getCachedPublicCategoryTree(): Collection
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized' || $this->cache === null) {
+            return Category::getTree(null, true);
+        }
+
+        $key = 'public:category-tree:v1';
+        $categories = $this->cache->get($key);
+
+        if (! $categories instanceof Collection) {
+            $categories = Category::getTree(null, true);
+            $this->cache->put($key, $categories, 60);
+        }
+
+        return $categories;
+    }
+
+    /**
      * slug로 공개 카테고리 조회 (활성 카테고리만)
      *
-     * @param string $slug 카테고리 slug
-     * @return Category|null
+     * @param  string  $slug  카테고리 slug
      */
     public function getPublicCategoryBySlug(string $slug): ?Category
     {
@@ -104,8 +122,7 @@ class CategoryService
     /**
      * 카테고리 상세 조회
      *
-     * @param int $id 카테고리 ID
-     * @return Category|null
+     * @param  int  $id  카테고리 ID
      */
     public function getCategory(int $id): ?Category
     {
@@ -132,8 +149,7 @@ class CategoryService
     /**
      * 카테고리 생성
      *
-     * @param array $data 카테고리 데이터
-     * @return Category
+     * @param  array  $data  카테고리 데이터
      */
     public function createCategory(array $data): Category
     {
@@ -150,7 +166,7 @@ class CategoryService
             $data['path'] = $depthAndPath['path'];
 
             // sort_order가 없으면 자동 계산
-            if (!isset($data['sort_order'])) {
+            if (! isset($data['sort_order'])) {
                 $data['sort_order'] = $this->repository->getNextSortOrder($data['parent_id'] ?? null);
             }
 
@@ -162,7 +178,7 @@ class CategoryService
             $this->updatePath($category);
 
             // 이미지 처리 (temp_key 방식)
-            if (!empty($data['temp_key'])) {
+            if (! empty($data['temp_key'])) {
                 $this->imageRepository->linkTempImages($data['temp_key'], $category->id);
             }
 
@@ -178,15 +194,14 @@ class CategoryService
     /**
      * 카테고리 수정
      *
-     * @param int $id 카테고리 ID
-     * @param array $data 수정할 데이터
-     * @return Category
+     * @param  int  $id  카테고리 ID
+     * @param  array  $data  수정할 데이터
      */
     public function updateCategory(int $id, array $data): Category
     {
         $category = $this->repository->findById($id);
 
-        if (!$category) {
+        if (! $category) {
             throw new \Exception(__('sirsoft-ecommerce::exceptions.category_not_found', ['category_id' => $id]));
         }
 
@@ -219,7 +234,7 @@ class CategoryService
             }
 
             // 이미지 처리
-            if (!empty($data['temp_key'])) {
+            if (! empty($data['temp_key'])) {
                 $this->imageRepository->linkTempImages($data['temp_key'], $category->id);
             }
 
@@ -235,15 +250,16 @@ class CategoryService
     /**
      * 카테고리 삭제
      *
-     * @param int $id 카테고리 ID
+     * @param  int  $id  카테고리 ID
      * @return array 삭제 결과 정보
+     *
      * @throws \Exception
      */
     public function deleteCategory(int $id): array
     {
         $category = $this->repository->findById($id);
 
-        if (!$category) {
+        if (! $category) {
             throw new \Exception(__('sirsoft-ecommerce::exceptions.category_not_found', ['category_id' => $id]));
         }
 
@@ -286,7 +302,7 @@ class CategoryService
     /**
      * depth와 Materialized Path를 계산합니다.
      *
-     * @param int|null $parentId 부모 카테고리 ID
+     * @param  int|null  $parentId  부모 카테고리 ID
      * @return array ['depth' => int, 'path' => string]
      */
     private function calculateDepthAndPath(?int $parentId): array
@@ -297,7 +313,7 @@ class CategoryService
 
         $parent = $this->repository->findById($parentId);
 
-        if (!$parent) {
+        if (! $parent) {
             return ['depth' => 0, 'path' => ''];
         }
 
@@ -309,9 +325,6 @@ class CategoryService
 
     /**
      * 카테고리의 path를 업데이트합니다 (ID 포함).
-     *
-     * @param Category $category
-     * @return void
      */
     private function updatePath(Category $category): void
     {
@@ -328,9 +341,6 @@ class CategoryService
 
     /**
      * 하위 카테고리들의 path를 재계산합니다 (재귀).
-     *
-     * @param Category $category
-     * @return void
      */
     private function updateDescendantsPaths(Category $category): void
     {
@@ -345,15 +355,15 @@ class CategoryService
     /**
      * 카테고리 상태 토글
      *
-     * @param int $id 카테고리 ID
-     * @return Category
+     * @param  int  $id  카테고리 ID
+     *
      * @throws \Exception
      */
     public function toggleStatus(int $id): Category
     {
         $category = $this->repository->findById($id);
 
-        if (!$category) {
+        if (! $category) {
             throw new \Exception(__('sirsoft-ecommerce::exceptions.category_not_found', ['category_id' => $id]));
         }
 
@@ -361,7 +371,7 @@ class CategoryService
         HookManager::doAction('sirsoft-ecommerce.category.before_toggle_status', $category);
 
         $category = $this->repository->update($id, [
-            'is_active' => !$category->is_active,
+            'is_active' => ! $category->is_active,
         ]);
 
         // After 훅
@@ -373,8 +383,7 @@ class CategoryService
     /**
      * 카테고리 순서 변경
      *
-     * @param array $orders 순서 변경 데이터 [['id' => 1, 'parent_id' => null, 'sort_order' => 0], ...]
-     * @return void
+     * @param  array  $orders  순서 변경 데이터 [['id' => 1, 'parent_id' => null, 'sort_order' => 0], ...]
      */
     public function reorder(array $orders): void
     {
@@ -384,7 +393,7 @@ class CategoryService
         DB::transaction(function () use ($orders) {
             foreach ($orders as $order) {
                 $category = $this->repository->findById($order['id']);
-                if (!$category) {
+                if (! $category) {
                     continue;
                 }
 

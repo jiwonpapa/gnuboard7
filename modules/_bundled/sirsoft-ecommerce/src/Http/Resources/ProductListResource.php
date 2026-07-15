@@ -2,6 +2,7 @@
 
 namespace Modules\Sirsoft\Ecommerce\Http\Resources;
 
+use App\Helpers\PermissionHelper;
 use App\Http\Resources\BaseApiResource;
 use Illuminate\Http\Request;
 use Modules\Sirsoft\Ecommerce\Http\Resources\Traits\HasMultiCurrencyPrices;
@@ -127,6 +128,62 @@ class ProductListResource extends BaseApiResource
             'can_update' => 'sirsoft-ecommerce.products.update',
             'can_delete' => 'sirsoft-ecommerce.products.delete',
         ];
+    }
+
+    /**
+     * 동일 요청에서 반복되는 컬렉션/행 권한 조회를 재사용합니다.
+     *
+     * @param  array<string, string>  $map
+     * @return array<string, bool>
+     */
+    public static function resolveRequestAbilityMap(array $map, Request $request): array
+    {
+        $cache = $request->attributes->get('g7_ecommerce_ability_cache', []);
+        $user = $request->user();
+        $userKey = $user ? (string) $user->id : 'guest';
+        $abilities = [];
+
+        foreach ($map as $key => $identifier) {
+            $cacheKey = $userKey.':'.$identifier;
+
+            if (! array_key_exists($cacheKey, $cache)) {
+                $cache[$cacheKey] = PermissionHelper::check($identifier, $user);
+            }
+
+            $abilities[$key] = $cache[$cacheKey];
+        }
+
+        $request->attributes->set('g7_ecommerce_ability_cache', $cache);
+
+        return $abilities;
+    }
+
+    /**
+     * 행별 스코프 판정은 유지하고 권한 보유 여부만 요청 단위로 재사용합니다.
+     *
+     * @return array<string, bool>
+     */
+    protected function resolveAbilities(Request $request): array
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized') {
+            return parent::resolveAbilities($request);
+        }
+
+        $map = $this->abilityMap();
+        $abilities = self::resolveRequestAbilityMap($map, $request);
+        $resource = $this->resource;
+
+        while ($resource instanceof \Illuminate\Http\Resources\Json\JsonResource) {
+            $resource = $resource->resource;
+        }
+
+        foreach ($map as $key => $identifier) {
+            if ($abilities[$key] && $resource instanceof \Illuminate\Database\Eloquent\Model) {
+                $abilities[$key] = PermissionHelper::checkScopeAccess($resource, $identifier, $request->user());
+            }
+        }
+
+        return $abilities;
     }
 
     /**

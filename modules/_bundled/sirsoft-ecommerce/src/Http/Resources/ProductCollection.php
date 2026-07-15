@@ -40,11 +40,15 @@ class ProductCollection extends BaseApiCollection
      */
     public function toArray(Request $request): array
     {
+        $abilities = config('benchmark.ecommerce_variant') === 'optimized'
+            ? ProductListResource::resolveRequestAbilityMap($this->abilityMap(), $request)
+            : $this->resolveAbilitiesFromMap($this->abilityMap(), $request->user());
+
         $result = [
             'data' => $this->mapWithRowNumber(function ($product) {
                 return (new ProductListResource($product))->resolve(request());
             }),
-            'abilities' => $this->resolveAbilitiesFromMap($this->abilityMap(), $request->user()),
+            'abilities' => $abilities,
         ];
 
         if ($this->resource instanceof LengthAwarePaginator) {
@@ -70,11 +74,16 @@ class ProductCollection extends BaseApiCollection
      */
     public function withStatistics(array $statistics = []): array
     {
+        $request = request();
+        $abilities = config('benchmark.ecommerce_variant') === 'optimized'
+            ? ProductListResource::resolveRequestAbilityMap($this->abilityMap(), $request)
+            : $this->resolveAbilitiesFromMap($this->abilityMap(), $request->user());
+
         $result = [
             'data' => $this->mapWithRowNumber(function ($product) {
                 return (new ProductListResource($product))->resolve(request());
             }),
-            'abilities' => $this->resolveAbilitiesFromMap($this->abilityMap(), request()->user()),
+            'abilities' => $abilities,
             'statistics' => $statistics,
         ];
 

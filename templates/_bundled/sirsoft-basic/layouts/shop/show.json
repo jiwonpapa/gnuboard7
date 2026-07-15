@@ -136,7 +136,7 @@
             "type": "api",
             "endpoint": "/api/modules/sirsoft-ecommerce/products/{{route.product_code}}/reviews",
             "method": "GET",
-            "auto_fetch": true,
+            "auto_fetch": false,
             "auth_mode": "optional",
             "params": {
                 "page": "{{_local.reviewsPage ?? 1}}",
@@ -172,7 +172,7 @@
             "type": "api",
             "endpoint": "/api/modules/sirsoft-ecommerce/products/{{route.product_code}}/inquiries",
             "method": "GET",
-            "auto_fetch": true,
+            "auto_fetch": false,
             "auth_mode": "optional",
             "loading_strategy": "progressive",
             "params": {
@@ -450,7 +450,7 @@
                                 {
                                     "id": "qna",
                                     "label": "$t:shop.tabs.qna",
-                                    "badge": "{{qna.data.meta.total ?? 0}}",
+                                    "badge": "{{qna.data?.meta?.total ?? 0}}",
                                     "iconName": "comment"
                                 }
                             ],
@@ -477,6 +477,25 @@
                                                 "tab": "{{$args[0]}}"
                                             }
                                         }
+                                    },
+                                    {
+                                        "handler": "conditions",
+                                        "conditions": [
+                                            {
+                                                "if": "{{$args[0] === 'reviews'}}",
+                                                "then": {
+                                                    "handler": "refetchDataSource",
+                                                    "params": { "dataSourceId": "reviews" }
+                                                }
+                                            },
+                                            {
+                                                "if": "{{$args[0] === 'qna'}}",
+                                                "then": {
+                                                    "handler": "refetchDataSource",
+                                                    "params": { "dataSourceId": "qna" }
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
                             }

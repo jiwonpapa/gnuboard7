@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Enums\ExtensionStatus;
 use App\Extension\ExtensionManager;
+use App\Extension\ModuleManager;
 use App\Extension\Testing\ExtensionTestAllowlist;
 use App\Models\Module;
 use App\Support\InstallerContext;
@@ -75,9 +76,11 @@ class ModuleRouteServiceProvider extends ServiceProvider
         }
 
         // 활성화된 모듈 identifier 목록 가져오기
-        $activeModuleIdentifiers = Module::where('status', ExtensionStatus::Active->value)
-            ->pluck('identifier')
-            ->toArray();
+        $activeModuleIdentifiers = config('benchmark.board_list_variant', 'optimized') === 'optimized'
+            ? ModuleManager::getActiveModuleIdentifiers()
+            : Module::where('status', ExtensionStatus::Active->value)
+                ->pluck('identifier')
+                ->toArray();
 
         $modules = File::directories($modulesPath);
         $allowlistActive = ExtensionTestAllowlist::isActive();

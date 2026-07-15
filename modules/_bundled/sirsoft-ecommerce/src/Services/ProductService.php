@@ -2,6 +2,7 @@
 
 namespace Modules\Sirsoft\Ecommerce\Services;
 
+use App\Contracts\Extension\CacheInterface;
 use App\Extension\HookManager;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
@@ -11,6 +12,7 @@ use Modules\Sirsoft\Ecommerce\Enums\SequenceType;
 use Modules\Sirsoft\Ecommerce\Exceptions\OptionHasOrderHistoryException;
 use Modules\Sirsoft\Ecommerce\Exceptions\ProductHasOrderHistoryException;
 use Modules\Sirsoft\Ecommerce\Exceptions\StockMismatchException;
+use Modules\Sirsoft\Ecommerce\Models\Category;
 use Modules\Sirsoft\Ecommerce\Models\Product;
 use Modules\Sirsoft\Ecommerce\Models\ProductAdditionalOption;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderOptionRepositoryInterface;
@@ -44,7 +46,8 @@ class ProductService
         protected SequenceService $sequenceService,
         protected OrderOptionRepositoryInterface $orderOptionRepository,
         protected ProductLabelRepositoryInterface $productLabelRepository,
-        protected ProductAdditionalOptionValueRepositoryInterface $additionalOptionValueRepository
+        protected ProductAdditionalOptionValueRepositoryInterface $additionalOptionValueRepository,
+        protected ?CacheInterface $cache = null
     ) {}
 
     /**
@@ -97,7 +100,11 @@ class ProductService
     {
         HookManager::doAction('sirsoft-ecommerce.product.before_popular_list');
 
-        $products = $this->repository->getPopularProducts($limit);
+        $products = $this->cachedPublicProducts(
+            'public:popular:v1:'.$limit,
+            fn () => $this->repository->getPopularProducts($limit),
+            30
+        );
 
         $products = HookManager::applyFilters('sirsoft-ecommerce.product.filter_popular_list_result', $products);
 
@@ -118,11 +125,43 @@ class ProductService
     {
         HookManager::doAction('sirsoft-ecommerce.product.before_new_list');
 
-        $products = $this->repository->getNewProducts($limit);
+        $products = $this->cachedPublicProducts(
+            'public:new:v1:'.$limit,
+            fn () => $this->repository->getNewProducts($limit),
+            30
+        );
 
         $products = HookManager::applyFilters('sirsoft-ecommerce.product.filter_new_list_result', $products);
 
         HookManager::doAction('sirsoft-ecommerce.product.after_new_list', $products);
+
+        return $products;
+    }
+
+    /**
+     * 공개 상품 블록을 짧게 캐시하고 브레드크럼 조상 캐시를 복원합니다.
+     *
+     * @param  callable(): Collection<int, Product>  $loader
+     * @return Collection<int, Product>
+     */
+    private function cachedPublicProducts(string $key, callable $loader, int $ttl): Collection
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized' || $this->cache === null) {
+            return $loader();
+        }
+
+        $products = $this->cache->get($key);
+
+        if (! $products instanceof Collection) {
+            $products = $loader();
+            $this->cache->put($key, $products, $ttl);
+        }
+
+        $categories = $products
+            ->flatMap(fn (Product $product) => $product->relationLoaded('categories') ? $product->categories : [])
+            ->unique('id')
+            ->values();
+        Category::primeAncestorLookup($categories);
 
         return $products;
     }

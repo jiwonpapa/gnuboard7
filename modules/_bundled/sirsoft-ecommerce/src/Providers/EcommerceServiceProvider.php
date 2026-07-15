@@ -90,11 +90,13 @@ use Modules\Sirsoft\Ecommerce\Repositories\TempOrderRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\UserAddressRepository;
 use Modules\Sirsoft\Ecommerce\Seo\EcommerceSitemapContributor;
 use Modules\Sirsoft\Ecommerce\Services\CategoryImageService;
+use Modules\Sirsoft\Ecommerce\Services\CategoryService;
 use Modules\Sirsoft\Ecommerce\Services\CurrencyConversionService;
 use Modules\Sirsoft\Ecommerce\Services\PaymentMethodResolver;
 use Modules\Sirsoft\Ecommerce\Services\ProductImageService;
 use Modules\Sirsoft\Ecommerce\Services\ProductReviewImageService;
 use Modules\Sirsoft\Ecommerce\Services\ProductReviewService;
+use Modules\Sirsoft\Ecommerce\Services\ProductService;
 use Modules\Sirsoft\Ecommerce\Services\ShippingPolicyResolver;
 
 /**
@@ -119,6 +121,12 @@ class EcommerceServiceProvider extends BaseModuleServiceProvider
         ProductImageService::class,
         ProductReviewService::class,
         ProductReviewImageService::class,
+    ];
+
+    /** @var array<int, class-string> */
+    protected array $cacheServices = [
+        CategoryService::class,
+        ProductService::class,
     ];
 
     /**

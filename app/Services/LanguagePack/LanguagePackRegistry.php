@@ -56,7 +56,13 @@ class LanguagePackRegistry
             return $this->activeCoreLocalesCache;
         }
 
-        $fromDb = $this->repository->getActiveCoreLocales();
+        $fromDb = config('benchmark.board_list_variant', 'optimized') === 'optimized'
+            ? $this->getActivePacks(LanguagePackScope::Core->value)
+                ->pluck('locale')
+                ->unique()
+                ->values()
+                ->all()
+            : $this->repository->getActiveCoreLocales();
         $merged = array_values(array_unique(array_merge(self::BUNDLED_CORE_LOCALES, $fromDb)));
 
         return $this->activeCoreLocalesCache = $merged;
@@ -149,8 +155,6 @@ class LanguagePackRegistry
 
     /**
      * 캐시를 만료시킵니다 (활성화/비활성화/제거 직후 호출).
-     *
-     * @return void
      */
     public function invalidate(): void
     {

@@ -7,6 +7,7 @@ use App\Enums\LanguagePackStatus;
 use App\Models\LanguagePack;
 use App\Services\LanguagePack\LanguagePackRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -22,12 +23,11 @@ class LanguagePackRegistryTest extends TestCase
 
     /**
      * 테스트 픽스처 초기화.
-     *
-     * @return void
      */
     protected function setUp(): void
     {
         parent::setUp();
+        config()->set('benchmark.board_list_variant', 'optimized');
         $this->registry = $this->app->make(LanguagePackRegistry::class);
     }
 
@@ -136,5 +136,40 @@ class LanguagePackRegistryTest extends TestCase
 
         $this->assertCount(1, $modulePacks);
         $this->assertSame(LanguagePackScope::Module->value, $modulePacks->first()->scope);
+    }
+
+    public function test_active_core_locales_reuse_the_active_pack_query(): void
+    {
+        $this->makePack('sirsoft', 'ja');
+        $this->registry->invalidate();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->registry->getActivePacks();
+        $locales = $this->registry->getActiveCoreLocales();
+        $languagePackQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_contains($query['query'], 'language_packs'));
+        DB::disableQueryLog();
+
+        $this->assertContains('ja', $locales);
+        $this->assertCount(1, $languagePackQueries);
+    }
+
+    public function test_baseline_variant_runs_the_original_core_locale_query(): void
+    {
+        config()->set('benchmark.board_list_variant', 'baseline');
+        $this->makePack('sirsoft', 'ja');
+        $this->registry->invalidate();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->registry->getActivePacks();
+        $locales = $this->registry->getActiveCoreLocales();
+        $languagePackQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_contains($query['query'], 'language_packs'));
+        DB::disableQueryLog();
+
+        $this->assertContains('ja', $locales);
+        $this->assertCount(2, $languagePackQueries);
     }
 }

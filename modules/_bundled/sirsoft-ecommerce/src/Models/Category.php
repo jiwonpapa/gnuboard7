@@ -17,6 +17,9 @@ class Category extends Model implements FulltextSearchable
 {
     use Searchable;
 
+    /** @var Collection<int, self>|null 요청 단위 브레드크럼 조상 조회 캐시 */
+    protected static ?Collection $primedAncestors = null;
+
     /** @var array<string, array> 활동 로그 추적 필드 */
     public static array $activityLogFields = [
         'parent_id' => ['label_key' => 'sirsoft-ecommerce::activity_log.fields.parent_id', 'type' => 'number'],
@@ -53,8 +56,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 부모 카테고리 관계
-     *
-     * @return BelongsTo
      */
     public function parent(): BelongsTo
     {
@@ -63,8 +64,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 직계 자식 카테고리 관계
-     *
-     * @return HasMany
      */
     public function children(): HasMany
     {
@@ -73,8 +72,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 활성 상태의 자식 카테고리만 조회
-     *
-     * @return HasMany
      */
     public function activeChildren(): HasMany
     {
@@ -83,8 +80,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 모든 하위 카테고리 재귀 조회
-     *
-     * @return HasMany
      */
     public function descendants(): HasMany
     {
@@ -120,8 +115,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 카테고리 이미지 관계
-     *
-     * @return HasMany
      */
     public function images(): HasMany
     {
@@ -130,8 +123,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 해당 카테고리에 속한 상품들
-     *
-     * @return BelongsToMany
      */
     public function products(): BelongsToMany
     {
@@ -147,7 +138,6 @@ class Category extends Model implements FulltextSearchable
      * 현재 로케일의 카테고리명 반환
      *
      * @param  string|null  $locale  로케일 (기본값: 현재 앱 로케일)
-     * @return string
      */
     public function getLocalizedName(?string $locale = null): string
     {
@@ -178,8 +168,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * 조상 카테고리들 조회
-     *
-     * @return Collection
      */
     public function getAncestors(): Collection
     {
@@ -189,16 +177,53 @@ class Category extends Model implements FulltextSearchable
             return new Collection;
         }
 
-        $ancestors = self::whereIn('id', $ancestorIds)->get();
+        if (config('benchmark.ecommerce_variant') === 'optimized' && self::$primedAncestors !== null) {
+            $ancestors = self::$primedAncestors->only($ancestorIds);
+        } else {
+            $ancestors = self::whereIn('id', $ancestorIds)->get()->keyBy('id');
+        }
         $orderedIds = array_flip($ancestorIds);
 
         return $ancestors->sortBy(fn ($item) => $orderedIds[$item->id] ?? PHP_INT_MAX)->values();
     }
 
     /**
-     * 브레드크럼 데이터 생성 (조상 + 현재 카테고리)
+     * 상품 목록에 포함된 카테고리의 모든 조상을 한 번에 조회합니다.
      *
-     * @return array
+     * @param  \Illuminate\Support\Collection<int, self>  $categories
+     */
+    public static function primeAncestorLookup(\Illuminate\Support\Collection $categories): void
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized') {
+            self::$primedAncestors = null;
+
+            return;
+        }
+
+        $ids = $categories
+            ->flatMap(fn (self $category) => $category->getAncestorIds())
+            ->unique()
+            ->values();
+
+        $primed = self::$primedAncestors ?? new Collection;
+        $missingIds = $ids->diff($primed->keys());
+
+        if ($missingIds->isNotEmpty()) {
+            $primed = $primed
+                ->merge(self::whereIn('id', $missingIds)->get()->keyBy('id'))
+                ->keyBy('id');
+        }
+
+        self::$primedAncestors = $primed;
+    }
+
+    public static function clearPrimedAncestorLookup(): void
+    {
+        self::$primedAncestors = null;
+    }
+
+    /**
+     * 브레드크럼 데이터 생성 (조상 + 현재 카테고리)
      */
     public function getBreadcrumb(): array
     {
@@ -230,7 +255,6 @@ class Category extends Model implements FulltextSearchable
      *
      * @param  string|null  $locale  로케일 (기본값: 현재 앱 로케일)
      * @param  string  $separator  구분자 (기본값: ' > ')
-     * @return string
      */
     public function getLocalizedBreadcrumbString(?string $locale = null, string $separator = ' > '): string
     {
@@ -304,10 +328,13 @@ class Category extends Model implements FulltextSearchable
      *
      * @param  int|null  $parentId  부모 ID (null이면 루트부터)
      * @param  bool  $onlyActive  활성 카테고리만 조회할지 여부
-     * @return Collection
      */
     public static function getTree(?int $parentId = null, bool $onlyActive = false): Collection
     {
+        if (config('benchmark.ecommerce_variant') === 'optimized' && $parentId === null && $onlyActive) {
+            return self::getPublicTreeInBatches();
+        }
+
         $query = self::with([
             'images',
             'parent:id,name,slug', // parent에서 필요한 필드만 선택
@@ -331,11 +358,39 @@ class Category extends Model implements FulltextSearchable
     }
 
     /**
+     * 공개 카테고리 전체를 일괄 조회하고 PHP에서 트리로 조립합니다.
+     */
+    protected static function getPublicTreeInBatches(): Collection
+    {
+        $categories = self::query()
+            ->with('images')
+            ->withCount('products')
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        $childrenByParent = $categories->groupBy(
+            fn (self $category) => $category->parent_id === null ? 'root' : (string) $category->parent_id
+        );
+
+        $attachChildren = function (Collection $nodes) use (&$attachChildren, $childrenByParent): Collection {
+            foreach ($nodes as $node) {
+                $children = $childrenByParent->get((string) $node->id, new Collection)->values();
+                $node->setRelation('children', $attachChildren($children));
+            }
+
+            return $nodes;
+        };
+
+        return $attachChildren($childrenByParent->get('root', new Collection)->values());
+    }
+
+    /**
      * 플랫 리스트로 변환 (들여쓰기용 depth 포함)
      *
      * @param  Collection|null  $categories  변환할 카테고리 컬렉션 (null이면 전체 트리)
      * @param  string  $indent  들여쓰기 문자
-     * @return array
      */
     public static function toFlatList(?Collection $categories = null, string $indent = '　'): array
     {
@@ -389,8 +444,6 @@ class Category extends Model implements FulltextSearchable
 
     /**
      * MySQL FULLTEXT 엔진에서는 인덱스 업데이트가 불필요합니다.
-     *
-     * @return bool
      */
     public function searchIndexShouldBeUpdated(): bool
     {

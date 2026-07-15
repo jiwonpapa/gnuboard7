@@ -3,13 +3,19 @@
     "layout_name": "shop/index",
     "permissions": [],
     "extends": "_user_base",
+    "computed": {
+        "categories": "{{storefront?.data?.categories}}",
+        "recentProducts": "{{storefront?.data?.recentProducts}}",
+        "popularProducts": "{{storefront?.data?.popularProducts}}",
+        "newProducts": "{{storefront?.data?.newProducts}}"
+    },
     "meta": {
         "seo": {
             "enabled": true,
             "extensions": [
                 { "type": "module", "id": "sirsoft-ecommerce" }
             ],
-            "data_sources": ["products", "categories"],
+            "data_sources": ["products", "storefront"],
             "page_type": "shop_index",
             "toggle_setting": "$module_settings:sirsoft-ecommerce:seo.seo_shop_index",
             "vars": {
@@ -62,18 +68,6 @@
     },
     "data_sources": [
         {
-            "id": "categories",
-            "label_key": "$t:editor.data_source.categories",
-            "type": "api",
-            "endpoint": "/api/modules/sirsoft-ecommerce/categories",
-            "method": "GET",
-            "auto_fetch": true,
-            "loading_strategy": "progressive",
-            "fallback": {
-                "data": []
-            }
-        },
-        {
             "id": "products",
             "label_key": "$t:editor.data_source.products",
             "type": "api",
@@ -100,10 +94,10 @@
             }
         },
         {
-            "id": "recentProducts",
-            "label_key": "$t:editor.data_source.recentProducts",
+            "id": "storefront",
+            "label_key": "$t:editor.data_source.products",
             "type": "api",
-            "endpoint": "/api/modules/sirsoft-ecommerce/products/recent",
+            "endpoint": "/api/modules/sirsoft-ecommerce/storefront",
             "method": "GET",
             "auth_mode": "optional",
             "params": {
@@ -112,33 +106,12 @@
             "auto_fetch": true,
             "loading_strategy": "progressive",
             "fallback": {
-                "data": []
-            }
-        },
-        {
-            "id": "popularProducts",
-            "label_key": "$t:editor.data_source.popularProducts",
-            "type": "api",
-            "endpoint": "/api/modules/sirsoft-ecommerce/products/popular?limit=8",
-            "method": "GET",
-            "auth_mode": "optional",
-            "auto_fetch": true,
-            "loading_strategy": "progressive",
-            "fallback": {
-                "data": []
-            }
-        },
-        {
-            "id": "newProducts",
-            "label_key": "$t:editor.data_source.newProducts",
-            "type": "api",
-            "endpoint": "/api/modules/sirsoft-ecommerce/products/new?limit=8",
-            "method": "GET",
-            "auth_mode": "optional",
-            "auto_fetch": true,
-            "loading_strategy": "progressive",
-            "fallback": {
-                "data": []
+                "data": {
+                    "categories": { "data": [] },
+                    "recentProducts": { "data": [] },
+                    "popularProducts": { "data": [] },
+                    "newProducts": { "data": [] }
+                }
             }
         }
     ],

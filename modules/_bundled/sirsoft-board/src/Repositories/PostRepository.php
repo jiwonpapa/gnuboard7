@@ -32,6 +32,12 @@ class PostRepository implements PostRepositoryInterface
     use ChecksBoardPermission;
     use FormatsBoardDate;
 
+    /** 첫 페이지에 함께 노출할 공지글 최대 수 */
+    private const MAX_NOTICE_POSTS = 10;
+
+    /** 한 페이지에서 본문과 함께 펼칠 답글 최대 수 */
+    private const MAX_INLINE_REPLIES = 100;
+
     /**
      * PostRepository 생성자
      */
@@ -725,6 +731,8 @@ class PostRepository implements PostRepositoryInterface
         int $currentPage = 1,
         ?Board $board = null
     ) {
+        $optimized = config('benchmark.board_list_variant', 'optimized') === 'optimized';
+
         // board가 전달되지 않은 경우에만 DB 조회 (하위 호환 유지)
         if (! $board) {
             $board = Board::where('slug', $slug)->first();
@@ -760,6 +768,10 @@ class PostRepository implements PostRepositoryInterface
 
             if (! empty($relations)) {
                 $noticeQuery->with($relations);
+            }
+
+            if ($optimized) {
+                $noticeQuery->limit(self::MAX_NOTICE_POSTS);
             }
 
             $notices = $noticeQuery->get($columns);
@@ -821,18 +833,36 @@ class PostRepository implements PostRepositoryInterface
         // created_at은 초 단위라 실질적 중복이 드물지만, view_count/title/author_name은 중복이 많음
         $parentQuery->orderBy($orderBy, $orderDirection)->orderBy('id', $orderDirection);
 
-        if (! empty($relations)) {
-            $parentQuery->with($relations);
-        }
-
         // 페이지네이션 여부에 따라 분기
         if ($perPage !== null) {
-            // simplePaginate 사용 — COUNT(*) 쿼리 제거로 대량 데이터 성능 개선
-            // total은 Service 캐시 카운트로 별도 제공
-            $paginator = $parentQuery->simplePaginate($perPage, $columns, 'page', $currentPage);
-            $parents = $paginator->getCollection();
+            if ($optimized) {
+                // 깊은 페이지에서 LONGTEXT와 관계 컬럼까지 정렬하지 않도록 ID만 먼저 페이지네이션한다.
+                // 실제 목록 행은 선택된 ID(최대 perPage건)에 한해 별도 조회한다.
+                $paginator = $parentQuery->simplePaginate($perPage, ['id'], 'page', $currentPage);
+                $parents = $this->hydrateListPostsByIds(
+                    $paginator->getCollection()->pluck('id')->all(),
+                    $boardId,
+                    $columns,
+                    $withTrashed,
+                    $relations,
+                    $withCount
+                );
+            } else {
+                // G7 7.0.4 원본 경로: OFFSET 전에 목록 컬럼과 관계를 함께 조회한다.
+                if (! empty($relations)) {
+                    $parentQuery->with($relations);
+                }
+                $paginator = $parentQuery->simplePaginate($perPage, $columns, 'page', $currentPage);
+                $parents = $paginator->getCollection();
+            }
         } else {
             // 전체 조회
+            if (! empty($relations)) {
+                $parentQuery->with($relations);
+            }
+            if (! empty($withCount)) {
+                $parentQuery->withCount($withCount);
+            }
             $parents = $parentQuery->get($columns);
             $paginator = null;
         }
@@ -842,13 +872,26 @@ class PostRepository implements PostRepositoryInterface
         $allReplies = collect([]);
 
         if (! empty($parentIds)) {
-            $currentLevelIds = $parentIds;
+            $currentLevelIds = $optimized
+                ? $parents
+                    ->filter(fn (Post $post) => $post->replies_count > 0)
+                    ->pluck('id')
+                    ->all()
+                : $parentIds;
 
             while (! empty($currentLevelIds)) {
                 $levelQuery = Post::query()
                     ->where('board_id', $boardId)
                     ->whereIn('parent_id', $currentLevelIds)
                     ->orderBy('id', 'asc');
+
+                if ($optimized) {
+                    $remaining = self::MAX_INLINE_REPLIES - $allReplies->count();
+                    if ($remaining <= 0) {
+                        break;
+                    }
+                    $levelQuery->limit($remaining);
+                }
 
                 if ($withTrashed) {
                     $levelQuery->withTrashed();
@@ -859,6 +902,9 @@ class PostRepository implements PostRepositoryInterface
                 if (! empty($relations)) {
                     $levelQuery->with($relations);
                 }
+                if ($optimized && ! empty($withCount)) {
+                    $levelQuery->withCount($withCount);
+                }
 
                 $levelReplies = $levelQuery->get($columns);
 
@@ -867,7 +913,12 @@ class PostRepository implements PostRepositoryInterface
                 }
 
                 $allReplies = $allReplies->merge($levelReplies);
-                $currentLevelIds = $levelReplies->pluck('id')->toArray();
+                $currentLevelIds = $optimized
+                    ? $levelReplies
+                        ->filter(fn (Post $post) => $post->replies_count > 0)
+                        ->pluck('id')
+                        ->all()
+                    : $levelReplies->pluck('id')->all();
             }
         }
 
@@ -901,6 +952,54 @@ class PostRepository implements PostRepositoryInterface
 
         // 전체 조회 시 컬렉션 반환
         return $finalItems;
+    }
+
+    /**
+     * 페이지 인덱스에서 선택된 게시글만 목록 표시용 컬럼과 관계로 조회합니다.
+     *
+     * @param  array<int>  $ids  페이지 순서대로 정렬된 게시글 ID
+     * @param  int|null  $boardId  게시판 ID
+     * @param  array  $columns  목록 조회 컬럼
+     * @param  bool  $withTrashed  삭제된 게시글 포함 여부
+     * @param  array  $relations  Eager Load 관계
+     * @param  array  $withCount  카운트 관계
+     * @return Collection<int, Post>
+     */
+    private function hydrateListPostsByIds(
+        array $ids,
+        ?int $boardId,
+        array $columns,
+        bool $withTrashed,
+        array $relations,
+        array $withCount
+    ): Collection {
+        if ($ids === []) {
+            return collect();
+        }
+
+        $query = Post::query()
+            ->where('board_id', $boardId)
+            ->whereIn('id', $ids);
+
+        if ($withTrashed) {
+            $query->withTrashed();
+        } else {
+            $query->whereNull('deleted_at');
+        }
+
+        if (! empty($relations)) {
+            $query->with($relations);
+        }
+        if (! empty($withCount)) {
+            $query->withCount($withCount);
+        }
+
+        $postsById = $query->get($columns)->keyBy('id');
+
+        return collect($ids)
+            ->map(fn (int $id) => $postsById->get($id))
+            ->filter()
+            ->values();
     }
 
     /**
