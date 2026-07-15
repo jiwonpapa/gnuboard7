@@ -4,6 +4,7 @@ namespace Modules\Sirsoft\Benchmark\Services\Generators;
 
 use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Benchmark\Models\GenerationJob;
+use Modules\Sirsoft\Benchmark\Services\Support\BenchmarkProductCode;
 use Modules\Sirsoft\Benchmark\Services\Support\DeterministicValue;
 use Modules\Sirsoft\Benchmark\Services\Support\DictionaryLoader;
 use Modules\Sirsoft\Ecommerce\Services\CurrencyConversionService;
@@ -108,7 +109,7 @@ class CommerceProductGenerator
     ): array {
         $seed = (int) $job->seed;
         $options = $job->options ?? [];
-        $productCode = sprintf('BMJ%d-%09d', $job->id, $sequence);
+        $productCode = BenchmarkProductCode::make((int) $job->id, $sequence);
         $sku = sprintf('BM-%d-%09d', $job->id, $sequence);
         $adjectives = $this->dictionaries->get('commerce_product_adjectives');
         $nouns = $this->dictionaries->get('commerce_product_nouns');

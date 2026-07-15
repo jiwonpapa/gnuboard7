@@ -9,6 +9,7 @@ use Modules\Sirsoft\Benchmark\Models\GenerationJob;
 use Modules\Sirsoft\Benchmark\Services\Generators\CommerceBrandGenerator;
 use Modules\Sirsoft\Benchmark\Services\Generators\CommerceCategoryGenerator;
 use Modules\Sirsoft\Benchmark\Services\Generators\CommerceProductGenerator;
+use Modules\Sirsoft\Benchmark\Services\Support\BenchmarkProductCode;
 use Modules\Sirsoft\Benchmark\Services\Support\GenerationJobLogger;
 use Modules\Sirsoft\Benchmark\Services\Support\ProgressReporter;
 
@@ -127,24 +128,32 @@ class CommerceGenerationService
 
     private function processVerification(GenerationJob $job): bool
     {
-        $prefix = "BMJ{$job->id}-%";
         $categoryPrefix = "bmj-{$job->id}-category-%";
         $brandPrefix = "bmj-{$job->id}-brand-%";
-        $products = (int) DB::table('ecommerce_products')->where('product_code', 'like', $prefix)->count();
-        $options = (int) DB::table('ecommerce_product_options as options')
-            ->join('ecommerce_products as products', 'products.id', '=', 'options.product_id')
-            ->where('products.product_code', 'like', $prefix)
-            ->count();
+        $products = (int) BenchmarkProductCode::constrain(
+            DB::table('ecommerce_products'),
+            (int) $job->id
+        )->count();
+        $options = (int) BenchmarkProductCode::constrain(
+            DB::table('ecommerce_product_options as options')
+                ->join('ecommerce_products as products', 'products.id', '=', 'options.product_id'),
+            (int) $job->id,
+            'products.product_code'
+        )->count();
         $categories = (int) DB::table('ecommerce_categories')->where('slug', 'like', $categoryPrefix)->count();
         $brands = (int) DB::table('ecommerce_brands')->where('slug', 'like', $brandPrefix)->count();
-        $images = (int) DB::table('ecommerce_product_images as images')
-            ->join('ecommerce_products as products', 'products.id', '=', 'images.product_id')
-            ->where('products.product_code', 'like', $prefix)
-            ->count();
-        $categoryAssignments = (int) DB::table('ecommerce_product_categories as assignments')
-            ->join('ecommerce_products as products', 'products.id', '=', 'assignments.product_id')
-            ->where('products.product_code', 'like', $prefix)
-            ->count();
+        $images = (int) BenchmarkProductCode::constrain(
+            DB::table('ecommerce_product_images as images')
+                ->join('ecommerce_products as products', 'products.id', '=', 'images.product_id'),
+            (int) $job->id,
+            'products.product_code'
+        )->count();
+        $categoryAssignments = (int) BenchmarkProductCode::constrain(
+            DB::table('ecommerce_product_categories as assignments')
+                ->join('ecommerce_products as products', 'products.id', '=', 'assignments.product_id'),
+            (int) $job->id,
+            'products.product_code'
+        )->count();
         $state = $job->runtime_state ?? [];
         $missingFiles = array_values(array_filter(
             $state['image_pool'] ?? [],

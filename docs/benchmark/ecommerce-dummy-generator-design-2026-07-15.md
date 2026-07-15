@@ -70,7 +70,7 @@
 상품 500건 기준 한 번의 처리 순서는 다음과 같다.
 
 1. seed와 순번으로 상품 데이터 500건을 메모리에서 만든다.
-2. `BMJ{job_id}-{sequence}` 형식의 고유 `product_code`로 상품을 bulk insert 한다.
+2. `BMJ{job_base36_4}{sequence_base36_9}` 형식의 16자리 영숫자 `product_code`로 상품을 bulk insert 한다.
 3. 방금 사용한 product code 500개로 ID를 다시 조회한다. auto-increment 연속 범위는 신뢰하지 않는다.
 4. 기본 옵션 500건, 대표 분류 피벗 500건, 이미지 행 약 475~650건을 각각 bulk insert 한다.
 5. 이 묶음만 트랜잭션으로 커밋한다.
@@ -129,7 +129,7 @@ shared pool은 상품 이미지 한 건을 관리자에서 개별 삭제하면 �
 
 ## 재개와 초기화
 
-- 상품 식별: `product_code LIKE 'BMJ{job_id}-%'`
+- 상품 식별: `product_code LIKE 'BMJ{job_base36_4}%'`이며 업그레이드 호환을 위해 이전 `BMJ{job_id}-%` 형식도 함께 인식
 - 분류 식별: `slug LIKE 'bmj-{job_id}-%'`
 - 이미지 풀: `images/benchmark/job-{job_id}/pool/`
 - 피벗과 옵션은 deterministic key와 `insertOrIgnore/upsert`로 재개 시 중복을 막는다.

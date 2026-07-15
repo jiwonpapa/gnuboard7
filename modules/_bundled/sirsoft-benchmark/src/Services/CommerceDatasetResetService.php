@@ -5,6 +5,7 @@ namespace Modules\Sirsoft\Benchmark\Services;
 use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Benchmark\Enums\GenerationStage;
 use Modules\Sirsoft\Benchmark\Models\GenerationJob;
+use Modules\Sirsoft\Benchmark\Services\Support\BenchmarkProductCode;
 use Modules\Sirsoft\Benchmark\Services\Support\GenerationJobLogger;
 use Modules\Sirsoft\Benchmark\Services\Support\ProgressReporter;
 
@@ -34,10 +35,12 @@ class CommerceDatasetResetService
 
     private function preflight(GenerationJob $job, array $state): bool
     {
-        $orderCount = DB::table('ecommerce_order_options as order_options')
-            ->join('ecommerce_products as products', 'products.id', '=', 'order_options.product_id')
-            ->where('products.product_code', 'like', $this->productPrefix($job))
-            ->count();
+        $orderCount = BenchmarkProductCode::constrain(
+            DB::table('ecommerce_order_options as order_options')
+                ->join('ecommerce_products as products', 'products.id', '=', 'order_options.product_id'),
+            (int) $job->id,
+            'products.product_code'
+        )->count();
         if ($orderCount > 0) {
             throw new \RuntimeException("주문에서 참조 중인 벤치마크 상품 {$orderCount}건이 있어 초기화를 거부했습니다.");
         }
@@ -50,8 +53,7 @@ class CommerceDatasetResetService
 
     private function deleteProducts(GenerationJob $job, array $state): bool
     {
-        $ids = DB::table('ecommerce_products')
-            ->where('product_code', 'like', $this->productPrefix($job))
+        $ids = BenchmarkProductCode::constrain(DB::table('ecommerce_products'), (int) $job->id)
             ->orderBy('id')
             ->limit(1000)
             ->pluck('id')
@@ -132,10 +134,5 @@ class CommerceDatasetResetService
         $this->logger->warning($job, $message, GenerationStage::Resetting->value, $state['cleanup'] ?? []);
 
         return $job;
-    }
-
-    private function productPrefix(GenerationJob $job): string
-    {
-        return "BMJ{$job->id}-%";
     }
 }
