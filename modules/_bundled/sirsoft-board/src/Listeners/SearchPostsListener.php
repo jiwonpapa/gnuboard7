@@ -222,6 +222,7 @@ class SearchPostsListener implements HookListenerInterface
             'total_relation' => $searchResult['total_relation'] ?? 'eq',
             'has_more_pages' => $searchResult['has_more_pages'] ?? false,
             'result_cap' => $searchResult['result_cap'] ?? null,
+            'search_truncated' => $searchResult['search_truncated'] ?? false,
             'items' => $searchResult['items']->map(
                 fn ($post) => $this->formatPostResult($post, $keyword)
             )->all(),
@@ -246,6 +247,7 @@ class SearchPostsListener implements HookListenerInterface
             'total_relation' => $postsData['total_relation'] ?? 'eq',
             'has_more_pages' => $postsData['has_more_pages'] ?? false,
             'result_cap' => $postsData['result_cap'] ?? null,
+            'search_truncated' => $postsData['search_truncated'] ?? false,
             'items' => $postsData['items'] ?? [],
         ];
     }
@@ -270,6 +272,7 @@ class SearchPostsListener implements HookListenerInterface
             'total_relation' => $postsData['total_relation'] ?? 'eq',
             'has_more_pages' => $postsData['has_more_pages'] ?? false,
             'result_cap' => $postsData['result_cap'] ?? null,
+            'search_truncated' => $postsData['search_truncated'] ?? false,
             'items' => $postsData['items'] ?? [],
         ];
         $response['current_page'] = $page;

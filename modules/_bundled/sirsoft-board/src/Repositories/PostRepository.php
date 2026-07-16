@@ -2,6 +2,7 @@
 
 namespace Modules\Sirsoft\Board\Repositories;
 
+use App\Contracts\Extension\CacheInterface;
 use App\Enums\PermissionType;
 use App\Helpers\PermissionHelper;
 use App\Search\Engines\DatabaseFulltextEngine;
@@ -9,6 +10,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -52,10 +54,13 @@ class PostRepository implements PostRepositoryInterface
     /** 한 페이지에서 본문과 함께 펼칠 답글 최대 수 */
     private const MAX_INLINE_REPLIES = 100;
 
+    /** 메모리 상한을 넘긴 FULLTEXT 키워드의 재시도 억제 시간 */
+    private const BROAD_FULLTEXT_CACHE_TTL_SECONDS = 600;
+
     /**
      * PostRepository 생성자
      */
-    public function __construct() {}
+    public function __construct(private readonly CacheInterface $cache) {}
 
     /**
      * 게시판의 게시글 목록을 페이지네이션하여 조회합니다.
@@ -359,6 +364,81 @@ class PostRepository implements PostRepositoryInterface
         return empty($tokens) ? '' : implode(' ', $tokens);
     }
 
+    /** FULLTEXT 메모리 차단 시 확인할 최근 게시글 수입니다. */
+    private function searchFallbackScanCap(): int
+    {
+        return max(100, min(5000, (int) config('benchmark.board_search_fallback_scan_cap', 1000)));
+    }
+
+    /** 동일한 광범위 FULLTEXT 검색의 반복 실행을 막는 캐시 키입니다. */
+    private function broadFulltextCacheKey(string $keyword): string
+    {
+        $normalized = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $keyword)));
+
+        return 'search:fts-result-cache-limit:'.hash('sha256', $normalized);
+    }
+
+    private function shouldBypassFulltext(string $keyword): bool
+    {
+        try {
+            return (bool) $this->cache->get($this->broadFulltextCacheKey($keyword), false);
+        } catch (\Throwable) {
+            // 캐시 장애가 검색 자체를 막지 않게 하며 DB 안전장치는 계속 적용됩니다.
+            return false;
+        }
+    }
+
+    private function rememberBroadFulltext(string $keyword): void
+    {
+        try {
+            $this->cache->put(
+                $this->broadFulltextCacheKey($keyword),
+                true,
+                self::BROAD_FULLTEXT_CACHE_TTL_SECONDS
+            );
+        } catch (\Throwable) {
+            // 캐시 실패 시에도 현재 요청은 제한형 fallback으로 복구합니다.
+        }
+    }
+
+    /** MySQL InnoDB FULLTEXT 결과 캐시 상한 오류인지 판별합니다. */
+    private function isFulltextResultCacheLimitExceeded(QueryException $exception): bool
+    {
+        $driverError = is_array($exception->errorInfo ?? null)
+            ? (int) ($exception->errorInfo[1] ?? 0)
+            : 0;
+
+        return $driverError === 188
+            || str_contains(strtolower($exception->getMessage()), 'fts query exceeds result cache limit');
+    }
+
+    /**
+     * 최근 eligible ID를 먼저 고정한 뒤 그 범위 안에서만 LIKE를 수행합니다.
+     *
+     * ID 조회와 본문 검색을 두 쿼리로 분리해 optimizer의 join 순서와 무관하게
+     * LIKE 대상 행 수를 고정합니다. 결과는 완전 검색이 아닌 제한형 하한값입니다.
+     */
+    private function buildBoundedSearchFallbackQuery(Builder $baseQuery, string $keyword): Builder
+    {
+        $recentIds = (clone $baseQuery)
+            ->reorder()
+            ->orderBy('board_posts.id', 'desc')
+            ->limit($this->searchFallbackScanCap())
+            ->pluck('board_posts.id')
+            ->map(static fn ($id) => (int) $id)
+            ->all();
+        $escapedKeyword = $this->escapeLikeKeyword($keyword);
+
+        return (clone $baseQuery)
+            ->reorder()
+            ->forceIndex('PRIMARY')
+            ->whereIntegerInRaw('board_posts.id', $recentIds)
+            ->where(function ($query) use ($escapedKeyword) {
+                $query->where('board_posts.title', 'like', "%{$escapedKeyword}%")
+                    ->orWhere('board_posts.content', 'like', "%{$escapedKeyword}%");
+            });
+    }
+
     /**
      * 선택된 검색 채널을 각각 제한한 뒤 ID 후보만 병합합니다.
      *
@@ -367,7 +447,7 @@ class PostRepository implements PostRepositoryInterface
      * LIMIT을 먼저 적용하면 한 요청이 만들 수 있는 후보와 임시 테이블 크기가
      * 명시적으로 제한됩니다.
      *
-     * @return array{candidates: Collection<int, Post>, total_is_exact: bool, branch_reached_limit: bool}
+     * @return array{candidates: Collection<int, Post>, total_is_exact: bool, branch_reached_limit: bool, fallback_used: bool}
      */
     private function fetchOptimizedSearchCandidates(
         Builder $baseQuery,
@@ -385,8 +465,12 @@ class PostRepository implements PostRepositoryInterface
         $branches = [];
 
         if (in_array($searchField, ['all', 'title_content'], true)) {
-            $fulltext = clone $baseQuery;
-            if (DatabaseFulltextEngine::supportsFulltext()) {
+            $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
+            $bypassFulltext = $fulltextSupported && $this->shouldBypassFulltext($search);
+            $fulltext = $bypassFulltext
+                ? $this->buildBoundedSearchFallbackQuery($baseQuery, $search)
+                : clone $baseQuery;
+            if ($fulltextSupported && ! $bypassFulltext) {
                 $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($search);
                 $fulltext->whereRaw(
                     $fulltextKeyword === ''
@@ -394,7 +478,7 @@ class PostRepository implements PostRepositoryInterface
                         : 'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)',
                     $fulltextKeyword === '' ? [] : [$fulltextKeyword]
                 );
-            } else {
+            } elseif (! $fulltextSupported) {
                 $fulltext->where(function ($query) use ($likeKeyword) {
                     $query->where('title', 'like', "%{$likeKeyword}%")
                         ->orWhere('content', 'like', "%{$likeKeyword}%");
@@ -402,7 +486,12 @@ class PostRepository implements PostRepositoryInterface
             }
             // FULLTEXT 전체 결과를 created_at 등으로 먼저 정렬하면 LIMIT 전 대량 filesort가
             // 발생할 수 있으므로 엔진이 반환하는 후보를 먼저 제한하고 아래에서 정렬합니다.
-            $branches[] = ['query' => $fulltext, 'order_by_id' => false];
+            $branches[] = [
+                'query' => $fulltext,
+                'order_by_id' => $bypassFulltext,
+                'fallback_base' => $fulltextSupported && ! $bypassFulltext ? clone $baseQuery : null,
+                'fallback_used' => $bypassFulltext,
+            ];
         }
 
         if (in_array($searchField, ['all', 'author', 'author_name'], true)) {
@@ -449,14 +538,34 @@ class PostRepository implements PostRepositoryInterface
 
         $candidates = collect();
         $branchReachedLimit = false;
+        $fallbackUsed = false;
         foreach ($branches as $branchConfig) {
             /** @var Builder $branch */
             $branch = $branchConfig['query']->reorder();
             if ($branchConfig['order_by_id']) {
                 $branch->orderBy('board_posts.id', $orderDirection);
             }
-            $rows = $branch->limit($limit)->get($selectColumns);
+            try {
+                $rows = $branch->limit($limit)->get($selectColumns);
+            } catch (QueryException $exception) {
+                if (! ($branchConfig['fallback_base'] ?? null)
+                    || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
+                    throw $exception;
+                }
 
+                $this->rememberBroadFulltext($search);
+                $fallbackUsed = true;
+                $branch = $this->buildBoundedSearchFallbackQuery(
+                    $branchConfig['fallback_base'],
+                    $search
+                );
+                $rows = $branch
+                    ->orderBy('board_posts.id', $orderDirection)
+                    ->limit($limit)
+                    ->get($selectColumns);
+            }
+
+            $fallbackUsed = $fallbackUsed || ($branchConfig['fallback_used'] ?? false);
             $branchReachedLimit = $branchReachedLimit || $rows->count() === $limit;
             foreach ($rows as $row) {
                 $candidates->put((int) $row->id, $row);
@@ -481,9 +590,46 @@ class PostRepository implements PostRepositoryInterface
         return [
             'candidates' => $candidates,
             // 작성자/회원 사전은 의도적으로 제한하므로 해당 검색 total은 보수적으로 하한값입니다.
-            'total_is_exact' => $searchField === 'title_content' && ! $branchReachedLimit,
+            'total_is_exact' => $searchField === 'title_content'
+                && ! $branchReachedLimit
+                && ! $fallbackUsed,
             'branch_reached_limit' => $branchReachedLimit,
+            'fallback_used' => $fallbackUsed,
         ];
+    }
+
+    /**
+     * 검색 메타를 빈 결과에서도 잃지 않는 simple paginator를 생성합니다.
+     *
+     * @param  array{total: int, total_is_exact: bool, total_relation: string, fallback_used: bool}  $metadata
+     */
+    private function makeBoundedSearchPaginator(
+        Collection $items,
+        int $perPage,
+        int $currentPage,
+        array $metadata
+    ): Paginator {
+        return new class($items, $perPage, $currentPage, $metadata) extends \Illuminate\Pagination\Paginator
+        {
+            /** @param  array<string, mixed>  $searchMetadata */
+            public function __construct(
+                $items,
+                int $perPage,
+                int $currentPage,
+                private readonly array $searchMetadata
+            ) {
+                parent::__construct($items, $perPage, $currentPage, [
+                    'path' => self::resolveCurrentPath(),
+                    'pageName' => 'page',
+                ]);
+            }
+
+            /** @return array<string, mixed> */
+            public function searchMetadata(): array
+            {
+                return $this->searchMetadata;
+            }
+        };
     }
 
     /**
@@ -503,13 +649,15 @@ class PostRepository implements PostRepositoryInterface
         $offset = max(0, ($currentPage - 1) * $perPage);
         $resultCap = $this->searchCandidateLimit() - 1;
         if ($offset >= $resultCap) {
-            $paginator = new \Illuminate\Pagination\Paginator(
+            $paginator = $this->makeBoundedSearchPaginator(
                 collect(),
                 $perPage,
                 $currentPage,
                 [
-                    'path' => \Illuminate\Pagination\Paginator::resolveCurrentPath(),
-                    'pageName' => 'page',
+                    'total' => $resultCap,
+                    'total_is_exact' => false,
+                    'total_relation' => 'gte',
+                    'fallback_used' => false,
                 ]
             );
             $paginator->hasMorePagesWhen(false);
@@ -535,13 +683,15 @@ class PostRepository implements PostRepositoryInterface
 
         $allCandidates = $result['candidates']->take($resultCap)->values();
         $pageCandidates = $allCandidates->slice($offset, $perPage + 1)->values();
-        $paginator = new \Illuminate\Pagination\Paginator(
+        $paginator = $this->makeBoundedSearchPaginator(
             $pageCandidates,
             $perPage,
             $currentPage,
             [
-                'path' => \Illuminate\Pagination\Paginator::resolveCurrentPath(),
-                'pageName' => 'page',
+                'total' => $allCandidates->count(),
+                'total_is_exact' => $result['total_is_exact'],
+                'total_relation' => $result['total_is_exact'] ? 'eq' : 'gte',
+                'fallback_used' => $result['fallback_used'],
             ]
         );
         $paginator->hasMorePagesWhen(
@@ -560,19 +710,45 @@ class PostRepository implements PostRepositoryInterface
     /**
      * exact COUNT 대신 cap + 1건만 세어 정확값 또는 하한값을 반환합니다.
      *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap: int}
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap: int, search_truncated: bool}
      */
-    private function boundedSearchCount(Builder $query): array
-    {
+    private function boundedSearchCount(
+        Builder $query,
+        Builder $fallbackBaseQuery,
+        string $keyword
+    ): array {
         $candidateLimit = $this->searchCandidateLimit();
-        $boundedIds = (clone $query)
-            ->reorder()
-            ->select('board_posts.id')
-            ->limit($candidateLimit);
-        $total = (int) DB::query()
-            ->fromSub($boundedIds, 'bounded_board_search')
-            ->count();
-        $isExact = $total < $candidateLimit;
+        $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
+        $fallbackUsed = $fulltextSupported && $this->shouldBypassFulltext($keyword);
+        if ($fallbackUsed) {
+            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
+        }
+
+        $countCandidates = static function (Builder $source) use ($candidateLimit): int {
+            $boundedIds = (clone $source)
+                ->reorder()
+                ->select('board_posts.id')
+                ->limit($candidateLimit);
+
+            return (int) DB::query()
+                ->fromSub($boundedIds, 'bounded_board_search')
+                ->count();
+        };
+
+        try {
+            $total = $countCandidates($query);
+        } catch (QueryException $exception) {
+            if (! $fulltextSupported || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
+                throw $exception;
+            }
+
+            $this->rememberBroadFulltext($keyword);
+            $fallbackUsed = true;
+            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
+            $total = $countCandidates($query);
+        }
+
+        $isExact = ! $fallbackUsed && $total < $candidateLimit;
         $resultCap = $candidateLimit - 1;
 
         return [
@@ -580,6 +756,7 @@ class PostRepository implements PostRepositoryInterface
             'total_is_exact' => $isExact,
             'total_relation' => $isExact ? 'eq' : 'gte',
             'result_cap' => $resultCap,
+            'search_truncated' => $fallbackUsed,
         ];
     }
 
@@ -590,10 +767,11 @@ class PostRepository implements PostRepositoryInterface
      * 실제 응답 페이지 ID에 한해서만 hydrate합니다.
      *
      * @param  array<int, string>  $relations
-     * @return array{total: int, total_is_exact: bool, total_relation: string, has_more_pages: bool, result_cap: int, items: \Illuminate\Database\Eloquent\Collection}
+     * @return array{total: int, total_is_exact: bool, total_relation: string, has_more_pages: bool, result_cap: int, search_truncated: bool, items: \Illuminate\Database\Eloquent\Collection}
      */
     private function boundedPublicSearchPage(
         Builder $query,
+        Builder $fallbackBaseQuery,
         array $relations,
         string $keyword,
         string $orderBy,
@@ -610,28 +788,55 @@ class PostRepository implements PostRepositoryInterface
         $resultCap = $this->searchCandidateLimit() - 1;
         $candidateLimit = min($offset + $perPage + 1, $resultCap + 1);
 
-        $candidateQuery = (clone $query)->reorder()->select('board_posts.id');
-        if ($orderBy === 'relevance' && DatabaseFulltextEngine::supportsFulltext()) {
-            $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($keyword);
-            $candidateQuery
-                ->selectRaw(
-                    'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE) AS search_relevance',
-                    [$fulltextKeyword]
-                )
-                ->orderBy('search_relevance', 'desc');
-        } else {
-            $orderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
-            if ($orderBy !== 'id') {
-                $candidateQuery->addSelect("board_posts.{$orderBy}");
-            }
-            $candidateQuery->orderBy("board_posts.{$orderBy}", $direction);
+        $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
+        $fallbackUsed = $fulltextSupported && $this->shouldBypassFulltext($keyword);
+        if ($fallbackUsed) {
+            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
         }
-        $candidates = $candidateQuery
-            ->orderBy('board_posts.id', $direction)
-            ->limit($candidateLimit)
-            ->get();
 
-        $totalIsExact = $candidates->count() < $candidateLimit;
+        $fetchCandidates = function (Builder $source, bool $useFulltextRelevance) use (
+            $orderBy,
+            $direction,
+            $keyword,
+            $candidateLimit
+        ): Collection {
+            $candidateQuery = (clone $source)->reorder()->select('board_posts.id');
+            if ($orderBy === 'relevance' && $useFulltextRelevance) {
+                $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($keyword);
+                $candidateQuery
+                    ->selectRaw(
+                        'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE) AS search_relevance',
+                        [$fulltextKeyword]
+                    )
+                    ->orderBy('search_relevance', 'desc');
+            } else {
+                $resolvedOrderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
+                if ($resolvedOrderBy !== 'id') {
+                    $candidateQuery->addSelect("board_posts.{$resolvedOrderBy}");
+                }
+                $candidateQuery->orderBy("board_posts.{$resolvedOrderBy}", $direction);
+            }
+
+            return $candidateQuery
+                ->orderBy('board_posts.id', $direction)
+                ->limit($candidateLimit)
+                ->get();
+        };
+
+        try {
+            $candidates = $fetchCandidates($query, $fulltextSupported && ! $fallbackUsed);
+        } catch (QueryException $exception) {
+            if (! $fulltextSupported || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
+                throw $exception;
+            }
+
+            $this->rememberBroadFulltext($keyword);
+            $fallbackUsed = true;
+            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
+            $candidates = $fetchCandidates($query, false);
+        }
+
+        $totalIsExact = ! $fallbackUsed && $candidates->count() < $candidateLimit;
         $exposedCandidates = $candidates->take($resultCap);
         $ids = $exposedCandidates->slice($offset, $perPage)->pluck('id')->map(fn ($id) => (int) $id)->all();
         $itemsById = empty($ids)
@@ -648,6 +853,7 @@ class PostRepository implements PostRepositoryInterface
             'total_relation' => $totalIsExact ? 'eq' : 'gte',
             'has_more_pages' => $hasMorePages,
             'result_cap' => $resultCap,
+            'search_truncated' => $fallbackUsed,
             'items' => $items,
         ];
     }
@@ -1872,7 +2078,7 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $orderBy  정렬 컬럼
      * @param  string  $direction  정렬 방향 (asc, desc)
      * @param  int  $limit  조회할 최대 항목 수
-     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, items: \Illuminate\Database\Eloquent\Collection}
+     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: \Illuminate\Database\Eloquent\Collection}
      */
     public function searchByKeyword(string $slug, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array
     {
@@ -1884,11 +2090,14 @@ class PostRepository implements PostRepositoryInterface
     /** @return array<string, mixed> */
     private function searchByKeywordWithoutGuard(string $slug, string $keyword, string $orderBy, string $direction, int $limit): array
     {
-        $query = $this->buildPublicSearchQuery($slug, $keyword);
+        $baseQuery = $this->buildPublicSearchBaseQuery($slug);
+        $query = clone $baseQuery;
+        $this->applyKeywordSearch($query, $keyword);
 
         if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
             return $this->boundedPublicSearchPage(
                 $query,
+                $baseQuery,
                 ['user'],
                 $keyword,
                 $orderBy,
@@ -1928,10 +2137,12 @@ class PostRepository implements PostRepositoryInterface
 
     private function countByKeywordWithoutGuard(string $slug, string $keyword): int
     {
-        $query = $this->buildPublicSearchQuery($slug, $keyword);
+        $baseQuery = $this->buildPublicSearchBaseQuery($slug);
+        $query = clone $baseQuery;
+        $this->applyKeywordSearch($query, $keyword);
 
         return config('benchmark.board_list_variant', 'optimized') === 'optimized'
-            ? $this->boundedSearchCount($query)['total']
+            ? $this->boundedSearchCount($query, $baseQuery, $keyword)['total']
             : $query->count();
     }
 
@@ -1944,7 +2155,7 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $direction  정렬 방향 (asc, desc)
      * @param  int  $perPage  페이지당 항목 수
      * @param  int  $page  페이지 번호
-     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, items: \Illuminate\Database\Eloquent\Collection}
+     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: \Illuminate\Database\Eloquent\Collection}
      */
     public function searchAcrossBoards(array $boardIds, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $perPage = 10, int $page = 1): array
     {
@@ -1956,11 +2167,14 @@ class PostRepository implements PostRepositoryInterface
     /** @return array<string, mixed> */
     private function searchAcrossBoardsWithoutGuard(array $boardIds, string $keyword, string $orderBy, string $direction, int $perPage, int $page): array
     {
-        $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword);
+        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
+        $query = clone $baseQuery;
+        $this->applyKeywordSearch($query, $keyword);
 
         if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
             return $this->boundedPublicSearchPage(
                 $query,
+                $baseQuery,
                 ['user', 'board'],
                 $keyword,
                 $orderBy,
@@ -2001,17 +2215,19 @@ class PostRepository implements PostRepositoryInterface
 
     private function countAcrossBoardsWithoutGuard(array $boardIds, string $keyword): int
     {
-        $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword);
+        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
+        $query = clone $baseQuery;
+        $this->applyKeywordSearch($query, $keyword);
 
         return config('benchmark.board_list_variant', 'optimized') === 'optimized'
-            ? $this->boundedSearchCount($query)['total']
+            ? $this->boundedSearchCount($query, $baseQuery, $keyword)['total']
             : $query->count();
     }
 
     /**
      * 여러 게시판의 검색 건수를 cap + 1까지만 확인하고 total 의미를 함께 반환합니다.
      *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int}
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool}
      */
     public function countAcrossBoardsBounded(array $boardIds, string $keyword): array
     {
@@ -2020,13 +2236,15 @@ class PostRepository implements PostRepositoryInterface
         );
     }
 
-    /** @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int} */
+    /** @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool} */
     private function countAcrossBoardsBoundedWithoutGuard(array $boardIds, string $keyword): array
     {
-        $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword);
+        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
+        $query = clone $baseQuery;
+        $this->applyKeywordSearch($query, $keyword);
 
         if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
-            return $this->boundedSearchCount($query);
+            return $this->boundedSearchCount($query, $baseQuery, $keyword);
         }
 
         return [
@@ -2040,40 +2258,28 @@ class PostRepository implements PostRepositoryInterface
      * 공개 게시글 검색용 기본 쿼리를 생성합니다.
      *
      * @param  string  $slug  게시판 슬러그
-     * @param  string  $keyword  검색 키워드
-     * @return Builder
      */
-    private function buildPublicSearchQuery(string $slug, string $keyword)
+    private function buildPublicSearchBaseQuery(string $slug): Builder
     {
         $board = Board::where('slug', $slug)->first();
 
-        $query = Post::query()
+        return Post::query()
             ->where('board_id', $board?->id)
             ->where('status', PostStatus::Published->value)
             ->where('is_secret', false);
-
-        $this->applyKeywordSearch($query, $keyword);
-
-        return $query;
     }
 
     /**
      * 여러 게시판 ID를 대상으로 공개 게시글 검색용 기본 쿼리를 생성합니다.
      *
      * @param  array  $boardIds  게시판 ID 목록
-     * @param  string  $keyword  검색 키워드
-     * @return Builder
      */
-    private function buildPublicSearchQueryByIds(array $boardIds, string $keyword)
+    private function buildPublicSearchBaseQueryByIds(array $boardIds): Builder
     {
-        $query = Post::query()
+        return Post::query()
             ->whereIn('board_id', $boardIds)
             ->where('status', PostStatus::Published->value)
             ->where('is_secret', false);
-
-        $this->applyKeywordSearch($query, $keyword);
-
-        return $query;
     }
 
     /**

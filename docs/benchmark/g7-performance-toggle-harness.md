@@ -174,7 +174,7 @@ scripts/benchmark/g7-ab-benchmark.sh --optimized-ref <reviewed-commit>
 
 일반 경로의 안전 기본값은 30초 동안 5초당 route matrix 1개, 최대 1 VU입니다. `--hot-vus`, `--hot-rate`, `--hot-time-unit`으로 부하를 명시적으로 올릴 수 있습니다. 게시판 공용 600회/분 제한을 넘지 않도록 계산하며, dropped iteration이 있으면 해당 run을 무효 처리합니다. 깊은 페이지·게시판 검색·통합검색은 기본에서 완전히 제외됩니다. `--include-risky --risky-route board_search|global_search|board_deep`를 명시한 경우에도 선택한 경로 **1개만 1 VU·1요청**으로 실행합니다. 위험 요청은 1.5초 DB statement cap, 3초 HTTP cap, CPU·메모리·swap 감시가 모두 준비된 뒤에만 시작합니다. 매 실행 뒤 SELECT·InnoDB transaction이 0이 될 때까지 기다리며 임의 쿼리 kill은 하지 않습니다.
 
-검색 ON/OFF는 `G7_BOARD_PERFORMANCE_VARIANT`으로 알고리즘만 전환합니다. `board_search_sync_cap=1000`과 MySQL `innodb_ft_result_cache_limit=33554432`(32MiB)는 양쪽에 동일하게 유지하는 생존 안전장치입니다. MySQL 8에서는 `SET PERSIST`로 재부팅 후에도 유지하며, 최초 global/persisted 값은 상태 파일에 보존하고 `restore-original --yes`에서만 복구합니다. `SET PERSIST`가 지원되지 않거나 실패하면 비영속 상태로 전환하지 않고 명령을 중단합니다. strict status는 검색 source ref, algorithm/config/schema, sync cap, FTS cap과 persistence 상태를 함께 검증합니다.
+검색 ON/OFF는 `G7_BOARD_PERFORMANCE_VARIANT`으로 알고리즘만 전환합니다. `board_search_sync_cap=1000`, `board_search_fallback_scan_cap=1000`, MySQL `innodb_ft_result_cache_limit=33554432`(32MiB)는 양쪽에 동일하게 유지하는 생존 안전장치입니다. FULLTEXT 메모리 상한에 걸린 검색은 최근 eligible ID 1,000건 안에서만 제목·본문을 확인하고 완전 검색이 아닌 하한값으로 응답합니다. MySQL 8에서는 `SET PERSIST`로 재부팅 후에도 FTS 상한을 유지하며, 최초 global/persisted 값은 상태 파일에 보존하고 `restore-original --yes`에서만 복구합니다. `SET PERSIST`가 지원되지 않거나 실패하면 비영속 상태로 전환하지 않고 명령을 중단합니다. strict status는 검색 source ref, algorithm/config/schema, sync cap, fallback scan cap, FTS cap과 persistence 상태를 함께 검증합니다.
 
 작은 운영 서버는 아래 canary부터 시작합니다. `5 VU`는 기본값이 아니라 1 VU와 3 VU 단계가 안전하게 끝났을 때만 사용하는 포화 측정 상한입니다.
 

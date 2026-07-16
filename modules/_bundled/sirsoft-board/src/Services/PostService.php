@@ -133,6 +133,19 @@ class PostService
             && config('benchmark.board_list_variant', 'optimized') === 'optimized'
             && ! empty($filters['search'])
         ) {
+            if (method_exists($posts, 'searchMetadata')) {
+                $metadata = $posts->searchMetadata();
+                if (array_key_exists('total', $metadata)) {
+                    foreach ($posts->items() as $post) {
+                        if ($post instanceof Post) {
+                            $post->offsetUnset(self::INTERNAL_TOTAL_ATTRIBUTE);
+                        }
+                    }
+
+                    return (int) $metadata['total'];
+                }
+            }
+
             $embeddedTotal = null;
             foreach ($posts->items() as $post) {
                 if (! $post instanceof Post) {
@@ -1255,7 +1268,7 @@ class PostService
     /**
      * 여러 게시판의 동기 검색 건수를 cap 안에서 조회하고 정확성 메타를 반환합니다.
      *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int}
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool}
      */
     public function countAcrossBoardsBounded(array $boardIds, string $keyword): array
     {

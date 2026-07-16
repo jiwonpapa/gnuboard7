@@ -129,6 +129,8 @@ class PostController extends PublicBaseController
         } catch (TooManyRequestsHttpException $e) {
             throw $e;
         } catch (\Exception $e) {
+            report($e);
+
             return $this->error('sirsoft-board::messages.posts.fetch_failed', 500, $e->getMessage());
         }
     }

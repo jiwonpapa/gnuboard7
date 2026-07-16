@@ -1214,7 +1214,7 @@ component_state() {
     local module_sync module_version_sync template_sync module php
     local benchmark_sync benchmark_version_sync
     local search_source search_source_ref search_config search_algorithm search_schema
-    local search_sync_cap search_safety_guard search_safety_persistence
+    local search_sync_cap search_fallback_scan_cap search_safety_guard search_safety_persistence
     source="$(extract_status "${file}" source)"
     source_ref="$(extract_status "${file}" source_ref)"
     integrity="$(extract_status "${file}" source_integrity)"
@@ -1265,6 +1265,7 @@ component_state() {
                 search_algorithm="$(extract_status "${file}" 'search.algorithm')"
                 search_schema="$(extract_status "${file}" 'search.schema')"
                 search_sync_cap="$(extract_status "${file}" 'search.sync_cap')"
+                search_fallback_scan_cap="$(extract_status "${file}" 'search.fallback_scan_cap')"
                 search_safety_guard="$(extract_status "${file}" 'search.safety_guard')"
                 search_safety_persistence="$(extract_status "${file}" 'search.safety_guard_persistence')"
                 [[ "${source_ref}" =~ ^[0-9a-f]{40}$ \
@@ -1275,6 +1276,7 @@ component_state() {
                     || { printf 'drift'; return; }
                 if [[ "${source}" == optimized-capable ]]; then
                     [[ "${search_sync_cap}" == 1000 \
+                        && "${search_fallback_scan_cap}" == 1000 \
                         && "${search_safety_guard}" == enabled \
                         && "${search_safety_persistence}" == persisted ]] \
                         || { printf 'drift'; return; }
@@ -1303,7 +1305,7 @@ component_state() {
 
 print_component_status() {
     local component="$1" file="$2" key value
-    local -a keys=(source source_ref source_integrity runtime schema search.source search.source_ref search.config search.algorithm search.schema search.sync_cap search.ft_result_cache_limit search.safety_guard search.safety_guard_persistence shared_config active_module_sync active_template_sync module_version_sync module active_benchmark_sync benchmark_module_version_sync benchmark_module php_fpm)
+    local -a keys=(source source_ref source_integrity runtime schema search.source search.source_ref search.config search.algorithm search.schema search.sync_cap search.fallback_scan_cap search.ft_result_cache_limit search.safety_guard search.safety_guard_persistence shared_config active_module_sync active_template_sync module_version_sync module active_benchmark_sync benchmark_module_version_sync benchmark_module php_fpm)
     for key in "${keys[@]}"; do
         value="$(extract_status "${file}" "${key}")"
         [[ -z "${value}" ]] || printf '%s.%s=%s\n' "${component}" "${key}" "${value}"

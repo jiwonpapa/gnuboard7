@@ -197,7 +197,7 @@ interface PostRepositoryInterface
      * @param  string  $orderBy  정렬 컬럼
      * @param  string  $direction  정렬 방향 (asc, desc)
      * @param  int  $limit  조회할 최대 항목 수
-     * @return array{total: int, items: Collection}
+     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: Collection}
      */
     public function searchByKeyword(string $slug, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array;
 
@@ -219,7 +219,7 @@ interface PostRepositoryInterface
      * @param  string  $direction  정렬 방향 (asc, desc)
      * @param  int  $perPage  페이지당 항목 수
      * @param  int  $page  페이지 번호
-     * @return array{total: int, items: Collection}
+     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: Collection}
      */
     public function searchAcrossBoards(array $boardIds, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $perPage = 10, int $page = 1): array;
 
@@ -235,7 +235,7 @@ interface PostRepositoryInterface
     /**
      * 동기 cap 안에서 여러 게시판 검색 건수와 정확성 메타를 반환합니다.
      *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int}
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool}
      */
     public function countAcrossBoardsBounded(array $boardIds, string $keyword): array;
 

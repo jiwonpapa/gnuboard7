@@ -46,6 +46,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Board search fallback scan cap
+    |--------------------------------------------------------------------------
+    |
+    | If InnoDB rejects a broad FULLTEXT query at its per-query memory guard,
+    | search only this many recent eligible posts. This keeps the fallback
+    | physically bounded instead of degrading into a full-table LIKE scan.
+    |
+    */
+    'board_search_fallback_scan_cap' => max(
+        100,
+        min(5000, (int) env('G7_BOARD_SEARCH_FALLBACK_SCAN_CAP', 1000))
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
     | Ecommerce storefront performance variant
     |--------------------------------------------------------------------------
     |

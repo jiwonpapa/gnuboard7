@@ -36,6 +36,9 @@ class PostCollection extends BaseApiCollection
      */
     private bool $searchResult = false;
 
+    /** FULLTEXT 보호 fallback으로 검색 범위가 제한됐는지 여부 */
+    private bool $searchTruncated = false;
+
     /**
      * 전체 일반 게시글 수를 설정합니다.
      *
@@ -114,6 +117,22 @@ class PostCollection extends BaseApiCollection
     /** @return array{0: bool, 1: string} */
     private function extractTotalMetadata(int $total, int $currentPage): array
     {
+        if (method_exists($this->resource, 'searchMetadata')) {
+            $metadata = $this->resource->searchMetadata();
+            if (array_key_exists('total_is_exact', $metadata)) {
+                $this->searchTruncated = (bool) ($metadata['fallback_used'] ?? false);
+                foreach ($this->collection as $post) {
+                    $post->offsetUnset(self::INTERNAL_TOTAL_EXACT_ATTRIBUTE);
+                    $post->offsetUnset(self::INTERNAL_TOTAL_RELATION_ATTRIBUTE);
+                }
+
+                return [
+                    (bool) $metadata['total_is_exact'],
+                    (string) ($metadata['total_relation'] ?? 'gte'),
+                ];
+            }
+        }
+
         foreach ($this->collection as $post) {
             $exact = $post->getAttribute(self::INTERNAL_TOTAL_EXACT_ATTRIBUTE);
             $relation = $post->getAttribute(self::INTERNAL_TOTAL_RELATION_ATTRIBUTE);
@@ -288,6 +307,7 @@ class PostCollection extends BaseApiCollection
 
         if ($this->searchResult) {
             $pagination['result_cap'] = (int) config('benchmark.board_search_sync_cap', 1000);
+            $pagination['search_truncated'] = $this->searchTruncated;
         }
 
         return $pagination;

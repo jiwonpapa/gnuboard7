@@ -502,6 +502,24 @@ search_sync_cap() {
     fi
 }
 
+search_fallback_scan_cap() {
+    local configured
+    if [[ ! -f "${APP_ROOT}/config/benchmark.php" ]] \
+        || ! grep -q "'board_search_fallback_scan_cap'" "${APP_ROOT}/config/benchmark.php"; then
+        printf 'unavailable'
+        return
+    fi
+    configured="$(awk -F= '$1 == "G7_BOARD_SEARCH_FALLBACK_SCAN_CAP" { value=$2 } END { print value }' "${APP_ROOT}/.env")"
+    [[ -n "${configured}" ]] || configured=1000
+    if [[ "${configured}" =~ ^[0-9]+$ ]]; then
+        (( configured < 100 )) && configured=100
+        (( configured > 5000 )) && configured=5000
+        printf '%s' "${configured}"
+    else
+        printf 'invalid'
+    fi
+}
+
 ft_persisted_value() {
     local available value
     if ! available="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='performance_schema' AND TABLE_NAME='persisted_variables'")"; then
@@ -536,10 +554,13 @@ search_safety_guard_persistence() {
 }
 
 search_safety_guard_state() {
-    local current sync_cap
+    local current sync_cap fallback_scan_cap
     current="$(ft_result_cache_limit 2>/dev/null || true)"
     sync_cap="$(search_sync_cap)"
-    if [[ "${current}" == "${FT_RESULT_CACHE_LIMIT_BYTES}" && "${sync_cap}" == "1000" ]]; then
+    fallback_scan_cap="$(search_fallback_scan_cap)"
+    if [[ "${current}" == "${FT_RESULT_CACHE_LIMIT_BYTES}" \
+        && "${sync_cap}" == "1000" \
+        && "${fallback_scan_cap}" == "1000" ]]; then
         printf 'enabled'
     else
         printf 'drifted'
@@ -1308,6 +1329,7 @@ search.config=${runtime_variant}
 search.algorithm=${runtime_variant}
 search.schema=$(search_schema_variant "${author_status}" "${runtime_variant}")
 search.sync_cap=$(search_sync_cap)
+search.fallback_scan_cap=$(search_fallback_scan_cap)
 search.ft_result_cache_limit=$(ft_result_cache_limit 2>/dev/null || printf unavailable)
 search.safety_guard=$(search_safety_guard_state)
 search.safety_guard_persistence=$(search_safety_guard_persistence)
@@ -1409,6 +1431,7 @@ show_status() {
     printf 'search.algorithm=%s\n' "${runtime}"
     printf 'search.schema=%s\n' "${search_schema}"
     printf 'search.sync_cap=%s\n' "$(search_sync_cap)"
+    printf 'search.fallback_scan_cap=%s\n' "$(search_fallback_scan_cap)"
     printf 'search.ft_result_cache_limit=%s\n' "$(ft_result_cache_limit 2>/dev/null || printf unavailable)"
     printf 'search.safety_guard=%s\n' "$(search_safety_guard_state)"
     printf 'search.safety_guard_persistence=%s\n' "$(search_safety_guard_persistence)"

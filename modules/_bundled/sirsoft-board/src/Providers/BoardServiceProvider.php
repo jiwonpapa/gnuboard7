@@ -63,6 +63,7 @@ class BoardServiceProvider extends BaseModuleServiceProvider
     protected array $cacheServices = [
         BoardService::class,
         CommentService::class,
+        PostRepository::class,
         PostService::class,
         ReportService::class,
     ];

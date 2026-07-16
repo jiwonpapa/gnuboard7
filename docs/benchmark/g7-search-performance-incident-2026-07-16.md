@@ -25,6 +25,7 @@
 4. 작성자·회원 검색의 선행 와일드카드 `%keyword%`는 B-tree 인덱스로 범위를 좁힐 수 없다.
 5. MySQL `innodb_ft_result_cache_limit`가 2,000,000,000 bytes였다. MySQL은 FULLTEXT 중간·최종 결과를 메모리에서 처리하므로 2GB 서버에 같은 크기의 쿼리별 상한은 안전하지 않다.
 6. `relevance` 정렬이 실제로는 `created_at DESC`로 처리돼 관련도 계약도 지켜지지 않았다.
+7. 32MiB 보호 적용 뒤 고빈도 ngram 검색어는 SQL `LIMIT`보다 먼저 FULLTEXT 내부 결과 캐시를 채워 MySQL errno 188(`FTS query exceeds result cache limit`)을 반환했고, 게시판 컨트롤러가 이를 일반 500으로 숨겼다.
 
 MySQL 공식 문서는 `innodb_ft_result_cache_limit`가 쿼리·스레드별 FULLTEXT 결과 메모리 상한이며, 대규모 결과의 과도한 메모리 사용을 막는 용도라고 설명한다. 이 값은 Global/Dynamic 변수다.
 
@@ -51,6 +52,10 @@ MySQL 공식 문서는 `innodb_ft_result_cache_limit`가 쿼리·스레드별 FU
 - 공개 통합검색과 사용자·관리자 게시판 검색에는 별도 10회/분 rate limit을 적용한다.
 - 1,000건 cap 판정용 sentinel은 응답 결과와 다음 페이지에 노출하지 않는다.
 - FULLTEXT 상한은 `SET PERSIST` 성공을 필수로 하며 비영속 fallback은 허용하지 않는다.
+- errno 188만 식별해 최근 eligible ID 1,000건을 먼저 확정하고, 해당 PK 안에서만 제목·본문 LIKE fallback을 수행한다.
+- 상한을 넘긴 검색어는 SHA-256 키로 10분간 기억해 같은 FULLTEXT 실패와 32MiB 할당을 반복하지 않는다.
+- fallback 결과는 `total_is_exact=false`, `total_relation=gte`로 완전 검색이 아님을 표시하며 통합검색은 `search_truncated=true`도 반환한다.
+- 일반 DB 오류는 fallback으로 숨기지 않고 그대로 보고하며, 사용자·관리자 목록 컨트롤러는 최종 500 전에 예외를 기록한다.
 
 ## 운영 검증 정책
 
@@ -60,6 +65,7 @@ MySQL 공식 문서는 `innodb_ft_result_cache_limit`가 쿼리·스레드별 FU
 - swap 증가 및 swap-in/out 없음
 - 장기 실행 검색 쿼리 0건
 - 서비스·maintenance·튜닝 strict status 정상
+- `search.fallback_scan_cap=1000`, `search.safety_guard=enabled`
 - VU 1, 요청 1회, SQL/HTTP 시간 제한 적용
 
 조건을 만족하지 않으면 로컬 테스트와 정적 SQL 검증 결과만 보고한다. 5 VU 검색 테스트는 이 서버에서 금지한다.

@@ -81,6 +81,9 @@ class SearchPostsListenerTest extends TestCase
             ->with([1], '테스트', $this->anything(), $this->anything(), $this->anything())
             ->willReturn([
                 'total' => 1,
+                'total_is_exact' => false,
+                'total_relation' => 'gte',
+                'search_truncated' => true,
                 'items' => new Collection([
                     $this->createPostStub(1, 'notice', '공지사항'),
                 ]),
@@ -104,6 +107,7 @@ class SearchPostsListenerTest extends TestCase
 
         $this->assertArrayHasKey('posts', $result);
         $this->assertGreaterThan(0, $result['posts']['total']);
+        $this->assertTrue($result['posts']['search_truncated']);
     }
 
     /**

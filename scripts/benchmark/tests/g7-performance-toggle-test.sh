@@ -88,6 +88,7 @@ search.config=${FAKE_BOARD_SEARCH_CONFIG:-${runtime}}
 search.algorithm=${FAKE_BOARD_SEARCH_ALGORITHM:-${runtime}}
 search.schema=${search_schema}
 search.sync_cap=${FAKE_BOARD_SEARCH_SYNC_CAP:-1000}
+search.fallback_scan_cap=${FAKE_BOARD_SEARCH_FALLBACK_SCAN_CAP:-1000}
 search.ft_result_cache_limit=${FAKE_BOARD_FT_RESULT_CACHE_LIMIT:-33554432}
 search.safety_guard=${FAKE_BOARD_SAFETY_GUARD:-enabled}
 search.safety_guard_persistence=${FAKE_BOARD_SAFETY_PERSISTENCE:-persisted}
@@ -199,6 +200,7 @@ assert_contains "${output}" 'common.state=optimized'
 assert_contains "${output}" 'board.state=optimized'
 assert_contains "${output}" 'board.source_ref=0123456789abcdef0123456789abcdef01234567'
 assert_contains "${output}" 'board.search.config=optimized'
+assert_contains "${output}" 'board.search.fallback_scan_cap=1000'
 assert_contains "${output}" 'board.search.safety_guard=enabled'
 assert_contains "${output}" 'board.search.schema=optimized'
 assert_contains "${output}" 'ecommerce.state=optimized'
@@ -241,6 +243,14 @@ result=$?
 set -e
 [[ "${result}" == 2 ]] || { printf 'search safety guard drift must exit 2, got %s\n' "${result}" >&2; exit 1; }
 assert_contains "${output}" 'board.search.safety_guard=drifted'
+assert_contains "${output}" 'board.state=drift'
+
+set +e
+output="$(FAKE_BOARD_SEARCH_FALLBACK_SCAN_CAP=5000 run_harness status --strict 2>&1)"
+result=$?
+set -e
+[[ "${result}" == 2 ]] || { printf 'search fallback scan cap drift must exit 2, got %s\n' "${result}" >&2; exit 1; }
+assert_contains "${output}" 'board.search.fallback_scan_cap=5000'
 assert_contains "${output}" 'board.state=drift'
 
 set +e

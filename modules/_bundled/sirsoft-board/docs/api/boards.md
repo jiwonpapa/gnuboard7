@@ -2596,7 +2596,7 @@ HTTP/1.1 200
 
 **설명** 게시판의 게시글 목록을 조회합니다. `auth:sanctum` + `sirsoft-board.{slug}.posts.read` 권한이 필요하며(공개 게시판은 게스트에게도 read 권한이 부여될 수 있음), 검색/카테고리/정렬 등 필터와 페이지네이션을 지원합니다. 성능을 위해 simplePaginate 로 조회하되 일반 게시글 총 건수는 캐시에서 별도로 채우며, manager 권한 보유자가 `del=1` 을 주면 삭제된 게시글까지 포함합니다.
 
-검색 요청은 사용자 ID 또는 게스트 IP 기준 10회/분으로 제한됩니다. `search`와 `search_field=all|title_content|author`를 사용한 검색 응답의 `data.pagination`에는 `total_is_exact`, `total_relation`, `has_more_pages`, `result_cap`이 추가됩니다. `total_relation=gte`이면 `total`은 정확한 전체 건수가 아니라 동기 검색 상한 안에서 확인한 하한이며, `result_cap` 밖 페이지는 조회하지 않습니다. 동시 검색 제한에 걸리면 `429 Too Many Requests`를 반환합니다.
+검색 요청은 사용자 ID 또는 게스트 IP 기준 10회/분으로 제한됩니다. `search`와 `search_field=all|title_content|author`를 사용한 검색 응답의 `data.pagination`에는 `total_is_exact`, `total_relation`, `has_more_pages`, `result_cap`, `search_truncated`가 추가됩니다. `total_relation=gte`이면 `total`은 정확한 전체 건수가 아니라 동기 검색 상한 안에서 확인한 하한이며, `result_cap` 밖 페이지는 조회하지 않습니다. FULLTEXT 메모리 보호 상한에 걸린 넓은 검색어는 최근 eligible 게시글 1,000건 안에서만 제목·본문을 확인하고 `total_is_exact=false`, `search_truncated=true`로 반환합니다. 동시 검색 제한에 걸리면 `429 Too Many Requests`를 반환합니다.
 
 
 ### POST /api/modules/sirsoft-board/boards/{slug}/posts

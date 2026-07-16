@@ -4,8 +4,10 @@ namespace Modules\Sirsoft\Board\Tests\Unit;
 
 require_once __DIR__.'/../ModuleTestCase.php';
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Modules\Sirsoft\Board\Http\Resources\PostCollection;
 use Modules\Sirsoft\Board\Models\Post;
 use Modules\Sirsoft\Board\Repositories\PostRepository;
 use Modules\Sirsoft\Board\Tests\BoardTestCase;
@@ -22,6 +24,78 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
 
         config()->set('benchmark.board_list_variant', 'optimized');
         $this->repository = app(PostRepository::class);
+    }
+
+    public function test_mysql_fts_result_cache_limit_error_is_detected_without_hiding_other_errors(): void
+    {
+        $method = new \ReflectionMethod($this->repository, 'isFulltextResultCacheLimitExceeded');
+
+        $ftsError = new \PDOException('FTS query exceeds result cache limit', 188);
+        $ftsError->errorInfo = ['HY000', 188, 'FTS query exceeds result cache limit'];
+        $ftsException = new QueryException('mysql', 'select 1', [], $ftsError);
+
+        $otherError = new \PDOException('Deadlock found', 1213);
+        $otherError->errorInfo = ['40001', 1213, 'Deadlock found'];
+        $otherException = new QueryException('mysql', 'select 1', [], $otherError);
+
+        $this->assertTrue($method->invoke($this->repository, $ftsException));
+        $this->assertFalse($method->invoke($this->repository, $otherException));
+    }
+
+    public function test_broad_fulltext_keyword_cache_uses_hash_and_expires_through_module_cache(): void
+    {
+        $keyword = 'cache-wide-keyword-'.bin2hex(random_bytes(4));
+        $remember = new \ReflectionMethod($this->repository, 'rememberBroadFulltext');
+        $shouldBypass = new \ReflectionMethod($this->repository, 'shouldBypassFulltext');
+
+        $this->assertFalse($shouldBypass->invoke($this->repository, $keyword));
+        $remember->invoke($this->repository, $keyword);
+        $this->assertTrue($shouldBypass->invoke($this->repository, $keyword));
+    }
+
+    public function test_fts_fallback_materializes_recent_ids_before_bounded_like(): void
+    {
+        config()->set('benchmark.board_search_fallback_scan_cap', 100);
+        $this->createMatchingPosts(3);
+        $baseQuery = Post::query()
+            ->where('board_id', $this->board->id)
+            ->whereNull('parent_id');
+        $method = new \ReflectionMethod($this->repository, 'buildBoundedSearchFallbackQuery');
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $fallbackQuery = $method->invoke($this->repository, $baseQuery, 'windowneedle');
+        $rows = $fallbackQuery->get(['board_posts.id']);
+        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
+        DB::disableQueryLog();
+
+        $this->assertCount(3, $rows);
+        $this->assertCount(2, $queries);
+        $this->assertStringContainsString('order by "board_posts"."id" desc limit 100', $queries->first());
+        $this->assertStringContainsString('"board_posts"."id" in (', $queries->last());
+        $this->assertStringContainsString('"board_posts"."title" like ?', $queries->last());
+        $this->assertStringContainsString('"board_posts"."content" like ?', $queries->last());
+        $this->assertStringNotContainsString('match(', $queries->last());
+    }
+
+    public function test_empty_fallback_page_keeps_truncated_search_metadata(): void
+    {
+        $method = new \ReflectionMethod($this->repository, 'makeBoundedSearchPaginator');
+        $paginator = $method->invoke($this->repository, collect(), 15, 1, [
+            'total' => 0,
+            'total_is_exact' => false,
+            'total_relation' => 'gte',
+            'fallback_used' => true,
+        ]);
+        $resource = new PostCollection($paginator);
+        $resource->setTotalNormalPosts(0);
+        $resource->setSearchResult(true);
+
+        $result = $resource->toArray(request());
+
+        $this->assertFalse($result['pagination']['total_is_exact']);
+        $this->assertSame('gte', $result['pagination']['total_relation']);
+        $this->assertTrue($result['pagination']['search_truncated']);
     }
 
     public function test_search_by_keyword_uses_id_first_lower_bound_without_window_count(): void
