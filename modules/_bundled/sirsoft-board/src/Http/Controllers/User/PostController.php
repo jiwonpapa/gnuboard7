@@ -29,6 +29,7 @@ use Modules\Sirsoft\Board\Services\PostService;
 use Modules\Sirsoft\Board\Services\ReportService;
 use Modules\Sirsoft\Board\Traits\ChecksBoardPermission;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
  * 사용자용 게시글 컨트롤러
@@ -111,6 +112,10 @@ class PostController extends PublicBaseController
             $collection = new PostCollection($posts);
             $collection->setTotalNormalPosts($totalNormalPosts);
             $collection->setOrderDirection($listParams['filters']['order_direction']);
+            $collection->setSearchResult(
+                ! empty($listParams['filters']['search'])
+                && config('benchmark.board_list_variant', 'optimized') === 'optimized'
+            );
 
             // BoardResource로 boardInfo 생성
             $boardResource = new BoardResource($board);
@@ -120,6 +125,8 @@ class PostController extends PublicBaseController
                 $collection->withBoardInfo($boardResource->toBoardInfoForUser())
             );
         } catch (BoardNotFoundException|PostNotFoundException $e) {
+            throw $e;
+        } catch (TooManyRequestsHttpException $e) {
             throw $e;
         } catch (\Exception $e) {
             return $this->error('sirsoft-board::messages.posts.fetch_failed', 500, $e->getMessage());

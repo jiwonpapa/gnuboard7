@@ -38,7 +38,10 @@ GLOBAL_SEARCH="${G7_AB_GLOBAL_SEARCH:-}"
 SHOP_SEARCH="${G7_AB_SHOP_SEARCH:-러닝화}"
 POST_ID="${G7_AB_POST_ID:-}"
 PRODUCT_ID="${G7_AB_PRODUCT_ID:-}"
-STATEMENT_TIMEOUT_MS="${G7_AB_STATEMENT_TIMEOUT_MS:-15000}"
+INCLUDE_RISKY=0
+RISKY_ROUTE="${G7_AB_RISKY_ROUTE:-board_search}"
+SEARCH_TARGET_SOURCE='disabled'
+STATEMENT_TIMEOUT_MS="${G7_AB_STATEMENT_TIMEOUT_MS:-1500}"
 IDLE_TIMEOUT_SECONDS="${G7_AB_IDLE_TIMEOUT_SECONDS:-60}"
 CPU_INTERVAL_SECONDS="${G7_AB_CPU_INTERVAL_SECONDS:-1}"
 CPU_MAX_SECONDS="${G7_AB_CPU_MAX_SECONDS:-180}"
@@ -77,13 +80,16 @@ Benchmark options:
   --hot-duration SEC       Ordinary-route load duration. Default: 30.
   --request-timeout SEC    Per-request k6 timeout. Default: 20.
   --board-slug SLUG        Public board slug. Default: freebd.
-  --deep-page N            Single-VU deep page. Default: 59999.
-  --board-search TERM      Single-VU board search; otherwise discover from a public post.
-  --global-search TERM     Single-VU global search; otherwise reuse the discovered board term.
+  --include-risky          Opt in to deep page, board search, and global search.
+  --risky-route KEY        One risky request only: board_deep, board_search,
+                            or global_search. Default: board_search.
+  --deep-page N            Risky deep page. Default: 59999; requires --include-risky.
+  --board-search TERM      Risky board search; discover only with --include-risky.
+  --global-search TERM     Risky global search; reuse board term with --include-risky.
   --shop-search TERM       Shop list search. Default: 러닝화.
   --post-id ID             Fixed public post ID; otherwise discover it once.
   --product-id ID          Fixed public product ID; otherwise discover it once.
-  --statement-timeout MS   Temporary global SELECT cap. Default: 15000.
+  --statement-timeout MS   Temporary global SELECT cap. Default: 1500.
   --idle-timeout SEC       Wait for SELECT/transaction drain. Default: 60.
   --cpu-interval SEC       /proc sampling interval. Default: 1.
   --cpu-max-seconds SEC    Remote sampler safety limit. Default: 180.
@@ -107,7 +113,9 @@ Deployment options:
   --ssh-alive-count N      Missed keepalives before disconnect. Default: 3.
   -h, --help               Show this help.
 
-The deep page, board search, and global search run exactly once with one VU.
+The safe default runs only the 21 ordinary routes. The deep page, board search,
+and global search are excluded unless --include-risky is explicitly provided.
+Each opt-in run executes only --risky-route once with one VU and a 3s HTTP cap.
 No benchmark query is killed automatically. The runner waits for DB idle state.
 EOF
 }
@@ -124,6 +132,8 @@ while [[ $# -gt 0 ]]; do
         --hot-duration) shift; HOT_DURATION_SECONDS="${1:-}" ;;
         --request-timeout) shift; REQUEST_TIMEOUT_SECONDS="${1:-}" ;;
         --board-slug) shift; BOARD_SLUG="${1:-}" ;;
+        --include-risky) INCLUDE_RISKY=1 ;;
+        --risky-route) shift; RISKY_ROUTE="${1:-}" ;;
         --deep-page) shift; DEEP_PAGE="${1:-}" ;;
         --board-search) shift; BOARD_SEARCH="${1:-}" ;;
         --global-search) shift; GLOBAL_SEARCH="${1:-}" ;;
@@ -167,8 +177,14 @@ done
     || fail '--hot-duration must be between 5 and 300 seconds'
 [[ "${REQUEST_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${REQUEST_TIMEOUT_SECONDS}" -ge 5 && "${REQUEST_TIMEOUT_SECONDS}" -le 60 ]] \
     || fail '--request-timeout must be between 5 and 60 seconds'
-[[ "${DEEP_PAGE}" =~ ^[0-9]+$ && "${DEEP_PAGE}" -ge 2 ]] \
-    || fail '--deep-page must be an integer greater than 1'
+if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+    [[ "${DEEP_PAGE}" =~ ^[0-9]+$ && "${DEEP_PAGE}" -ge 2 ]] \
+        || fail '--deep-page must be an integer greater than 1'
+fi
+case "${RISKY_ROUTE}" in
+    board_deep|board_search|global_search) ;;
+    *) fail '--risky-route must be board_deep, board_search, or global_search' ;;
+esac
 [[ "${STATEMENT_TIMEOUT_MS}" =~ ^[0-9]+$ && "${STATEMENT_TIMEOUT_MS}" -ge 1000 && "${STATEMENT_TIMEOUT_MS}" -le 30000 ]] \
     || fail '--statement-timeout must be between 1000 and 30000 milliseconds'
 [[ "${IDLE_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${IDLE_TIMEOUT_SECONDS}" -ge 15 && "${IDLE_TIMEOUT_SECONDS}" -le 300 ]] \
@@ -221,8 +237,10 @@ awk -v value="${LOAD_ABORT_PER_CPU}" 'BEGIN { exit !(value > 0 && value <= 10) }
     || fail 'board slug and shop search term must not be empty'
 
 BASE_URL="${BASE_URL%/}"
-EXPECTED_HOT_ITERATIONS=$(((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS + HOT_TIME_UNIT_SECONDS - 1) / HOT_TIME_UNIT_SECONDS))
-EXPECTED_ITERATIONS=$((EXPECTED_HOT_ITERATIONS + 1))
+# constant-arrival-rate schedules at t=0 and then at each timeUnit/rate boundary.
+EXPECTED_HOT_ITERATIONS=$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS / HOT_TIME_UNIT_SECONDS + 1))
+EXPECTED_RISKY_ITERATIONS="${INCLUDE_RISKY}"
+EXPECTED_ITERATIONS=$((EXPECTED_HOT_ITERATIONS + EXPECTED_RISKY_ITERATIONS))
 SSH_OPTIONS=(
     -o BatchMode=yes
     -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
@@ -701,15 +719,31 @@ wait_cpu_sampler() {
 
 stop_cpu_sampler() {
     local sampler_result=0 wait_result=0 deadline forced=0
+    local stop_request_pid stop_request_deadline stop_request_result=0
     [[ -n "${CPU_SAMPLER_PID}" ]] || return 0
-    if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
-        cpu-stop "${CPU_STOP_FILE}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE' >/dev/null 2>&1
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
+        cpu-stop "${CPU_STOP_FILE}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE' >/dev/null 2>&1 &
 set -euo pipefail
 [[ "$1" == cpu-stop && "$2" =~ ^/tmp/g7-ab-[A-Za-z0-9_-]+[.]stop$ && "$4" == /var/lock/g7-performance-toggle.lock.d ]]
 [[ "$(<"$4/owner")" == "$3" ]]
 touch -- "$2"
 REMOTE
-    then
+    stop_request_pid=$!
+    stop_request_deadline=$((SECONDS + SSH_CONNECT_TIMEOUT_SECONDS + 5))
+    while kill -0 "${stop_request_pid}" >/dev/null 2>&1 && (( SECONDS < stop_request_deadline )); do
+        sleep 0.2
+    done
+    if kill -0 "${stop_request_pid}" >/dev/null 2>&1; then
+        kill -TERM "${stop_request_pid}" >/dev/null 2>&1 || true
+        sleep 1
+        kill -0 "${stop_request_pid}" >/dev/null 2>&1 \
+            && kill -KILL "${stop_request_pid}" >/dev/null 2>&1 || true
+        stop_request_result=124
+    fi
+    if ! wait "${stop_request_pid}"; then
+        [[ "${stop_request_result}" != 0 ]] || stop_request_result=1
+    fi
+    if [[ "${stop_request_result}" != 0 ]]; then
         kill "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
         sampler_result=1
     fi
@@ -801,23 +835,25 @@ discover_targets() {
     "${JQ_BIN}" -e --arg id "${POST_ID}" \
         '.success == true and ((.data.id | tostring) == $id) and ((.data.title // "") | length > 0)' \
         <<<"${board_detail}" >/dev/null || fail 'public post target failed semantic validation'
-    if [[ -z "${BOARD_SEARCH}" ]]; then
-        discovered_term="$("${JQ_BIN}" -r '
-            (.data.title // "") as $title
-            | ([($title | scan("[0-9]{4,}"))][0]
-                // ($title | gsub("[^[:alnum:]가-힣]+"; " ") | split(" ")
-                    | map(select(length >= 2)) | sort_by(-length) | .[0])
-                // empty)
-        ' <<<"${board_detail}")"
-        [[ -n "${discovered_term}" ]] || fail 'could not discover a safe board search hit; pass --board-search'
-        BOARD_SEARCH="${discovered_term}"
-        SEARCH_TARGET_SOURCE='discovered-post-title'
-    else
-        SEARCH_TARGET_SOURCE='explicit'
+    if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+        if [[ -z "${BOARD_SEARCH}" ]]; then
+            discovered_term="$("${JQ_BIN}" -r '
+                (.data.title // "") as $title
+                | ([($title | scan("[0-9]{4,}"))][0]
+                    // ($title | gsub("[^[:alnum:]가-힣]+"; " ") | split(" ")
+                        | map(select(length >= 2)) | sort_by(-length) | .[0])
+                    // empty)
+            ' <<<"${board_detail}")"
+            [[ -n "${discovered_term}" ]] || fail 'could not discover a safe board search hit; pass --board-search'
+            BOARD_SEARCH="${discovered_term}"
+            SEARCH_TARGET_SOURCE='discovered-post-title'
+        else
+            SEARCH_TARGET_SOURCE='explicit'
+        fi
+        [[ -n "${GLOBAL_SEARCH}" ]] || GLOBAL_SEARCH="${BOARD_SEARCH}"
+        [[ ${#BOARD_SEARCH} -ge 2 && ${#GLOBAL_SEARCH} -ge 2 ]] \
+            || fail 'board/global search terms must contain at least two characters'
     fi
-    [[ -n "${GLOBAL_SEARCH}" ]] || GLOBAL_SEARCH="${BOARD_SEARCH}"
-    [[ ${#BOARD_SEARCH} -ge 2 && ${#GLOBAL_SEARCH} -ge 2 ]] \
-        || fail 'board/global search terms must contain at least two characters'
     if [[ -z "${PRODUCT_ID}" ]]; then
         product_payload="$(api_get '/api/modules/sirsoft-ecommerce/products?page=1&per_page=12')"
         PRODUCT_ID="$("${JQ_BIN}" -r '.data.data[0].id // empty' <<<"${product_payload}")"
@@ -827,7 +863,11 @@ discover_targets() {
     "${JQ_BIN}" -e --arg id "${PRODUCT_ID}" \
         '.success == true and ((.data.id | tostring) == $id)' \
         <<<"${product_detail}" >/dev/null || fail 'public product target failed semantic validation'
-    log "fixed A/B targets: board=${BOARD_SLUG} post=${POST_ID} product=${PRODUCT_ID} search=${BOARD_SEARCH} (${SEARCH_TARGET_SOURCE})"
+    if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+        log "fixed A/B targets: board=${BOARD_SLUG} post=${POST_ID} product=${PRODUCT_ID} search=${BOARD_SEARCH} (${SEARCH_TARGET_SOURCE}), risky=on"
+    else
+        log "fixed A/B targets: board=${BOARD_SLUG} post=${POST_ID} product=${PRODUCT_ID}, risky=off"
+    fi
 }
 
 validate_search_targets() {
@@ -864,6 +904,8 @@ write_route_manifest() {
         --arg board_search "${board_search_encoded}" \
         --arg global_search "${global_search_encoded}" \
         --arg shop_search "${shop_search_encoded}" \
+        --arg risky_route "${RISKY_ROUTE}" \
+        --argjson include_risky "${INCLUDE_RISKY}" \
         --argjson deep_page "${DEEP_PAGE}" '
         def route($key; $label; $workload; $path): {
             key: $key,
@@ -881,11 +923,8 @@ write_route_manifest() {
             route("home_boards"; "홈 게시판 목록"; "hot"; "/api/modules/sirsoft-board/boards?limit=3"),
             route("board_list_p1"; "게시판 목록 1페이지"; "hot"; ($board_base + "?page=1&per_page=20")),
             route("board_list_p2"; "게시판 목록 2페이지"; "hot"; ($board_base + "?page=2&per_page=20")),
-            route("board_deep"; "게시판 깊은 페이지"; "risky-single-vu"; ($board_base + "?page=" + ($deep_page|tostring) + "&per_page=20")),
             route("board_detail"; "게시글 내용"; "hot"; ($board_base + "/" + $post)),
             route("board_navigation"; "게시글 이전·다음"; "hot"; ($board_base + "/" + $post + "/navigation")),
-            route("board_search"; "게시판 검색"; "risky-single-vu"; ($board_base + "?search=" + $board_search + "&search_field=all&page=1&per_page=20")),
-            route("global_search"; "전역 검색"; "risky-single-vu"; ("/api/search?q=" + $global_search + "&page=1&per_page=10")),
             route("shop_home_categories"; "쇼핑 홈 분류"; "hot"; "/api/modules/sirsoft-ecommerce/categories"),
             route("shop_list_p1"; "쇼핑 홈·상품 목록 1페이지"; "hot"; "/api/modules/sirsoft-ecommerce/products?page=1&per_page=12"),
             route("shop_list_p2"; "상품 목록 2페이지"; "hot"; "/api/modules/sirsoft-ecommerce/products?page=2&per_page=12"),
@@ -898,7 +937,11 @@ write_route_manifest() {
             route("shop_detail_coupons"; "상품 내용 쿠폰"; "hot"; ("/api/modules/sirsoft-ecommerce/products/" + $product + "/downloadable-coupons")),
             route("shop_search_p1"; "상품 검색 1페이지"; "hot"; ("/api/modules/sirsoft-ecommerce/products?search=" + $shop_search + "&page=1&per_page=12")),
             route("shop_search_p2"; "상품 검색 2페이지"; "hot"; ("/api/modules/sirsoft-ecommerce/products?search=" + $shop_search + "&page=2&per_page=12"))
-        ]
+        ] + (if $include_risky == 1 then ([
+            route("board_deep"; "게시판 깊은 페이지"; "risky-single-vu"; ($board_base + "?page=" + ($deep_page|tostring) + "&per_page=20")),
+            route("board_search"; "게시판 검색"; "risky-single-vu"; ($board_base + "?search=" + $board_search + "&search_field=all&page=1&per_page=20")),
+            route("global_search"; "전역 검색"; "risky-single-vu"; ("/api/search?q=" + $global_search + "&page=1&per_page=10"))
+        ] | map(select(.key == $risky_route))) else [] end)
     ' > "${MANIFEST_FILE}"
 }
 
@@ -959,7 +1002,15 @@ run_one_benchmark() {
     normalized_file="${OUTPUT_DIR}/runs/${phase}-${run}.json"
     console_file="${OUTPUT_DIR}/runs/${phase}-${run}-k6.log"
 
-    log "${phase} run ${run}/${REPEATS}: hot=${HOT_VUS}VU, rate=${HOT_ARRIVAL_RATE}/${HOT_TIME_UNIT_SECONDS}s, duration=${HOT_DURATION_SECONDS}s, risky=1VU/1 iteration"
+    if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+        log "${phase} run ${run}/${REPEATS}: hot=${HOT_VUS}VU, rate=${HOT_ARRIVAL_RATE}/${HOT_TIME_UNIT_SECONDS}s, duration=${HOT_DURATION_SECONDS}s, risky=${RISKY_ROUTE}/1VU/1 request"
+    else
+        log "${phase} run ${run}/${REPEATS}: hot=${HOT_VUS}VU, rate=${HOT_ARRIVAL_RATE}/${HOT_TIME_UNIT_SECONDS}s, duration=${HOT_DURATION_SECONDS}s, risky=off"
+    fi
+    if [[ "${INCLUDE_RISKY}" == 1 && "${MYSQL_GUARD_ACTIVE}" != 1 ]]; then
+        log "${phase} run ${run}: risky request refused without the statement-timeout guard"
+        return 2
+    fi
     start_cpu_sampler "${phase}" "${run}" || start_result=$?
     [[ "${start_result}" == 0 ]] || {
         [[ "${start_result}" != 3 ]] || log "${phase} run ${run}: capacity guard aborted before k6 startup"
@@ -967,11 +1018,12 @@ run_one_benchmark() {
     }
     set +e
     (
-        export BASE_URL BOARD_SLUG POST_ID PRODUCT_ID BOARD_SEARCH GLOBAL_SEARCH SHOP_SEARCH DEEP_PAGE HOT_VUS HOT_ARRIVAL_RATE
+        export BASE_URL BOARD_SLUG POST_ID PRODUCT_ID BOARD_SEARCH GLOBAL_SEARCH SHOP_SEARCH DEEP_PAGE INCLUDE_RISKY RISKY_ROUTE HOT_VUS HOT_ARRIVAL_RATE
         export HOT_TIME_UNIT="${HOT_TIME_UNIT_SECONDS}s"
         export HOT_DURATION="${HOT_DURATION_SECONDS}s"
         export RISKY_START="$((HOT_DURATION_SECONDS + 11))s"
         export REQUEST_TIMEOUT="${REQUEST_TIMEOUT_SECONDS}s"
+        export RISKY_REQUEST_TIMEOUT='3s'
         exec "${K6_BIN}" run --quiet --summary-export "${raw_file}" "${K6_SCRIPT}"
     ) >"${console_file}" 2>&1 &
     K6_PID=$!
@@ -1109,12 +1161,14 @@ generate_reports() {
         --arg global_search "${GLOBAL_SEARCH}" \
         --arg shop_search "${SHOP_SEARCH}" \
         --arg search_target_source "${SEARCH_TARGET_SOURCE}" \
+        --arg risky_route "${RISKY_ROUTE}" \
         --argjson repeats "${REPEATS}" \
         --argjson hot_vus "${HOT_VUS}" \
         --argjson hot_arrival_rate "${HOT_ARRIVAL_RATE}" \
         --argjson hot_time_unit "${HOT_TIME_UNIT_SECONDS}" \
         --argjson hot_duration "${HOT_DURATION_SECONDS}" \
         --argjson expected_hot_iterations "${EXPECTED_HOT_ITERATIONS}" \
+        --argjson include_risky "${INCLUDE_RISKY}" \
         --argjson measurement_window "${MEASUREMENT_WINDOW_SECONDS}" \
         --argjson cpu_interval "${CPU_INTERVAL_SECONDS}" \
         --argjson deep_page "${DEEP_PAGE}" \
@@ -1176,11 +1230,12 @@ generate_reports() {
             mysql_cpu_max_pct: (cpu_values($phase; "mysql_cpu_max_pct") | maximum)
         };
         {
-            metadata: {
+            metadata: ({
                 completed_at: $completed_at,
                 base_url: $base_url,
                 baseline_ref: $baseline_ref,
                 optimized_commit: $optimized_commit,
+                route_count: ($manifest[0] | length),
                 repeats: $repeats,
                 hot_vus: $hot_vus,
                 hot_arrival_rate: $hot_arrival_rate,
@@ -1188,25 +1243,29 @@ generate_reports() {
                 hot_time_unit_seconds: $hot_time_unit,
                 hot_duration_seconds: $hot_duration,
                 expected_hot_iterations_per_run: $expected_hot_iterations,
-                risky_vus: 1,
-                risky_iterations_per_run: 1,
-                deep_page: $deep_page,
+                include_risky: ($include_risky == 1),
+                risky_route: (if $include_risky == 1 then $risky_route else null end),
                 statement_timeout_ms: $statement_timeout,
                 cpu_measurement_window_seconds: $measurement_window,
                 cpu_sample_interval_seconds: $cpu_interval,
                 process_cpu_basis: "percentage of total host CPU capacity",
                 complete: true,
                 final_state: "optimized"
-            },
-            targets: {
+            } + (if $include_risky == 1 then {
+                risky_vus: 1,
+                risky_iterations_per_run: 1,
+                deep_page: $deep_page
+            } else {} end)),
+            targets: ({
                 board_slug: $board_slug,
                 post_id: $post_id,
                 product_id: $product_id,
+                shop_search: $shop_search
+            } + (if $include_risky == 1 then {
                 board_search: $board_search,
                 global_search: $global_search,
-                shop_search: $shop_search,
                 search_target_source: $search_target_source
-            },
+            } else {} end)),
             routes: [
                 $manifest[0][] | . as $route
                 | {
@@ -1268,7 +1327,11 @@ generate_reports() {
             "${HOT_TIME_UNIT_SECONDS}" "${HOT_ARRIVAL_RATE}" "${EXPECTED_HOT_ITERATIONS}"
         printf -- '- CPU 측정창: 매 실행 %s초 고정, %s초 간격, 프로세스 값은 전체 호스트 CPU 용량 기준\n' \
             "${MEASUREMENT_WINDOW_SECONDS}" "${CPU_INTERVAL_SECONDS}"
-        printf -- '- 안전: 깊은 페이지·게시판 검색·전역 검색은 1 VU 단건, SELECT 최대 %sms\n\n' "${STATEMENT_TIMEOUT_MS}"
+        if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+            printf -- '- 위험 경로: 명시적 opt-in, 깊은 페이지·게시판 검색·전역 검색 1 VU 단건, SELECT 최대 %sms\n\n' "${STATEMENT_TIMEOUT_MS}"
+        else
+            printf -- '- 안전: 기본 21개 경로만 실행, 깊은 페이지·게시판 검색·전역 검색 제외, SELECT 최대 %sms\n\n' "${STATEMENT_TIMEOUT_MS}"
+        fi
         printf '## 경로별 결과\n\n'
         printf '| 경로 | 부하 | OFF p50(ms) | ON p50(ms) | OFF p95(ms) | ON p95(ms) | p95 변화(%%) | OFF 오류율 | ON 오류율 |\n'
         printf '|---|---:|---:|---:|---:|---:|---:|---:|---:|\n'

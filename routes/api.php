@@ -343,7 +343,9 @@ Route::get('attachment/{hash}', [PublicAttachmentController::class, 'download'])
     ->name('api.attachment.download');
 
 // 통합 검색 API (공개)
-Route::get('search', [PublicSearchController::class, 'search'])->name('api.search');
+Route::get('search', [PublicSearchController::class, 'search'])
+    ->middleware('throttle:10,1,core-public-search:')
+    ->name('api.search');
 
 // 관리자 API (인증 + 관리자 권한 필요, 속도 제한 적용)
 Route::prefix('admin')->middleware(['auth:sanctum', 'check.user_status', 'admin', 'throttle:'.config('auth.throttle.admin')])->group(function () {

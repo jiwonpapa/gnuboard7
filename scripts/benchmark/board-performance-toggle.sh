@@ -23,6 +23,8 @@ SSH_SERVER_ALIVE_INTERVAL_SECONDS="${G7_BOARD_PERF_SSH_SERVER_ALIVE_INTERVAL_SEC
 SSH_SERVER_ALIVE_COUNT_MAX="${G7_BOARD_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-${G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-3}}"
 SSH_BIN="${G7_BOARD_PERF_SSH_BIN:-${G7_PERF_SSH_BIN:-ssh}}"
 SCP_BIN="${G7_BOARD_PERF_SCP_BIN:-${G7_PERF_SCP_BIN:-scp}}"
+FT_RESULT_CACHE_LIMIT_BYTES="${G7_BOARD_PERF_FT_RESULT_CACHE_LIMIT_BYTES:-33554432}"
+FT_RESULT_CACHE_PREVIOUS_FALLBACK="${G7_BOARD_PERF_FT_RESULT_CACHE_PREVIOUS_FALLBACK:-2000000000}"
 ASSUME_YES=0
 RUN_SMOKE=1
 DEFER_RUNTIME=0
@@ -32,6 +34,9 @@ PREPARE_ARCHIVE="-"
 PROVIDED_REMOTE_ARCHIVE="-"
 
 COMMON_PATHS=(
+    "app/Http/Requests/Public/SearchRequest.php"
+    "app/Search/Engines/DatabaseFulltextEngine.php"
+    "routes/api.php"
     "modules/_bundled/sirsoft-board/CHANGELOG.md"
     "modules/_bundled/sirsoft-board/composer.json"
     "modules/_bundled/sirsoft-board/module.json"
@@ -40,16 +45,20 @@ COMMON_PATHS=(
     "modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php"
     "modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php"
     "modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php"
+    "modules/_bundled/sirsoft-board/src/Http/Resources/PostCollection.php"
+    "modules/_bundled/sirsoft-board/src/Listeners/SearchPostsListener.php"
     "modules/_bundled/sirsoft-board/src/Providers/BoardServiceProvider.php"
     "modules/_bundled/sirsoft-board/src/Repositories/Contracts/PostRepositoryInterface.php"
     "modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php"
     "modules/_bundled/sirsoft-board/src/Services/PostService.php"
+    "modules/_bundled/sirsoft-board/src/routes/api.php"
 )
 
 OPTIMIZED_ONLY_PATHS=(
     "config/benchmark.php"
     "modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php"
     "modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php"
+    "modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php"
     "modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
 )
 
@@ -106,6 +115,7 @@ Options:
   -h, --help        Show this help.
 
 Environment variables use the same names with the G7_BOARD_PERF_ prefix.
+The FULLTEXT result cache safety guard is fixed at 33554432 bytes for ON/OFF.
 EOF
 }
 
@@ -147,7 +157,7 @@ build_source_archive() {
     local variant="$1"
     local stage_dir="${WORK_DIR}/${variant}"
     local archive="${WORK_DIR}/board-performance-${variant}.tar.gz"
-    local path
+    local path source_ref source_ref_input
     local -a manifest_paths
 
     mkdir -p "${stage_dir}/.harness"
@@ -178,7 +188,13 @@ build_source_archive() {
         manifest_paths+=("${path}")
     done
 
+    source_ref_input="${OPTIMIZED_REF}"
+    [[ "${variant}" == "optimized" ]] || source_ref_input="${BASELINE_REF}"
+    source_ref="$(git -C "${REPO_ROOT}" rev-parse --verify "${source_ref_input}")"
+    [[ "${source_ref}" =~ ^[0-9a-f]{40}$ ]] \
+        || fail "could not resolve exact ${variant} board source ref"
     printf '%s\n' "${variant}" > "${stage_dir}/.harness/source-variant"
+    printf '%s\n' "${source_ref}" > "${stage_dir}/.harness/source-ref"
     (
         cd "${stage_dir}"
         for path in "${manifest_paths[@]}"; do
@@ -309,6 +325,13 @@ fi
 [[ "${SSH_SERVER_ALIVE_COUNT_MAX}" =~ ^[0-9]+$ \
     && "${SSH_SERVER_ALIVE_COUNT_MAX}" -ge 1 && "${SSH_SERVER_ALIVE_COUNT_MAX}" -le 10 ]] \
     || fail '--ssh-alive-count must be between 1 and 10'
+[[ "${FT_RESULT_CACHE_LIMIT_BYTES}" =~ ^[0-9]+$ \
+    && "${FT_RESULT_CACHE_LIMIT_BYTES}" -ge 1048576 \
+    && "${FT_RESULT_CACHE_LIMIT_BYTES}" -le 268435456 ]] \
+    || fail 'G7_BOARD_PERF_FT_RESULT_CACHE_LIMIT_BYTES must be between 1MiB and 256MiB'
+[[ "${FT_RESULT_CACHE_PREVIOUS_FALLBACK}" =~ ^[0-9]+$ \
+    && "${FT_RESULT_CACHE_PREVIOUS_FALLBACK}" -ge 1048576 ]] \
+    || fail 'G7_BOARD_PERF_FT_RESULT_CACHE_PREVIOUS_FALLBACK must be at least 1MiB'
 
 [[ -f "${REPO_ROOT}/artisan" ]] || fail "repository root is invalid: ${REPO_ROOT}"
 require_command "${SSH_BIN}"
@@ -374,7 +397,9 @@ log "running ${ACTION} on ${REMOTE_HOST}:${REMOTE_ROOT}"
     "${REMOTE_ARCHIVE}" \
     "${RUN_SMOKE}" \
     "${DEFER_RUNTIME}" \
-    "${ORCHESTRATION_TOKEN}" <<'REMOTE'
+    "${ORCHESTRATION_TOKEN}" \
+    "${FT_RESULT_CACHE_LIMIT_BYTES}" \
+    "${FT_RESULT_CACHE_PREVIOUS_FALLBACK}" <<'REMOTE'
 set -Eeuo pipefail
 trap 'result=$?; printf "[remote-board-perf] ERROR line=%s exit=%s command=%q\n" "${LINENO}" "${result}" "${BASH_COMMAND}" >&2; exit "${result}"' ERR
 
@@ -389,6 +414,8 @@ SOURCE_ARCHIVE="$8"
 RUN_SMOKE="$9"
 DEFER_RUNTIME="${10}"
 ORCHESTRATION_TOKEN="${11}"
+FT_RESULT_CACHE_LIMIT_BYTES="${12}"
+FT_RESULT_CACHE_PREVIOUS_FALLBACK="${13}"
 
 ENV_KEY="G7_BOARD_PERFORMANCE_VARIANT"
 POSTS_TABLE="${DB_PREFIX}board_posts"
@@ -399,6 +426,8 @@ LIST_MIGRATION_NAME="2026_07_15_000001_add_high_volume_list_indexes"
 AUTHOR_TERMS_MIGRATION_NAME="2026_07_16_000001_create_board_post_author_terms_table"
 INDEX_ID="idx_board_posts_list_id"
 INDEX_VIEWS="idx_board_posts_list_views"
+INDEX_FULLTEXT="ft_board_posts_title_content"
+INDEX_BOARD_AUTHOR="idx_board_posts_board_author"
 LIST_MIGRATION_PATH="modules/_bundled/sirsoft-board/database/migrations/${LIST_MIGRATION_NAME}.php"
 ACTIVE_LIST_MIGRATION_PATH="modules/sirsoft-board/database/migrations/${LIST_MIGRATION_NAME}.php"
 AUTHOR_TERMS_MIGRATION_PATH="modules/_bundled/sirsoft-board/database/migrations/${AUTHOR_TERMS_MIGRATION_NAME}.php"
@@ -406,9 +435,15 @@ ACTIVE_AUTHOR_TERMS_MIGRATION_PATH="modules/sirsoft-board/database/migrations/${
 STATE_DIR="${APP_ROOT}/storage/app/benchmark"
 STATE_FILE="${STATE_DIR}/board-performance-variant.env"
 SOURCE_MANIFEST="${STATE_DIR}/board-performance-source.sha256"
+SOURCE_REF_FILE="${STATE_DIR}/board-performance-source.ref"
+FT_RESULT_CACHE_PREVIOUS_FILE="${STATE_DIR}/board-search-ft-result-cache.previous"
+FT_PERSISTENCE_UNSUPPORTED_FILE="${STATE_DIR}/board-search-ft-result-cache.persist-unsupported"
 
 [[ "${DB_NAME}" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'invalid DB name\n' >&2; exit 1; }
 [[ "${DB_PREFIX}" =~ ^[A-Za-z0-9_]*$ ]] || { printf 'invalid DB prefix\n' >&2; exit 1; }
+[[ "${FT_RESULT_CACHE_LIMIT_BYTES}" =~ ^[0-9]+$ \
+    && "${FT_RESULT_CACHE_PREVIOUS_FALLBACK}" =~ ^[0-9]+$ ]] \
+    || { printf 'invalid FULLTEXT safety guard values\n' >&2; exit 1; }
 [[ -d "${APP_ROOT}" && -f "${APP_ROOT}/artisan" ]] || { printf 'invalid app root\n' >&2; exit 1; }
 
 GLOBAL_LOCK_DIR="/var/lock/g7-performance-toggle.lock.d"
@@ -445,6 +480,139 @@ mysql_scalar() {
 mysql_ddl() {
     mysql "${DB_NAME}" -e \
         "SET SESSION lock_wait_timeout=15; SET SESSION innodb_lock_wait_timeout=15; $1"
+}
+
+ft_result_cache_limit() {
+    mysql_scalar 'SELECT @@GLOBAL.innodb_ft_result_cache_limit'
+}
+
+search_sync_cap() {
+    local configured
+    if [[ ! -f "${APP_ROOT}/config/benchmark.php" ]] \
+        || ! grep -q "'board_search_sync_cap'" "${APP_ROOT}/config/benchmark.php"; then
+        printf 'unavailable'
+        return
+    fi
+    configured="$(awk -F= '$1 == "G7_BOARD_SEARCH_SYNC_CAP" { value=$2 } END { print value }' "${APP_ROOT}/.env")"
+    [[ -n "${configured}" ]] || configured=1000
+    if [[ "${configured}" =~ ^[0-9]+$ ]]; then
+        printf '%s' "${configured}"
+    else
+        printf 'invalid'
+    fi
+}
+
+ft_persisted_value() {
+    local available value
+    if ! available="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='performance_schema' AND TABLE_NAME='persisted_variables')"; then
+        printf 'failed to inspect MySQL persisted variable support\n' >&2
+        return 1
+    fi
+    if [[ "${available}" != "1" ]]; then
+        printf 'unsupported'
+        return
+    fi
+    if ! value="$(mysql_scalar "SELECT VARIABLE_VALUE FROM performance_schema.persisted_variables WHERE UPPER(VARIABLE_NAME)='INNODB_FT_RESULT_CACHE_LIMIT')"; then
+        printf 'failed to inspect persisted FULLTEXT result cache value\n' >&2
+        return 1
+    fi
+    if [[ -z "${value}" ]]; then
+        printf 'missing'
+    else
+        printf '%s' "${value}"
+    fi
+}
+
+search_safety_guard_persistence() {
+    local persisted
+    persisted="$(ft_persisted_value)"
+    if [[ "${persisted}" == "${FT_RESULT_CACHE_LIMIT_BYTES}" ]]; then
+        printf 'persisted'
+    elif [[ "${persisted}" == unsupported ]]; then
+        printf 'unsupported'
+    else
+        printf 'drifted'
+    fi
+}
+
+search_safety_guard_state() {
+    local current sync_cap
+    current="$(ft_result_cache_limit 2>/dev/null || true)"
+    sync_cap="$(search_sync_cap)"
+    if [[ "${current}" == "${FT_RESULT_CACHE_LIMIT_BYTES}" && "${sync_cap}" == "1000" ]]; then
+        printf 'enabled'
+    else
+        printf 'drifted'
+    fi
+}
+
+ensure_search_safety_guard() {
+    local current previous persisted persisted_state persisted_value persist_error
+    current="$(ft_result_cache_limit)"
+    [[ "${current}" =~ ^[0-9]+$ ]] \
+        || { printf 'innodb_ft_result_cache_limit is unavailable\n' >&2; exit 1; }
+    mkdir -p "${STATE_DIR}"
+    if [[ ! -f "${FT_RESULT_CACHE_PREVIOUS_FILE}" ]]; then
+        previous="${current}"
+        [[ "${current}" != "${FT_RESULT_CACHE_LIMIT_BYTES}" ]] \
+            || previous="${FT_RESULT_CACHE_PREVIOUS_FALLBACK}"
+        persisted="$(ft_persisted_value)"
+        persisted_state=present
+        persisted_value="${persisted}"
+        if [[ "${persisted}" == missing || "${persisted}" == unsupported ]]; then
+            persisted_state="${persisted}"
+            persisted_value='-'
+        fi
+        cat > "${FT_RESULT_CACHE_PREVIOUS_FILE}.tmp" <<EOF
+global=${previous}
+persisted_state=${persisted_state}
+persisted_value=${persisted_value}
+EOF
+        install -o "${APP_USER}" -g www-data -m 600 \
+            "${FT_RESULT_CACHE_PREVIOUS_FILE}.tmp" "${FT_RESULT_CACHE_PREVIOUS_FILE}"
+        rm -f "${FT_RESULT_CACHE_PREVIOUS_FILE}.tmp"
+    fi
+    [[ "$(ft_persisted_value)" != unsupported ]] \
+        || { printf 'persistent FULLTEXT safety guard is unsupported; refusing non-persistent activation\n' >&2; exit 1; }
+    if ! persist_error="$(mysql -e "SET PERSIST innodb_ft_result_cache_limit=${FT_RESULT_CACHE_LIMIT_BYTES}" 2>&1)"; then
+        printf 'SET PERSIST for FULLTEXT safety guard failed: %s\n' "${persist_error}" >&2
+        exit 1
+    fi
+    rm -f "${FT_PERSISTENCE_UNSUPPORTED_FILE}"
+    [[ "$(ft_result_cache_limit)" == "${FT_RESULT_CACHE_LIMIT_BYTES}" ]] \
+        || { printf 'FULLTEXT result cache safety guard activation failed\n' >&2; exit 1; }
+}
+
+restore_search_safety_guard() {
+    local previous persisted_state persisted_value persist_error
+    [[ -f "${FT_RESULT_CACHE_PREVIOUS_FILE}" ]] || return 0
+    previous="$(awk -F= '$1 == "global" { print $2 }' "${FT_RESULT_CACHE_PREVIOUS_FILE}")"
+    persisted_state="$(awk -F= '$1 == "persisted_state" { print $2 }' "${FT_RESULT_CACHE_PREVIOUS_FILE}")"
+    persisted_value="$(awk -F= '$1 == "persisted_value" { print $2 }' "${FT_RESULT_CACHE_PREVIOUS_FILE}")"
+    [[ "${previous}" =~ ^[0-9]+$ ]] \
+        || { printf 'saved FULLTEXT result cache value is invalid\n' >&2; exit 1; }
+    case "${persisted_state}" in
+        present)
+            [[ "${persisted_value}" =~ ^[0-9]+$ ]] \
+                || { printf 'saved persisted FULLTEXT value is invalid\n' >&2; exit 1; }
+            if ! persist_error="$(mysql -e "SET PERSIST innodb_ft_result_cache_limit=${persisted_value}" 2>&1)"; then
+                printf 'restoring persisted FULLTEXT value failed: %s\n' "${persist_error}" >&2
+                exit 1
+            fi
+            ;;
+        missing)
+            if ! persist_error="$(mysql -e 'RESET PERSIST innodb_ft_result_cache_limit' 2>&1)"; then
+                printf 'resetting persisted FULLTEXT value failed: %s\n' "${persist_error}" >&2
+                exit 1
+            fi
+            ;;
+        unsupported) ;;
+        *) printf 'saved FULLTEXT persistence state is invalid\n' >&2; exit 1 ;;
+    esac
+    mysql -e "SET GLOBAL innodb_ft_result_cache_limit=${previous}"
+    [[ "$(ft_result_cache_limit)" == "${previous}" ]] \
+        || { printf 'FULLTEXT result cache safety guard restoration failed\n' >&2; exit 1; }
+    rm -f "${FT_RESULT_CACHE_PREVIOUS_FILE}" "${FT_PERSISTENCE_UNSUPPORTED_FILE}"
 }
 
 table_index_exists() {
@@ -491,6 +659,50 @@ list_views_index_shape() {
     index_shape "${INDEX_VIEWS}" 'board_id,is_notice,parent_id,deleted_at,view_count,id' 6
 }
 
+fulltext_search_index_shape() {
+    local metadata create_sql server_version
+    metadata="$(mysql_scalar "SELECT CONCAT(COUNT(*), '|', COALESCE(GROUP_CONCAT(SEQ_IN_INDEX ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(MIN(INDEX_TYPE), ''), '|', COALESCE(MAX(INDEX_TYPE), '')) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND INDEX_NAME='${INDEX_FULLTEXT}'")"
+    if [[ "${metadata%%|*}" == "0" ]]; then
+        printf 'missing'
+        return
+    fi
+    if [[ "${metadata}" != '2|1,2|title,content|FULLTEXT|FULLTEXT' ]]; then
+        printf 'drifted'
+        return
+    fi
+
+    server_version="$(mysql_scalar 'SELECT VERSION()')"
+    if [[ "${server_version}" != *MariaDB* ]]; then
+        create_sql="$(mysql --batch --skip-column-names "${DB_NAME}" -e "SHOW CREATE TABLE ${POSTS_TABLE}")"
+        if ! grep -Eiq 'FULLTEXT KEY.*ft_board_posts_title_content.*title.*content.*WITH PARSER.*ngram' \
+            <<<"${create_sql}"; then
+            printf 'drifted'
+            return
+        fi
+    fi
+    printf 'verified'
+}
+
+board_author_index_shape() {
+    local metadata
+    metadata="$(mysql_scalar "SELECT CONCAT(COUNT(*), '|', COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), '')) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND INDEX_NAME='${INDEX_BOARD_AUTHOR}' AND SEQ_IN_INDEX <= 2")"
+    if [[ "${metadata%%|*}" == "0" ]]; then
+        printf 'missing'
+    elif [[ "${metadata}" == '2|board_id,author_name' ]]; then
+        printf 'verified'
+    else
+        printf 'drifted'
+    fi
+}
+
+user_leading_index_shape() {
+    if [[ "$(mysql_scalar "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND SEQ_IN_INDEX=1 AND COLUMN_NAME='user_id' AND INDEX_TYPE='BTREE'")" != "0" ]]; then
+        printf 'verified'
+    else
+        printf 'missing'
+    fi
+}
+
 table_exists() {
     local table_name="$1"
     mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}'"
@@ -530,6 +742,25 @@ author_terms_status() {
 
     missing="$(mysql_scalar "SELECT EXISTS(SELECT 1 FROM ${DB_NAME}.${POSTS_TABLE} AS p LEFT JOIN ${DB_NAME}.${AUTHOR_TERMS_TABLE} AS t ON t.board_id=p.board_id AND t.author_name=p.author_name WHERE p.author_name IS NOT NULL AND p.author_name <> '' AND t.board_id IS NULL LIMIT 1)")"
     printf '%s|%s' "${structure}" "${missing}"
+}
+
+search_physical_structure() {
+    local author_status="${1:-}" author_structure author_missing
+    [[ -n "${author_status}" ]] || author_status="$(author_terms_status)"
+    author_structure="${author_status%%|*}"
+    author_missing="${author_status#*|}"
+
+    if [[ "$(fulltext_search_index_shape)" != "verified" \
+        || "$(board_author_index_shape)" != "verified" \
+        || "$(user_leading_index_shape)" != "verified" ]]; then
+        printf 'drifted'
+    elif [[ "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
+        printf 'verified'
+    elif [[ "${author_structure}" == "missing" ]]; then
+        printf 'core-only'
+    else
+        printf 'drifted'
+    fi
 }
 
 ensure_no_long_queries() {
@@ -686,6 +917,9 @@ backup_current_source() {
         [[ -n "${path}" && -e "${APP_ROOT}/${path}" ]] && existing_paths+=("${path}")
     done <<'PATHS'
 config/benchmark.php
+app/Http/Requests/Public/SearchRequest.php
+app/Search/Engines/DatabaseFulltextEngine.php
+routes/api.php
 modules/_bundled/sirsoft-board/CHANGELOG.md
 modules/_bundled/sirsoft-board/composer.json
 modules/_bundled/sirsoft-board/module.json
@@ -694,11 +928,15 @@ modules/_bundled/sirsoft-board/package.json
 modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php
 modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php
 modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php
+modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php
+modules/_bundled/sirsoft-board/src/Http/Resources/PostCollection.php
+modules/_bundled/sirsoft-board/src/Listeners/SearchPostsListener.php
 modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php
 modules/_bundled/sirsoft-board/src/Providers/BoardServiceProvider.php
 modules/_bundled/sirsoft-board/src/Repositories/Contracts/PostRepositoryInterface.php
 modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php
 modules/_bundled/sirsoft-board/src/Services/PostService.php
+modules/_bundled/sirsoft-board/src/routes/api.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
 modules/_bundled/sirsoft-benchmark/CHANGELOG.md
@@ -720,11 +958,15 @@ package.json
 database/seeders/Sample/PostSampleSeeder.php
 src/Http/Controllers/Admin/PostController.php
 src/Http/Controllers/User/PostController.php
+src/Http/Middleware/SearchRequestThrottle.php
+src/Http/Resources/PostCollection.php
+src/Listeners/SearchPostsListener.php
 src/Observers/PostAuthorTermObserver.php
 src/Providers/BoardServiceProvider.php
 src/Repositories/Contracts/PostRepositoryInterface.php
 src/Repositories/PostRepository.php
 src/Services/PostService.php
+src/routes/api.php
 database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
 database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
 PATHS
@@ -754,13 +996,18 @@ PATHS
 
 apply_source_archive() {
     local expected_variant="$1"
-    local stage_dir manifest variant checksum path source mode relative active_destination
+    local stage_dir manifest variant source_ref checksum path source mode relative active_destination
 
     [[ -f "${SOURCE_ARCHIVE}" ]] || { printf 'source archive missing\n' >&2; exit 1; }
     stage_dir="$(mktemp -d)"
     tar -xzf "${SOURCE_ARCHIVE}" -C "${stage_dir}"
     variant="$(<"${stage_dir}/.harness/source-variant")"
     [[ "${variant}" == "${expected_variant}" ]] || { printf 'source archive variant mismatch\n' >&2; exit 1; }
+    [[ -f "${stage_dir}/.harness/source-ref" ]] \
+        || { printf 'source archive ref missing\n' >&2; exit 1; }
+    source_ref="$(<"${stage_dir}/.harness/source-ref")"
+    [[ "${source_ref}" =~ ^[0-9a-f]{40}$ ]] \
+        || { printf 'source archive ref is invalid\n' >&2; exit 1; }
     manifest="${stage_dir}/.harness/source.sha256"
     [[ -f "${manifest}" ]] || { printf 'source archive manifest missing\n' >&2; exit 1; }
     (cd "${stage_dir}" && sha256sum -c .harness/source.sha256 >/dev/null) \
@@ -798,10 +1045,14 @@ apply_source_archive() {
         rm -f "${APP_ROOT}/${ACTIVE_AUTHOR_TERMS_MIGRATION_PATH}"
         rm -f "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
         rm -f "${APP_ROOT}/modules/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
+        rm -f "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php"
+        rm -f "${APP_ROOT}/modules/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php"
     fi
 
     mkdir -p "${STATE_DIR}"
     install -o "${APP_USER}" -g www-data -m 664 "${manifest}" "${SOURCE_MANIFEST}"
+    install -o "${APP_USER}" -g www-data -m 664 \
+        "${stage_dir}/.harness/source-ref" "${SOURCE_REF_FILE}"
     (
         cd "${APP_ROOT}"
         sha256sum -c "${SOURCE_MANIFEST}" >/dev/null
@@ -869,6 +1120,8 @@ ensure_indexes_visible() {
     fi
     [[ "${author_status}" == "verified|0" ]] \
         || { printf 'board author search dictionary is incomplete\n' >&2; exit 1; }
+    [[ "$(search_physical_structure "${author_status}")" == "verified" ]] \
+        || { printf 'board search core index/schema prerequisites drifted\n' >&2; exit 1; }
 
     visibility_clauses=()
     [[ "$(index_visibility "${INDEX_ID}")" == "NO" ]] && visibility_clauses+=("ALTER INDEX ${INDEX_ID} VISIBLE")
@@ -940,7 +1193,11 @@ source_integrity() {
         return
     fi
     filtered_manifest="$(mktemp)"
-    awk '$2 == "config/benchmark.php" || $2 ~ "^modules/_bundled/sirsoft-(board|benchmark)/" { print }' \
+    awk '$2 == "config/benchmark.php" \
+        || $2 == "app/Http/Requests/Public/SearchRequest.php" \
+        || $2 == "app/Search/Engines/DatabaseFulltextEngine.php" \
+        || $2 == "routes/api.php" \
+        || $2 ~ "^modules/_bundled/sirsoft-(board|benchmark)/" { print }' \
         "${SOURCE_MANIFEST}" > "${filtered_manifest}"
     if [[ ! -s "${filtered_manifest}" ]]; then
         rm -f "${filtered_manifest}"
@@ -964,6 +1221,15 @@ source_variant() {
     fi
 }
 
+source_ref() {
+    if [[ -f "${SOURCE_REF_FILE}" ]] \
+        && [[ "$(<"${SOURCE_REF_FILE}")" =~ ^[0-9a-f]{40}$ ]]; then
+        printf '%s' "$(<"${SOURCE_REF_FILE}")"
+    else
+        printf 'unknown'
+    fi
+}
+
 effective_variant() {
     local value
     if [[ "$(source_variant)" != "optimized-capable" ]]; then
@@ -977,7 +1243,7 @@ effective_variant() {
 
 schema_variant() {
     local author_status="${1:-}" id_visibility views_visibility author_structure author_missing
-    local id_shape views_shape
+    local id_shape views_shape search_physical
     id_visibility="$(index_visibility "${INDEX_ID}")"
     views_visibility="$(index_visibility "${INDEX_VIEWS}")"
     id_shape="$(list_id_index_shape)"
@@ -985,31 +1251,66 @@ schema_variant() {
     [[ -n "${author_status}" ]] || author_status="$(author_terms_status)"
     author_structure="${author_status%%|*}"
     author_missing="${author_status#*|}"
+    search_physical="$(search_physical_structure "${author_status}")"
     if [[ "${id_shape}" == "missing" && "${views_shape}" == "missing" \
         && "${id_visibility}" == "MISSING" && "${views_visibility}" == "MISSING" \
-        && "${author_structure}" == "missing" ]]; then
+        && "${author_structure}" == "missing" && "${search_physical}" == "core-only" ]]; then
         printf 'original'
     elif [[ "${id_shape}" == "verified" && "${views_shape}" == "verified" \
         && "${id_visibility}" == "YES" && "${views_visibility}" == "YES" \
-        && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
+        && "${author_structure}" == "verified" && "${author_missing}" == "0" \
+        && "${search_physical}" == "verified" ]]; then
         printf 'optimized'
     elif [[ "${id_shape}" == "verified" && "${views_shape}" == "verified" \
         && "${id_visibility}" == "NO" && "${views_visibility}" == "NO" \
-        && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
+        && "${author_structure}" == "verified" && "${author_missing}" == "0" \
+        && "${search_physical}" == "verified" ]]; then
         printf 'baseline-invisible'
     else
         printf 'mixed'
     fi
 }
 
+search_schema_variant() {
+    local author_status="${1:-}" runtime="${2:-}" physical
+    [[ -n "${author_status}" ]] || author_status="$(author_terms_status)"
+    [[ -n "${runtime}" ]] || runtime="$(effective_variant)"
+    physical="$(search_physical_structure "${author_status}")"
+
+    if [[ "${physical}" == "verified" ]]; then
+        if [[ "${runtime}" == "optimized" ]]; then
+            printf 'optimized'
+        elif [[ "${runtime}" == "baseline" ]]; then
+            printf 'baseline-dormant'
+        else
+            printf 'mixed'
+        fi
+    elif [[ "${physical}" == "core-only" && "${runtime}" == "baseline" ]]; then
+        printf 'original'
+    else
+        printf 'mixed'
+    fi
+}
+
 write_state() {
-    local runtime_variant="$1"
+    local runtime_variant="$1" author_status
+    author_status="$(author_terms_status)"
     mkdir -p "${STATE_DIR}"
     cat > "${STATE_FILE}.tmp" <<EOF
 source=$(source_variant)
+source_ref=$(source_ref)
 source_integrity=$(source_integrity)
 runtime=${runtime_variant}
-schema=$(schema_variant)
+schema=$(schema_variant "${author_status}")
+search.source=$(source_variant)
+search.source_ref=$(source_ref)
+search.config=${runtime_variant}
+search.algorithm=${runtime_variant}
+search.schema=$(search_schema_variant "${author_status}" "${runtime_variant}")
+search.sync_cap=$(search_sync_cap)
+search.ft_result_cache_limit=$(ft_result_cache_limit 2>/dev/null || printf unavailable)
+search.safety_guard=$(search_safety_guard_state)
+search.safety_guard_persistence=$(search_safety_guard_persistence)
 changed_at=$(date --iso-8601=seconds)
 EOF
     install -o "${APP_USER}" -g www-data -m 664 "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -1027,7 +1328,7 @@ smoke() {
 
 show_status() {
     local module_row module_db_version module_source_version module_version_sync active_sync path
-    local author_status author_structure author_missing schema
+    local author_status author_structure author_missing schema runtime search_schema
     local benchmark_module_row benchmark_db_version benchmark_source_version
     local benchmark_module_version_sync=not-installed active_benchmark_sync=not-installed
     module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
@@ -1043,13 +1344,20 @@ show_status() {
         database/seeders/Sample/PostSampleSeeder.php \
         src/Http/Controllers/Admin/PostController.php \
         src/Http/Controllers/User/PostController.php \
+        src/Http/Resources/PostCollection.php \
+        src/Listeners/SearchPostsListener.php \
         src/Providers/BoardServiceProvider.php \
         src/Repositories/Contracts/PostRepositoryInterface.php \
-        src/Repositories/PostRepository.php src/Services/PostService.php; do
+        src/Repositories/PostRepository.php src/Services/PostService.php \
+        src/routes/api.php; do
         cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-board/${path}" \
             "${APP_ROOT}/modules/sirsoft-board/${path}" || active_sync="drifted"
     done
     if [[ "$(source_variant)" == "optimized-capable" ]]; then
+        cmp -s \
+            "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php" \
+            "${APP_ROOT}/modules/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php" \
+            || active_sync="drifted"
         cmp -s \
             "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php" \
             "${APP_ROOT}/modules/sirsoft-board/src/Observers/PostAuthorTermObserver.php" \
@@ -1087,11 +1395,26 @@ show_status() {
     author_structure="${author_status%%|*}"
     author_missing="${author_status#*|}"
     schema="$(schema_variant "${author_status}")"
+    runtime="$(effective_variant)"
+    search_schema="$(search_schema_variant "${author_status}" "${runtime}")"
 
     printf 'source=%s\n' "$(source_variant)"
+    printf 'source_ref=%s\n' "$(source_ref)"
     printf 'source_integrity=%s\n' "$(source_integrity)"
-    printf 'runtime=%s\n' "$(effective_variant)"
+    printf 'runtime=%s\n' "${runtime}"
     printf 'schema=%s\n' "${schema}"
+    printf 'search.source=%s\n' "$(source_variant)"
+    printf 'search.source_ref=%s\n' "$(source_ref)"
+    printf 'search.config=%s\n' "${runtime}"
+    printf 'search.algorithm=%s\n' "${runtime}"
+    printf 'search.schema=%s\n' "${search_schema}"
+    printf 'search.sync_cap=%s\n' "$(search_sync_cap)"
+    printf 'search.ft_result_cache_limit=%s\n' "$(ft_result_cache_limit 2>/dev/null || printf unavailable)"
+    printf 'search.safety_guard=%s\n' "$(search_safety_guard_state)"
+    printf 'search.safety_guard_persistence=%s\n' "$(search_safety_guard_persistence)"
+    printf 'search.index.%s.shape=%s\n' "${INDEX_FULLTEXT}" "$(fulltext_search_index_shape)"
+    printf 'search.index.%s.shape=%s\n' "${INDEX_BOARD_AUTHOR}" "$(board_author_index_shape)"
+    printf 'search.index.user_id_leading=%s\n' "$(user_leading_index_shape)"
     printf 'index.%s=%s\n' "${INDEX_ID}" "$(index_visibility "${INDEX_ID}")"
     printf 'index.%s.shape=%s\n' "${INDEX_ID}" "$(list_id_index_shape)"
     printf 'index.%s=%s\n' "${INDEX_VIEWS}" "$(index_visibility "${INDEX_VIEWS}")"
@@ -1144,6 +1467,7 @@ sync_module_versions() {
 case "${ACTION}" in
     on)
         ensure_no_long_queries
+        ensure_search_safety_guard
         apply_source_archive optimized
         ensure_indexes_visible
         set_env_variant optimized
@@ -1155,6 +1479,7 @@ case "${ACTION}" in
         ;;
     off)
         ensure_no_long_queries
+        ensure_search_safety_guard
         apply_source_archive optimized
         ensure_indexes_visible
         set_env_variant baseline
@@ -1171,6 +1496,7 @@ case "${ACTION}" in
         set_env_variant baseline
         clear_runtime 1
         drop_indexes_and_migration
+        restore_search_safety_guard
         remove_env_variant
         sync_module_versions
         clear_runtime

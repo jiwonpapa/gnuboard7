@@ -15,6 +15,8 @@ const hotArrivalRate = Number.parseInt(__ENV.HOT_ARRIVAL_RATE || '1', 10);
 const hotTimeUnit = __ENV.HOT_TIME_UNIT || '5s';
 const hotDuration = __ENV.HOT_DURATION || '30s';
 const riskyStart = __ENV.RISKY_START || '41s';
+const includeRisky = __ENV.INCLUDE_RISKY === '1';
+const riskyRouteKey = __ENV.RISKY_ROUTE || 'board_search';
 
 const requestParams = {
   headers: {
@@ -24,6 +26,10 @@ const requestParams = {
   },
   timeout: __ENV.REQUEST_TIMEOUT || '20s',
 };
+const riskyRequestParams = {
+  ...requestParams,
+  timeout: __ENV.RISKY_REQUEST_TIMEOUT || '3s',
+};
 
 function routeMetric(key) {
   return {
@@ -31,33 +37,6 @@ function routeMetric(key) {
     valid: new Rate(`g7_route_${key}_valid`),
   };
 }
-
-const metrics = {
-  home: routeMetric('home'),
-  home_stats: routeMetric('home_stats'),
-  home_recent: routeMetric('home_recent'),
-  home_popular_boards: routeMetric('home_popular_boards'),
-  home_boards: routeMetric('home_boards'),
-  board_list_p1: routeMetric('board_list_p1'),
-  board_list_p2: routeMetric('board_list_p2'),
-  board_deep: routeMetric('board_deep'),
-  board_detail: routeMetric('board_detail'),
-  board_navigation: routeMetric('board_navigation'),
-  board_search: routeMetric('board_search'),
-  global_search: routeMetric('global_search'),
-  shop_home_categories: routeMetric('shop_home_categories'),
-  shop_home_recent: routeMetric('shop_home_recent'),
-  shop_home_popular: routeMetric('shop_home_popular'),
-  shop_home_new: routeMetric('shop_home_new'),
-  shop_list_p1: routeMetric('shop_list_p1'),
-  shop_list_p2: routeMetric('shop_list_p2'),
-  shop_detail: routeMetric('shop_detail'),
-  shop_detail_reviews: routeMetric('shop_detail_reviews'),
-  shop_detail_inquiries: routeMetric('shop_detail_inquiries'),
-  shop_detail_coupons: routeMetric('shop_detail_coupons'),
-  shop_search_p1: routeMetric('shop_search_p1'),
-  shop_search_p2: routeMetric('shop_search_p2'),
-};
 
 const encodedBoard = encodeURIComponent(boardSlug);
 const encodedPost = encodeURIComponent(postId);
@@ -98,18 +77,29 @@ const riskyRoutes = [
   { key: 'board_search', path: `${boardBase}?search=${encodedBoardSearch}&search_field=all&page=1&per_page=20`, kind: 'api' },
   { key: 'global_search', path: `/api/search?q=${encodedGlobalSearch}&page=1&per_page=10`, kind: 'api' },
 ];
+const activeRiskyRoutes = includeRisky
+  ? riskyRoutes.filter(({ key }) => key === riskyRouteKey)
+  : [];
+if (includeRisky && activeRiskyRoutes.length !== 1) {
+  throw new Error(`unsupported RISKY_ROUTE: ${riskyRouteKey}`);
+}
+
+const activeRoutes = [...hotRoutes, ...activeRiskyRoutes];
+const metrics = {};
+activeRoutes.forEach(({ key }) => {
+  metrics[key] = routeMetric(key);
+});
 
 const thresholds = {
   http_req_failed: ['rate<0.01'],
   dropped_iterations: ['count==0'],
 };
-Object.keys(metrics).forEach((key) => {
+activeRoutes.forEach(({ key }) => {
   thresholds[`g7_route_${key}_valid`] = ['rate>0.99'];
 });
 
-export const options = {
-  scenarios: {
-    hot_routes: {
+const scenarios = {
+  hot_routes: {
       executor: 'constant-arrival-rate',
       exec: 'runHotRoutes',
       rate: hotArrivalRate,
@@ -119,8 +109,10 @@ export const options = {
       maxVUs: hotVus,
       gracefulStop: '10s',
       tags: { workload: 'hot' },
-    },
-    risky_routes: {
+  },
+};
+if (includeRisky) {
+  scenarios.risky_routes = {
       executor: 'shared-iterations',
       exec: 'runRiskyRoutes',
       vus: 1,
@@ -129,8 +121,11 @@ export const options = {
       maxDuration: '55s',
       gracefulStop: '5s',
       tags: { workload: 'risky-single-vu' },
-    },
-  },
+  };
+}
+
+export const options = {
+  scenarios,
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   thresholds,
 };
@@ -164,6 +159,18 @@ function totalItems(payload) {
 
 function sameIdentifier(actual, expected) {
   return String(actual ?? '') === String(expected);
+}
+
+function boundedSearchMetaIsValid(payload) {
+  const meta = payload?.data?.pagination ?? payload?.data?.posts ?? payload?.data;
+  const capIsValid = meta?.result_cap == null
+    ? meta?.total_is_exact === true
+    : Number.isInteger(Number(meta.result_cap)) && Number(meta.result_cap) > 0;
+  return typeof meta?.total_is_exact === 'boolean'
+    && ['eq', 'gte', 'unknown'].includes(meta?.total_relation)
+    && typeof meta?.has_more_pages === 'boolean'
+    && capIsValid
+    && (meta.total_is_exact ? meta.total_relation === 'eq' : meta.total_relation !== 'eq');
 }
 
 function semanticResponseIsValid(route, response, payload) {
@@ -203,9 +210,13 @@ function semanticResponseIsValid(route, response, payload) {
     case 'board_navigation':
       return Object.prototype.hasOwnProperty.call(payload, 'data');
     case 'board_search':
-      return currentPage(payload) === 1 && (listData(payload)?.length || 0) > 0;
+      return currentPage(payload) === 1
+        && (listData(payload)?.length || 0) > 0
+        && boundedSearchMetaIsValid(payload);
     case 'global_search':
-      return payload?.data?.q === globalSearch && Number(payload?.data?.total) > 0;
+      return payload?.data?.q === globalSearch
+        && Number(payload?.data?.total) > 0
+        && boundedSearchMetaIsValid(payload);
     case 'shop_detail':
       return sameIdentifier(payload?.data?.id, productId);
     case 'shop_search_p1':
@@ -221,9 +232,9 @@ function semanticResponseIsValid(route, response, payload) {
   }
 }
 
-function requestRoute(route) {
+function requestRoute(route, params = requestParams) {
   const response = http.get(`${baseUrl}${route.path}`, {
-    ...requestParams,
+    ...params,
     tags: { route: route.key },
   });
   const payload = route.kind === 'api' ? parseJson(response) : null;
@@ -243,5 +254,5 @@ export function runHotRoutes() {
 }
 
 export function runRiskyRoutes() {
-  riskyRoutes.forEach(requestRoute);
+  activeRiskyRoutes.forEach((route) => requestRoute(route, riskyRequestParams));
 }

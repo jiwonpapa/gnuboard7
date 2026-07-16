@@ -17,6 +17,10 @@ class PostCollection extends BaseApiCollection
 {
     use ChecksBoardPermission;
 
+    private const INTERNAL_TOTAL_EXACT_ATTRIBUTE = '__g7_normal_posts_total_is_exact';
+
+    private const INTERNAL_TOTAL_RELATION_ATTRIBUTE = '__g7_normal_posts_total_relation';
+
     /**
      * 전체 일반 게시글(원글) 수
      */
@@ -26,6 +30,11 @@ class PostCollection extends BaseApiCollection
      * 정렬 방향
      */
     private string $orderDirection = 'desc';
+
+    /**
+     * 제한형 검색 페이지네이션인지 여부
+     */
+    private bool $searchResult = false;
 
     /**
      * 전체 일반 게시글 수를 설정합니다.
@@ -48,6 +57,11 @@ class PostCollection extends BaseApiCollection
         $this->orderDirection = strtolower($direction);
     }
 
+    public function setSearchResult(bool $searchResult): void
+    {
+        $this->searchResult = $searchResult;
+    }
+
     /**
      * 리소스 컬렉션을 배열로 변환합니다.
      *
@@ -60,9 +74,18 @@ class PostCollection extends BaseApiCollection
         $currentPage = $this->currentPage();
         $perPage = $this->perPage();
         $isDescending = $this->orderDirection === 'desc';
+        [$totalIsExact, $totalRelation] = $this->extractTotalMetadata($normalPostsTotal, $currentPage);
 
         // 현재 페이지의 일반 게시글 시작 순번 계산
-        $currentNumber = $this->calculateStartNumber($normalPostsTotal, $currentPage, $perPage, $isDescending);
+        if ($totalIsExact) {
+            $currentNumber = $this->calculateStartNumber($normalPostsTotal, $currentPage, $perPage, $isDescending);
+        } else {
+            $normalCount = $this->collection->filter(
+                fn ($post) => ! $post->is_notice && $post->parent_id === null
+            )->count();
+            $offset = ($currentPage - 1) * $perPage;
+            $currentNumber = $isDescending ? $offset + $normalCount : $offset + 1;
+        }
 
         $data = $this->collection->map(function ($post) use ($request, &$currentNumber, $isDescending) {
             $postData = (new PostResource($post))->toListArray($request);
@@ -72,12 +95,41 @@ class PostCollection extends BaseApiCollection
             return $postData;
         });
 
-        $pagination = $this->buildPagination($normalPostsTotal, $currentPage, $perPage, $isDescending, $data->count());
+        $pagination = $this->buildPagination(
+            $normalPostsTotal,
+            $currentPage,
+            $perPage,
+            $isDescending,
+            $data->count(),
+            $totalIsExact,
+            $totalRelation
+        );
 
         return [
             'data' => $data,
             'pagination' => $pagination,
         ];
+    }
+
+    /** @return array{0: bool, 1: string} */
+    private function extractTotalMetadata(int $total, int $currentPage): array
+    {
+        foreach ($this->collection as $post) {
+            $exact = $post->getAttribute(self::INTERNAL_TOTAL_EXACT_ATTRIBUTE);
+            $relation = $post->getAttribute(self::INTERNAL_TOTAL_RELATION_ATTRIBUTE);
+            $post->offsetUnset(self::INTERNAL_TOTAL_EXACT_ATTRIBUTE);
+            $post->offsetUnset(self::INTERNAL_TOTAL_RELATION_ATTRIBUTE);
+
+            if ($exact !== null) {
+                return [(bool) $exact, (string) ($relation ?? ((bool) $exact ? 'eq' : 'gte'))];
+            }
+        }
+
+        if ($total === 0 && $currentPage > 1 && $this->collection->isEmpty()) {
+            return [false, 'unknown'];
+        }
+
+        return [true, 'eq'];
     }
 
     /**
@@ -188,15 +240,43 @@ class PostCollection extends BaseApiCollection
      * @param  int  $currentPageItemCount  현재 페이지 항목 수
      * @return array<string, mixed> 페이지네이션 정보
      */
-    private function buildPagination(int $total, int $currentPage, int $perPage, bool $isDescending, int $currentPageItemCount): array
-    {
+    private function buildPagination(
+        int $total,
+        int $currentPage,
+        int $perPage,
+        bool $isDescending,
+        int $currentPageItemCount,
+        bool $totalIsExact,
+        string $totalRelation
+    ): array {
         $lastPage = $total > 0 ? (int) ceil($total / $perPage) : 1;
+        if (! $totalIsExact) {
+            $lastPage = $this->hasMorePages()
+                ? max($lastPage, $currentPage + 1)
+                : max($lastPage, $currentPage);
+        }
 
-        [$from, $to] = $this->calculateFromTo($total, $currentPage, $perPage, $isDescending);
+        if ($totalIsExact) {
+            [$from, $to] = $this->calculateFromTo($total, $currentPage, $perPage, $isDescending);
+        } else {
+            $normalItemCount = $this->collection->filter(
+                fn ($post) => ! $post->is_notice && $post->parent_id === null
+            )->count();
+            $offset = ($currentPage - 1) * $perPage;
+            if ($normalItemCount === 0) {
+                [$from, $to] = [0, 0];
+            } elseif ($isDescending) {
+                [$from, $to] = [$offset + $normalItemCount, $offset + 1];
+            } else {
+                [$from, $to] = [$offset + 1, $offset + $normalItemCount];
+            }
+        }
 
-        return [
+        $pagination = [
             'total' => $total,
             'all_total' => $total,
+            'total_is_exact' => $totalIsExact,
+            'total_relation' => $totalRelation,
             'count' => $currentPageItemCount,
             'per_page' => $perPage,
             'current_page' => $currentPage,
@@ -205,6 +285,12 @@ class PostCollection extends BaseApiCollection
             'to' => $to,
             'has_more_pages' => $this->hasMorePages(),
         ];
+
+        if ($this->searchResult) {
+            $pagination['result_cap'] = (int) config('benchmark.board_search_sync_cap', 1000);
+        }
+
+        return $pagination;
     }
 
     /**

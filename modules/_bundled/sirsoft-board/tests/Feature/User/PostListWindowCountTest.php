@@ -18,7 +18,7 @@ class PostListWindowCountTest extends BoardTestCase
         config()->set('benchmark.board_list_variant', 'optimized');
     }
 
-    public function test_search_list_reuses_embedded_total_and_hides_internal_attribute(): void
+    public function test_search_list_returns_bounded_total_metadata_without_window_count(): void
     {
         $this->createAuthorMatches(7);
 
@@ -35,15 +35,30 @@ class PostListWindowCountTest extends BoardTestCase
 
         $response->assertOk();
         $this->assertSame(7, $response->json('data.pagination.total'));
+        $this->assertFalse($response->json('data.pagination.total_is_exact'));
+        $this->assertSame('gte', $response->json('data.pagination.total_relation'));
+        $this->assertSame(6, $response->json('data.pagination.from'));
+        $this->assertSame(4, $response->json('data.pagination.to'));
         $this->assertCount(3, $response->json('data.data'));
         $this->assertStringNotContainsString(self::INTERNAL_TOTAL_ATTRIBUTE, $response->getContent());
-        $this->assertTrue($queries->contains(
+        $this->assertFalse($queries->contains(
             fn (string $sql) => str_contains(strtolower($sql), 'count(*) over()')
         ));
         $this->assertFalse($queries->contains(
             fn (string $sql) => str_contains(strtolower($sql), 'board_posts')
                 && str_contains(strtolower($sql), 'count(*) as aggregate')
         ));
+    }
+
+    public function test_non_search_list_does_not_advertise_a_search_result_cap(): void
+    {
+        $this->createTestPost();
+
+        $response = $this->getJson(
+            "/api/modules/sirsoft-board/boards/{$this->board->slug}/posts?per_page=3&page=1"
+        );
+
+        $response->assertOk()->assertJsonMissingPath('data.pagination.result_cap');
     }
 
     public function test_empty_first_search_page_returns_zero_without_count_fallback(): void
@@ -68,7 +83,7 @@ class PostListWindowCountTest extends BoardTestCase
         ));
     }
 
-    public function test_empty_deep_search_page_falls_back_to_count(): void
+    public function test_empty_deep_search_page_never_falls_back_to_exact_count(): void
     {
         $this->createAuthorMatches(7);
 
@@ -84,11 +99,32 @@ class PostListWindowCountTest extends BoardTestCase
         DB::disableQueryLog();
 
         $response->assertOk();
-        $this->assertSame(7, $response->json('data.pagination.total'));
-        $this->assertTrue($queries->contains(
+        $this->assertSame(0, $response->json('data.pagination.total'));
+        $this->assertFalse($response->json('data.pagination.total_is_exact'));
+        $this->assertSame('unknown', $response->json('data.pagination.total_relation'));
+        $this->assertFalse($queries->contains(
             fn (string $sql) => str_contains(strtolower($sql), 'board_posts')
                 && str_contains(strtolower($sql), 'count(*) as aggregate')
         ));
+    }
+
+    public function test_all_search_cap_never_exposes_the_sentinel_page(): void
+    {
+        config()->set('benchmark.board_search_sync_cap', 10);
+        $this->createAuthorMatches(12);
+
+        $response = $this->getJson(
+            "/api/modules/sirsoft-board/boards/{$this->board->slug}/posts"
+            .'?search=windowauthor&per_page=10&page=1'
+        );
+
+        $response->assertOk();
+        $this->assertSame(10, $response->json('data.pagination.total'));
+        $this->assertFalse($response->json('data.pagination.total_is_exact'));
+        $this->assertSame('gte', $response->json('data.pagination.total_relation'));
+        $this->assertFalse($response->json('data.pagination.has_more_pages'));
+        $this->assertSame(10, $response->json('data.pagination.result_cap'));
+        $this->assertCount(10, $response->json('data.data'));
     }
 
     private function createAuthorMatches(int $count): void

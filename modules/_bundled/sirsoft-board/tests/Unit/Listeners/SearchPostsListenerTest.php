@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Gate;
 use Modules\Sirsoft\Board\Listeners\SearchPostsListener;
 use Modules\Sirsoft\Board\Services\BoardService;
 use Modules\Sirsoft\Board\Services\PostService;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Tests\TestCase;
 
 /**
@@ -32,7 +33,7 @@ class SearchPostsListenerTest extends TestCase
     /**
      * getSubscribedHooks()가 올바른 훅 목록을 반환하는지 확인
      */
-    public function test_getSubscribedHooks_returns_correct_hooks(): void
+    public function test_get_subscribed_hooks_returns_correct_hooks(): void
     {
         $hooks = SearchPostsListener::getSubscribedHooks();
 
@@ -48,7 +49,7 @@ class SearchPostsListenerTest extends TestCase
     /**
      * 권한 있는 게시판만 검색 결과에 포함되는지 확인
      */
-    public function test_searchPosts_filters_boards_by_permission(): void
+    public function test_search_posts_filters_boards_by_permission(): void
     {
         $user = User::factory()->make(['id' => 1001]);
 
@@ -90,13 +91,13 @@ class SearchPostsListenerTest extends TestCase
             ->willReturn([]);
 
         $context = [
-            'type'     => 'all',
-            'q'        => '테스트',
-            'sort'     => 'relevance',
-            'page'     => 1,
+            'type' => 'all',
+            'q' => '테스트',
+            'sort' => 'relevance',
+            'page' => 1,
             'per_page' => 10,
-            'user'     => $user,
-            'request'  => null,
+            'user' => $user,
+            'request' => null,
         ];
 
         $result = $this->listener->searchPosts([], $context);
@@ -108,7 +109,7 @@ class SearchPostsListenerTest extends TestCase
     /**
      * 모든 게시판 권한이 없을 때 빈 결과를 반환하는지 확인
      */
-    public function test_searchPosts_returns_empty_when_all_boards_denied(): void
+    public function test_search_posts_returns_empty_when_all_boards_denied(): void
     {
         $user = User::factory()->make();
 
@@ -123,9 +124,9 @@ class SearchPostsListenerTest extends TestCase
 
         $results = [];
         $context = [
-            'type'    => 'all',
-            'q'       => '테스트',
-            'user'    => $user,
+            'type' => 'all',
+            'q' => '테스트',
+            'user' => $user,
             'request' => null,
         ];
 
@@ -141,7 +142,7 @@ class SearchPostsListenerTest extends TestCase
     /**
      * 빈 검색어일 때 스킵하는지 확인
      */
-    public function test_searchPosts_skips_when_keyword_is_empty(): void
+    public function test_search_posts_skips_when_keyword_is_empty(): void
     {
         $results = [];
         $context = ['type' => 'all', 'q' => ''];
@@ -151,10 +152,32 @@ class SearchPostsListenerTest extends TestCase
         $this->assertArrayNotHasKey('posts', $result);
     }
 
+    public function test_search_posts_rethrows_search_concurrency_limit(): void
+    {
+        $user = User::factory()->make(['id' => 1002]);
+        $board = $this->createBoardStub(1, 'notice', '공지사항');
+        $this->boardService
+            ->method('getActiveBoardsForSearch')
+            ->willReturn(new Collection([$board]));
+        Gate::before(fn ($gateUser) => $gateUser->id === $user->id ? true : null);
+        $this->postService
+            ->method('searchAcrossBoards')
+            ->willThrowException(new TooManyRequestsHttpException(1, 'busy'));
+
+        $this->expectException(TooManyRequestsHttpException::class);
+
+        $this->listener->searchPosts([], [
+            'type' => 'posts',
+            'q' => '테스트',
+            'user' => $user,
+            'request' => null,
+        ]);
+    }
+
     /**
      * formatPostResult()가 created_at(Y-m-d H:i:s 포맷)과 created_at_formatted(표시용) 필드를 반환하는지 확인
      */
-    public function test_formatPostResult_includes_created_at_and_created_at_formatted(): void
+    public function test_format_post_result_includes_created_at_and_created_at_formatted(): void
     {
         $user = User::factory()->make(['id' => 9999]);
 
@@ -180,13 +203,13 @@ class SearchPostsListenerTest extends TestCase
         Gate::before(fn ($u) => $u->id === 9999 ? true : null);
 
         $context = [
-            'type'     => 'all',
-            'q'        => '테스트',
-            'sort'     => 'relevance',
-            'page'     => 1,
+            'type' => 'all',
+            'q' => '테스트',
+            'sort' => 'relevance',
+            'page' => 1,
             'per_page' => 10,
-            'user'     => $user,
-            'request'  => null,
+            'user' => $user,
+            'request' => null,
         ];
 
         $result = $this->listener->searchPosts([], $context);
@@ -209,10 +232,9 @@ class SearchPostsListenerTest extends TestCase
     /**
      * id를 포함하는 Board 스텁 생성
      *
-     * @param int    $id   게시판 ID
-     * @param string $slug 게시판 슬러그
-     * @param string $name 게시판 이름
-     * @return object
+     * @param  int  $id  게시판 ID
+     * @param  string  $slug  게시판 슬러그
+     * @param  string  $name  게시판 이름
      */
     private function createBoardStub(int $id, string $slug, string $name): object
     {
@@ -241,10 +263,9 @@ class SearchPostsListenerTest extends TestCase
     /**
      * board relation이 포함된 Post 스텁 생성
      *
-     * @param int    $id        게시글 ID
-     * @param string $boardSlug 게시판 슬러그
-     * @param string $boardName 게시판 이름
-     * @return object
+     * @param  int  $id  게시글 ID
+     * @param  string  $boardSlug  게시판 슬러그
+     * @param  string  $boardName  게시판 이름
      */
     private function createPostStub(int $id, string $boardSlug, string $boardName): object
     {
@@ -267,16 +288,16 @@ class SearchPostsListenerTest extends TestCase
         };
 
         return (object) [
-            'id'             => $id,
-            'title'          => '테스트 게시글',
-            'content'        => '테스트 내용',
-            'content_mode'   => 'text',
-            'author_name'    => '작성자',
-            'created_at'     => now(),
-            'view_count'     => 5,
+            'id' => $id,
+            'title' => '테스트 게시글',
+            'content' => '테스트 내용',
+            'content_mode' => 'text',
+            'author_name' => '작성자',
+            'created_at' => now(),
+            'view_count' => 5,
             'comments_count' => 2,
-            'user'           => null,
-            'board'          => $boardStub,
+            'user' => null,
+            'board' => $boardStub,
         ];
     }
 }

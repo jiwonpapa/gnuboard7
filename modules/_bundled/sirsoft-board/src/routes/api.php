@@ -15,6 +15,7 @@ use Modules\Sirsoft\Board\Http\Controllers\User\CommentController as UserComment
 use Modules\Sirsoft\Board\Http\Controllers\User\PostController as UserPostController;
 use Modules\Sirsoft\Board\Http\Controllers\User\ReportController as UserReportController;
 use Modules\Sirsoft\Board\Http\Controllers\User\UserActivityController;
+use Modules\Sirsoft\Board\Http\Middleware\SearchRequestThrottle;
 
 /*
 |--------------------------------------------------------------------------
@@ -289,7 +290,10 @@ Route::prefix('admin/board/{slug}/posts')->middleware(['auth:sanctum', 'admin', 
 
     // 게시글 목록 조회
     Route::get('/', [AdminPostController::class, 'index'])
-        ->middleware('permission:admin,sirsoft-board.{slug}.admin.posts.read')
+        ->middleware([
+            SearchRequestThrottle::class,
+            'permission:admin,sirsoft-board.{slug}.admin.posts.read',
+        ])
         ->name('index');
 
     // 게시글 상세 조회
@@ -417,7 +421,10 @@ Route::prefix('boards/{slug}/posts')->middleware(['optional.sanctum', 'throttle:
 
     // 게시글 목록 조회
     Route::get('/', [UserPostController::class, 'index'])
-        ->middleware('permission:user,sirsoft-board.{slug}.posts.read')
+        ->middleware([
+            SearchRequestThrottle::class,
+            'permission:user,sirsoft-board.{slug}.posts.read',
+        ])
         ->name('index');
 
     // 게시글 상세 조회

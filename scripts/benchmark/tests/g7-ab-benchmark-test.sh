@@ -150,6 +150,7 @@ case "${action}" in
         fi
         printf '1,1,2026-07-16T10:00:01+09:00,2,50.000,70.000,20.000,0.5,1024,0,\n'
         printf '2,%s,2026-07-16T10:01:20+09:00,2,60.000,80.000,30.000,1.0,900,0,\n' "${window}"
+        sleep 1
         ;;
     cpu-stop)
         token="${args[action_index + 2]}"
@@ -237,21 +238,25 @@ esac
 dropped="\${FAKE_K6_DROPPED:-0}"
 hot_duration="\${HOT_DURATION%s}"
 hot_time_unit="\${HOT_TIME_UNIT%s}"
-iterations=\$(((HOT_ARRIVAL_RATE * hot_duration + hot_time_unit - 1) / hot_time_unit + 1 - dropped))
+include_risky="\${INCLUDE_RISKY:-0}"
+risky_route="\${RISKY_ROUTE:-board_search}"
+iterations=\$((HOT_ARRIVAL_RATE * hot_duration / hot_time_unit + 1 + include_risky - dropped))
 invalid="\${FAKE_K6_INVALID_ROUTE:-}"
 "${REAL_JQ}" -n \
     --argjson duration "\${duration}" \
     --argjson dropped "\${dropped}" \
     --argjson iterations "\${iterations}" \
+    --argjson include_risky "\${include_risky}" \
+    --arg risky_route "\${risky_route}" \
     --arg invalid "\${invalid}" '
-    [
+    ([
       "home", "home_stats", "home_recent", "home_popular_boards", "home_boards",
-      "board_list_p1", "board_list_p2", "board_deep", "board_detail", "board_navigation",
-      "board_search", "global_search", "shop_home_categories", "shop_list_p1", "shop_list_p2",
+      "board_list_p1", "board_list_p2", "board_detail", "board_navigation",
+      "shop_home_categories", "shop_list_p1", "shop_list_p2",
       "shop_home_recent", "shop_home_popular", "shop_home_new", "shop_detail",
       "shop_detail_reviews", "shop_detail_inquiries", "shop_detail_coupons",
       "shop_search_p1", "shop_search_p2"
-    ] as \$keys
+    ] + (if \$include_risky == 1 then [\$risky_route] else [] end)) as \$keys
     | reduce \$keys[] as \$key (
         {metrics: {
           http_req_failed: {values: {rate: 0}},
@@ -339,10 +344,13 @@ assert_released "${SUCCESS_STATE}"
     and .metadata.hot_vus == 1
     and .metadata.hot_arrival_rate_per_second == 0.2
     and .metadata.hot_time_unit_seconds == 5
-    and .metadata.expected_hot_iterations_per_run == 1
+    and .metadata.expected_hot_iterations_per_run == 2
+    and .metadata.include_risky == false
+    and .metadata.route_count == 21
+    and (.metadata | has("risky_vus") | not)
     and .metadata.cpu_measurement_window_seconds == 80
     and .metadata.process_cpu_basis == "percentage of total host CPU capacity"
-    and (.routes | length == 24)
+    and (.routes | length == 21)
     and ([.routes[].baseline.valid, .routes[].optimized.valid] | all)
     and ([.routes[].p95_change_pct] | all(. == -50))
     and ([.cpu[].schedule_valid] | all)
@@ -351,6 +359,24 @@ assert_released "${SUCCESS_STATE}"
     and (.cpu[0].host_busy_avg_pct == 55)
     and (.cpu[0].php_fpm_cpu_avg_pct == 75)
 ' "${SUCCESS_DIR}/comparison.json" >/dev/null || fail 'comparison JSON is invalid'
+
+RISKY_DIR="${WORK_DIR}/risky"
+RISKY_STATE="${WORK_DIR}/risky-state"
+RISKY_TOGGLE_LOG="${WORK_DIR}/risky-toggle.log"
+RISKY_SSH_LOG="${WORK_DIR}/risky-ssh.log"
+run_harness "${RISKY_DIR}" "${RISKY_STATE}" "${RISKY_TOGGLE_LOG}" "${RISKY_SSH_LOG}" \
+    --include-risky >/dev/null 2>&1
+"${REAL_JQ}" -e '
+    .metadata.include_risky == true
+    and .metadata.route_count == 22
+    and .metadata.risky_vus == 1
+    and .metadata.risky_iterations_per_run == 1
+    and .metadata.risky_route == "board_search"
+    and (.routes | length == 22)
+    and ([.routes[] | select(.workload == "risky-single-vu")] | length == 1)
+    and (.targets.board_search | length >= 2)
+    and (.targets.global_search | length >= 2)
+' "${RISKY_DIR}/comparison.json" >/dev/null || fail 'risky opt-in comparison JSON is invalid'
 grep -q '^off .*--parent-lock-token g7-ab-' "${SUCCESS_TOGGLE_LOG}" || fail 'OFF did not borrow the A/B lock token'
 grep -q '^on .*--parent-lock-token g7-ab-' "${SUCCESS_TOGGLE_LOG}" || fail 'ON did not borrow the A/B lock token'
 grep -q -- '--board-slug freebd' "${SUCCESS_TOGGLE_LOG}" || fail 'A/B board slug was not passed to toggle smoke'
@@ -538,7 +564,9 @@ grep -q -- '--recover-fail-closed' "${LIVE_FATAL_TOGGLE_LOG}" \
 
 if command -v k6 >/dev/null 2>&1; then
     threshold_count="$(k6 inspect "${K6_SCRIPT}" | "${REAL_JQ}" '.thresholds | length')"
-    [[ "${threshold_count}" == 26 ]] || fail "unexpected k6 threshold count: ${threshold_count}"
+    [[ "${threshold_count}" == 23 ]] || fail "unexpected safe k6 threshold count: ${threshold_count}"
+    risky_threshold_count="$(k6 inspect -e INCLUDE_RISKY=1 "${K6_SCRIPT}" | "${REAL_JQ}" '.thresholds | length')"
+    [[ "${risky_threshold_count}" == 24 ]] || fail "unexpected risky k6 threshold count: ${risky_threshold_count}"
 fi
 grep -Fq 'payload?.data?.reviews?.data' "${K6_SCRIPT}" \
     || fail 'review semantic validator does not follow the public API shape'

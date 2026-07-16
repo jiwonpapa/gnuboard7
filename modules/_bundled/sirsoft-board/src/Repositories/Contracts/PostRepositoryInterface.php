@@ -233,6 +233,13 @@ interface PostRepositoryInterface
     public function countAcrossBoards(array $boardIds, string $keyword): int;
 
     /**
+     * 동기 cap 안에서 여러 게시판 검색 건수와 정확성 메타를 반환합니다.
+     *
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int}
+     */
+    public function countAcrossBoardsBounded(array $boardIds, string $keyword): array;
+
+    /**
      * 사용자의 게시글 활동 통계를 조회합니다.
      *
      * 작성한 게시글 수, 작성한 댓글 수, 총 조회수를 반환합니다.

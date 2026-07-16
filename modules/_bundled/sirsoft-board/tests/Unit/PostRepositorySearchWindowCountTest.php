@@ -24,7 +24,7 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         $this->repository = app(PostRepository::class);
     }
 
-    public function test_search_by_keyword_gets_total_and_page_items_from_one_post_query(): void
+    public function test_search_by_keyword_uses_id_first_lower_bound_without_window_count(): void
     {
         $this->createMatchingPosts(7);
         $this->createTestPost(['title' => 'unrelated title', 'content' => 'unrelated content']);
@@ -37,10 +37,15 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         $queries = $this->postQueries();
         DB::disableQueryLog();
 
-        $this->assertSame(7, $result['total']);
+        $this->assertSame(4, $result['total']);
+        $this->assertFalse($result['total_is_exact']);
+        $this->assertSame('gte', $result['total_relation']);
+        $this->assertTrue($result['has_more_pages']);
         $this->assertCount(3, $result['items']);
-        $this->assertCount(1, $queries);
-        $this->assertStringContainsString('count(*) over()', strtolower($queries->first()));
+        $this->assertCount(2, $queries);
+        $this->assertFalse($queries->contains(
+            fn (string $sql) => str_contains(strtolower($sql), 'count(*) over()')
+        ));
         $this->assertWindowAttributeRemoved($result['items']);
     }
 
@@ -62,9 +67,12 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         DB::disableQueryLog();
 
         $this->assertSame(7, $result['total']);
+        $this->assertFalse($result['total_is_exact']);
         $this->assertCount(3, $result['items']);
-        $this->assertCount(1, $queries);
-        $this->assertStringContainsString('count(*) over()', strtolower($queries->first()));
+        $this->assertCount(2, $queries);
+        $this->assertFalse($queries->contains(
+            fn (string $sql) => str_contains(strtolower($sql), 'count(*) over()')
+        ));
         $this->assertWindowAttributeRemoved($result['items']);
     }
 
@@ -84,12 +92,13 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         DB::disableQueryLog();
 
         $this->assertSame(0, $result['total']);
+        $this->assertTrue($result['total_is_exact']);
         $this->assertCount(0, $result['items']);
         $this->assertCount(1, $queries);
-        $this->assertStringContainsString('count(*) over()', strtolower($queries->first()));
+        $this->assertStringNotContainsString('count(*) over()', strtolower($queries->first()));
     }
 
-    public function test_optimized_empty_deep_page_uses_count_fallback(): void
+    public function test_optimized_empty_deep_page_does_not_run_count_fallback(): void
     {
         $this->createMatchingPosts(7);
 
@@ -107,11 +116,39 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         DB::disableQueryLog();
 
         $this->assertSame(7, $result['total']);
+        $this->assertTrue($result['total_is_exact']);
         $this->assertCount(0, $result['items']);
-        $this->assertCount(2, $queries);
-        $this->assertTrue($queries->contains(
+        $this->assertCount(1, $queries);
+        $this->assertFalse($queries->contains(
             fn (string $sql) => str_contains(strtolower($sql), 'count(*) as aggregate')
         ));
+    }
+
+    public function test_search_cap_hides_the_sentinel_and_stops_pagination_at_the_boundary(): void
+    {
+        config()->set('benchmark.board_search_sync_cap', 10);
+        $this->createMatchingPosts(12);
+
+        $result = $this->repository->searchAcrossBoards(
+            [$this->board->id],
+            'windowneedle',
+            perPage: 10,
+            page: 1
+        );
+        $count = $this->repository->countAcrossBoardsBounded(
+            [$this->board->id],
+            'windowneedle'
+        );
+
+        $this->assertSame(10, $result['total']);
+        $this->assertFalse($result['total_is_exact']);
+        $this->assertSame('gte', $result['total_relation']);
+        $this->assertFalse($result['has_more_pages']);
+        $this->assertSame(10, $result['result_cap']);
+        $this->assertCount(10, $result['items']);
+        $this->assertSame(10, $count['total']);
+        $this->assertFalse($count['total_is_exact']);
+        $this->assertSame(10, $count['result_cap']);
     }
 
     public function test_baseline_search_methods_keep_separate_count_and_item_queries(): void
@@ -132,10 +169,20 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
             page: 1
         );
         $acrossQueries = $this->postQueries();
+
+        DB::flushQueryLog();
+        $count = $this->repository->countAcrossBoardsBounded(
+            [$this->board->id],
+            'windowneedle'
+        );
         DB::disableQueryLog();
 
         $this->assertSame(4, $singleBoard['total']);
         $this->assertSame(4, $acrossBoards['total']);
+        $this->assertSame(4, $count['total']);
+        $this->assertTrue($count['total_is_exact']);
+        $this->assertSame('eq', $count['total_relation']);
+        $this->assertArrayNotHasKey('result_cap', $count);
         $this->assertCount(2, $singleQueries);
         $this->assertCount(2, $acrossQueries);
         $this->assertFalse($singleQueries->contains(

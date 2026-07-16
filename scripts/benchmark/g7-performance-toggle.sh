@@ -1210,10 +1210,13 @@ extract_status() {
 }
 
 component_state() {
-    local component="$1" file="$2" source integrity runtime schema shared_config
+    local component="$1" file="$2" source source_ref integrity runtime schema shared_config
     local module_sync module_version_sync template_sync module php
     local benchmark_sync benchmark_version_sync
+    local search_source search_source_ref search_config search_algorithm search_schema
+    local search_sync_cap search_safety_guard search_safety_persistence
     source="$(extract_status "${file}" source)"
+    source_ref="$(extract_status "${file}" source_ref)"
     integrity="$(extract_status "${file}" source_integrity)"
     runtime="$(extract_status "${file}" runtime)"
     shared_config="$(extract_status "${file}" shared_config)"
@@ -1256,6 +1259,34 @@ component_state() {
                     || "${benchmark_version_sync}" == verified \
                     || "${benchmark_version_sync}" == not-installed ]] \
                     || { printf 'drift'; return; }
+                search_source="$(extract_status "${file}" 'search.source')"
+                search_source_ref="$(extract_status "${file}" 'search.source_ref')"
+                search_config="$(extract_status "${file}" 'search.config')"
+                search_algorithm="$(extract_status "${file}" 'search.algorithm')"
+                search_schema="$(extract_status "${file}" 'search.schema')"
+                search_sync_cap="$(extract_status "${file}" 'search.sync_cap')"
+                search_safety_guard="$(extract_status "${file}" 'search.safety_guard')"
+                search_safety_persistence="$(extract_status "${file}" 'search.safety_guard_persistence')"
+                [[ "${source_ref}" =~ ^[0-9a-f]{40}$ \
+                    && "${search_source_ref}" == "${source_ref}" \
+                    && "${search_source}" == "${source}" \
+                    && "${search_config}" == "${runtime}" \
+                    && "${search_algorithm}" == "${runtime}" ]] \
+                    || { printf 'drift'; return; }
+                if [[ "${source}" == optimized-capable ]]; then
+                    [[ "${search_sync_cap}" == 1000 \
+                        && "${search_safety_guard}" == enabled \
+                        && "${search_safety_persistence}" == persisted ]] \
+                        || { printf 'drift'; return; }
+                fi
+                if [[ "${runtime}" == optimized ]]; then
+                    [[ "${search_schema}" == optimized ]] \
+                        || { printf 'drift'; return; }
+                elif [[ "${runtime}" == baseline ]]; then
+                    [[ "${search_schema}" == baseline-dormant \
+                        || "${search_schema}" == original ]] \
+                        || { printf 'drift'; return; }
+                fi
             fi
             if [[ "${source}" == optimized-capable && "${runtime}" == optimized && "${schema}" == optimized ]]; then
                 printf 'optimized'
@@ -1272,7 +1303,7 @@ component_state() {
 
 print_component_status() {
     local component="$1" file="$2" key value
-    local -a keys=(source source_integrity runtime schema shared_config active_module_sync active_template_sync module_version_sync module active_benchmark_sync benchmark_module_version_sync benchmark_module php_fpm)
+    local -a keys=(source source_ref source_integrity runtime schema search.source search.source_ref search.config search.algorithm search.schema search.sync_cap search.ft_result_cache_limit search.safety_guard search.safety_guard_persistence shared_config active_module_sync active_template_sync module_version_sync module active_benchmark_sync benchmark_module_version_sync benchmark_module php_fpm)
     for key in "${keys[@]}"; do
         value="$(extract_status "${file}" "${key}")"
         [[ -z "${value}" ]] || printf '%s.%s=%s\n' "${component}" "${key}" "${value}"

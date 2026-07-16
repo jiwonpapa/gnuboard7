@@ -154,6 +154,12 @@ class PostService
             if ($posts->currentPage() === 1 && $posts->items() === []) {
                 return 0;
             }
+
+            // 깊은 빈 페이지에서 exact COUNT를 다시 실행하면 대용량 검색이 되살아납니다.
+            // 응답 Resource가 total_relation=unknown으로 명시하므로 안전하게 0을 반환합니다.
+            if ($posts->items() === []) {
+                return 0;
+            }
         }
 
         // 필터가 적용된 목록과 삭제글 포함 목록은 조건별 단기 캐시 사용
@@ -1185,6 +1191,7 @@ class PostService
             'latest' => ['created_at', 'desc'],
             'oldest' => ['created_at', 'asc'],
             'views', 'popular' => ['view_count', 'desc'],
+            'relevance' => ['relevance', 'desc'],
             default => ['created_at', 'desc'],
         };
     }
@@ -1243,6 +1250,16 @@ class PostService
     public function countAcrossBoards(array $boardIds, string $keyword): int
     {
         return $this->postRepository->countAcrossBoards($boardIds, $keyword);
+    }
+
+    /**
+     * 여러 게시판의 동기 검색 건수를 cap 안에서 조회하고 정확성 메타를 반환합니다.
+     *
+     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int}
+     */
+    public function countAcrossBoardsBounded(array $boardIds, string $keyword): array
+    {
+        return $this->postRepository->countAcrossBoardsBounded($boardIds, $keyword);
     }
 
     // =========================================================================

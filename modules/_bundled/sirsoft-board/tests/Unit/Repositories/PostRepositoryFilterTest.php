@@ -176,9 +176,9 @@ class PostRepositoryFilterTest extends BoardTestCase
     }
 
     /**
-     * optimized all 검색은 FULLTEXT/작성자/회원 branch를 derived UNION으로 분리합니다.
+     * optimized all 검색은 FULLTEXT/작성자/회원 branch를 각각 제한합니다.
      */
-    public function test_optimized_all_search_uses_split_id_union_and_keeps_author_match(): void
+    public function test_optimized_all_search_uses_bounded_branches_and_keeps_author_match(): void
     {
         config()->set('benchmark.board_list_variant', 'optimized');
 
@@ -205,18 +205,40 @@ class PostRepositoryFilterTest extends BoardTestCase
         $ids = collect($result->items())->pluck('id')->map(fn ($id) => (int) $id)->all();
         $this->assertContains($matchedId, $ids);
 
-        $searchSql = collect(DB::getQueryLog())
-            ->pluck('query')
-            ->first(fn ($sql) => str_contains(strtolower($sql), ' union '));
+        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
+        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, ' union ')));
+        $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'board_post_author_terms')));
+        $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'users')));
+        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, 'count(*) over()')));
+        $this->assertTrue($queries->filter(fn ($sql) => str_contains($sql, 'board_posts'))->every(
+            fn ($sql) => ! str_contains($sql, ' union ')
+        ));
+    }
 
-        $this->assertNotNull($searchSql, 'optimized all 검색은 ID UNION derived table 경로를 사용해야 합니다.');
-        $this->assertStringContainsString('board_posts', $searchSql);
-        $this->assertStringContainsString('board_post_author_terms', $searchSql);
-        $this->assertStringContainsString('users', $searchSql);
-        $this->assertStringContainsString('board_search_users', $searchSql);
-        $this->assertStringContainsString('board_search_user_posts', $searchSql);
-        $this->assertStringNotContainsString('JOIN_ORDER', $searchSql);
-        $this->assertStringNotContainsString('straight join', strtolower($searchSql));
+    public function test_optimized_explicit_search_fields_refuse_pages_beyond_the_result_cap(): void
+    {
+        config()->set('benchmark.board_list_variant', 'optimized');
+        config()->set('benchmark.board_search_sync_cap', 10);
+
+        foreach (['title_content', 'author'] as $searchField) {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+
+            $result = $this->repository->paginate($this->board->slug, [
+                'search' => 'needle',
+                'search_field' => $searchField,
+                'page' => 2,
+            ], 10, board: $this->board);
+
+            $postQueries = collect(DB::getQueryLog())
+                ->pluck('query')
+                ->filter(fn (string $sql) => str_contains(strtolower($sql), 'board_posts'));
+            DB::disableQueryLog();
+
+            $this->assertEmpty($result->items());
+            $this->assertFalse($result->hasMorePages());
+            $this->assertCount(0, $postQueries, "{$searchField} cap 밖 페이지는 게시글 쿼리를 실행하지 않아야 합니다.");
+        }
     }
 
     /**

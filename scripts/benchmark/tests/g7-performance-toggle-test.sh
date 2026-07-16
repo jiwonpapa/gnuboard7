@@ -70,17 +70,33 @@ cat > "${FAKE_BIN}/board" <<'EOF'
 set -euo pipefail
 printf 'board %s\n' "$*" >> "${FAKE_CALL_LOG}"
 [[ "${1:-}" == status ]] || exit 0
+runtime="${FAKE_BOARD_RUNTIME:-optimized}"
+search_schema="${FAKE_BOARD_SEARCH_SCHEMA:-}"
+if [[ -z "${search_schema}" ]]; then
+    search_schema=optimized
+    [[ "${runtime}" == optimized ]] || search_schema=baseline-dormant
+fi
 cat <<STATUS
 source=optimized-capable
+source_ref=${FAKE_BOARD_SOURCE_REF:-0123456789abcdef0123456789abcdef01234567}
 source_integrity=${FAKE_BOARD_INTEGRITY:-verified}
-runtime=${FAKE_BOARD_RUNTIME:-optimized}
+runtime=${runtime}
 schema=${FAKE_BOARD_SCHEMA:-optimized}
+search.source=${FAKE_BOARD_SEARCH_SOURCE:-optimized-capable}
+search.source_ref=${FAKE_BOARD_SEARCH_SOURCE_REF:-0123456789abcdef0123456789abcdef01234567}
+search.config=${FAKE_BOARD_SEARCH_CONFIG:-${runtime}}
+search.algorithm=${FAKE_BOARD_SEARCH_ALGORITHM:-${runtime}}
+search.schema=${search_schema}
+search.sync_cap=${FAKE_BOARD_SEARCH_SYNC_CAP:-1000}
+search.ft_result_cache_limit=${FAKE_BOARD_FT_RESULT_CACHE_LIMIT:-33554432}
+search.safety_guard=${FAKE_BOARD_SAFETY_GUARD:-enabled}
+search.safety_guard_persistence=${FAKE_BOARD_SAFETY_PERSISTENCE:-persisted}
 active_module_sync=verified
 module_version_sync=${FAKE_BOARD_VERSION_SYNC:-verified}
-module=sirsoft-board 1.1.2 active
+module=sirsoft-board 1.1.3 active
 active_benchmark_sync=${FAKE_BENCHMARK_SYNC:-verified}
 benchmark_module_version_sync=${FAKE_BENCHMARK_VERSION_SYNC:-verified}
-benchmark_module=sirsoft-benchmark 0.2.5 active
+benchmark_module=sirsoft-benchmark 0.2.6 active
 shared_config=present
 php_fpm=active
 STATUS
@@ -161,6 +177,10 @@ assert_text_order() {
 output="$(run_harness status --strict)"
 assert_contains "${output}" 'common.state=optimized'
 assert_contains "${output}" 'board.state=optimized'
+assert_contains "${output}" 'board.source_ref=0123456789abcdef0123456789abcdef01234567'
+assert_contains "${output}" 'board.search.config=optimized'
+assert_contains "${output}" 'board.search.safety_guard=enabled'
+assert_contains "${output}" 'board.search.schema=optimized'
 assert_contains "${output}" 'ecommerce.state=optimized'
 assert_contains "${output}" 'overall=optimized'
 
@@ -174,6 +194,8 @@ output="$(
 )"
 assert_contains "${output}" 'common.state=baseline'
 assert_contains "${output}" 'board.state=baseline'
+assert_contains "${output}" 'board.search.config=baseline'
+assert_contains "${output}" 'board.search.schema=baseline-dormant'
 assert_contains "${output}" 'ecommerce.state=baseline'
 assert_contains "${output}" 'overall=baseline'
 
@@ -184,6 +206,30 @@ set -e
 [[ "${result}" == 2 ]] || { printf 'strict mixed status must exit 2, got %s\n' "${result}" >&2; exit 1; }
 assert_contains "${output}" 'board.state=mixed'
 assert_contains "${output}" 'overall=mixed'
+
+set +e
+output="$(FAKE_BOARD_SEARCH_SCHEMA=baseline-dormant run_harness status --strict 2>&1)"
+result=$?
+set -e
+[[ "${result}" == 2 ]] || { printf 'search schema drift must exit 2, got %s\n' "${result}" >&2; exit 1; }
+assert_contains "${output}" 'board.search.schema=baseline-dormant'
+assert_contains "${output}" 'board.state=drift'
+
+set +e
+output="$(FAKE_BOARD_SAFETY_GUARD=drifted run_harness status --strict 2>&1)"
+result=$?
+set -e
+[[ "${result}" == 2 ]] || { printf 'search safety guard drift must exit 2, got %s\n' "${result}" >&2; exit 1; }
+assert_contains "${output}" 'board.search.safety_guard=drifted'
+assert_contains "${output}" 'board.state=drift'
+
+set +e
+output="$(FAKE_BOARD_SAFETY_PERSISTENCE=unsupported run_harness status --strict 2>&1)"
+result=$?
+set -e
+[[ "${result}" == 2 ]] || { printf 'non-persistent search guard must exit 2, got %s\n' "${result}" >&2; exit 1; }
+assert_contains "${output}" 'board.search.safety_guard_persistence=unsupported'
+assert_contains "${output}" 'board.state=drift'
 
 set +e
 output="$(FAKE_ECOMMERCE_INTEGRITY=drifted run_harness status --strict 2>&1)"
@@ -401,6 +447,13 @@ assert_file_contains "${BOARD_HARNESS}" "stat -c '%u'"
 assert_file_contains "${BOARD_HARNESS}" "deadline=\$((SECONDS + 60))"
 assert_file_contains "${BOARD_HARNESS}" 'baseline runtime activation timed out'
 assert_file_contains "${BOARD_HARNESS}" 'G7_BOARD_PERF_BENCHMARK_BASELINE_REF'
+assert_file_contains "${BOARD_HARNESS}" 'search.source_ref='
+assert_file_contains "${BOARD_HARNESS}" 'search.config='
+assert_file_contains "${BOARD_HARNESS}" 'search.schema='
+assert_file_contains "${BOARD_HARNESS}" 'ft_board_posts_title_content'
+assert_file_contains "${BOARD_HARNESS}" 'WITH PARSER.*ngram'
+assert_file_contains "${BOARD_HARNESS}" 'idx_board_posts_board_author'
+assert_file_contains "${BOARD_HARNESS}" "SEQ_IN_INDEX=1 AND COLUMN_NAME='user_id'"
 # 하네스 배열 확장문 자체가 들어있는지 검사합니다.
 # shellcheck disable=SC2016
 assert_file_contains "${BOARD_HARNESS}" 'for path in "${BENCHMARK_PATHS[@]}"'
@@ -467,6 +520,14 @@ baseline_extract="${TMP_ROOT}/board-baseline"
 mkdir -p "${baseline_extract}"
 tar -xzf "${baseline_archive}" -C "${baseline_extract}"
 assert_file_contains "${baseline_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-benchmark/module.json'
+assert_file_contains "${baseline_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-board/src/Listeners/SearchPostsListener.php'
+assert_file_contains "${baseline_extract}/.harness/source.sha256" 'app/Http/Requests/Public/SearchRequest.php'
+assert_file_contains "${baseline_extract}/.harness/source.sha256" 'app/Search/Engines/DatabaseFulltextEngine.php'
+assert_file_contains "${baseline_extract}/.harness/source.sha256" 'routes/api.php'
+assert_file_contains "${baseline_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-board/src/routes/api.php'
+assert_file_not_contains "${baseline_extract}/.harness/source.sha256" 'SearchRequestThrottle.php'
+[[ "$(<"${baseline_extract}/.harness/source-ref")" =~ ^[0-9a-f]{40}$ ]] \
+    || fail 'baseline archive source ref is invalid'
 assert_file_contains "${baseline_extract}/modules/_bundled/sirsoft-benchmark/module.json" '"version": "0.2.4"'
 assert_file_not_contains "${baseline_extract}/modules/_bundled/sirsoft-benchmark/src/Services/Support/BoardCounterSyncService.php" 'syncAuthorTermsForBoard'
 
@@ -479,8 +540,13 @@ optimized_extract="${TMP_ROOT}/board-optimized"
 mkdir -p "${optimized_extract}"
 tar -xzf "${optimized_archive}" -C "${optimized_extract}"
 assert_file_contains "${optimized_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-benchmark/src/Services/Support/BoardCounterSyncService.php'
-assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-board/module.json" '"version": "1.1.2"'
-assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-benchmark/module.json" '"version": "0.2.5"'
+[[ "$(<"${optimized_extract}/.harness/source-ref")" =~ ^[0-9a-f]{40}$ ]] \
+    || fail 'optimized archive source ref is invalid'
+assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-board/module.json" '"version": "1.1.3"'
+assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-benchmark/module.json" '"version": "0.2.6"'
 assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php" 'class PostAuthorTermObserver'
+assert_file_contains "${optimized_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-board/src/routes/api.php'
+assert_file_contains "${optimized_extract}/.harness/source.sha256" 'modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php'
+assert_file_contains "${optimized_extract}/modules/_bundled/sirsoft-board/src/Http/Middleware/SearchRequestThrottle.php" 'class SearchRequestThrottle'
 
 printf 'g7-performance-toggle tests: PASS\n'

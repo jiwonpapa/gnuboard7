@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Log;
 use Modules\Sirsoft\Board\Services\BoardService;
 use Modules\Sirsoft\Board\Services\PostService;
 use Modules\Sirsoft\Board\Traits\FormatsBoardDate;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
  * 통합 검색에 게시글 검색 결과를 제공하는 리스너
@@ -27,8 +28,6 @@ class SearchPostsListener implements HookListenerInterface
 
     /**
      * 구독할 훅 목록 반환
-     *
-     * @return array
      */
     public static function getSubscribedHooks(): array
     {
@@ -54,8 +53,7 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 훅 이벤트를 처리합니다.
      *
-     * @param mixed ...$args 훅에서 전달된 인수들
-     * @return void
+     * @param  mixed  ...$args  훅에서 전달된 인수들
      */
     public function handle(...$args): void
     {
@@ -66,7 +64,7 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 검색 파라미터 validation rules 추가
      *
-     * @param array $rules 기존 validation rules
+     * @param  array  $rules  기존 validation rules
      * @return array 게시판 모듈 파라미터가 추가된 rules
      */
     public function addValidationRules(array $rules): array
@@ -80,8 +78,8 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 게시글 검색을 수행하고 결과를 반환합니다.
      *
-     * @param array $results 기존 검색 결과
-     * @param array $context 검색 컨텍스트 (q, type, sort, page, per_page, user, request)
+     * @param  array  $results  기존 검색 결과
+     * @param  array  $context  검색 컨텍스트 (q, type, sort, page, per_page, user, request)
      * @return array 게시글이 추가된 검색 결과
      */
     public function searchPosts(array $results, array $context): array
@@ -97,7 +95,7 @@ class SearchPostsListener implements HookListenerInterface
         try {
             $boardSlug = ($context['request'] ?? null)?->input('board_slug', '') ?? '';
             $boards = $this->boardService->getActiveBoardsForSearch(
-                !empty($boardSlug) ? $boardSlug : null
+                ! empty($boardSlug) ? $boardSlug : null
             );
 
             // 게시판별 읽기 권한 필터링 — 권한 없는 게시판 제외
@@ -110,11 +108,13 @@ class SearchPostsListener implements HookListenerInterface
                 return $isRelevantTab ? $results : $this->withEmptyPostsResult($results);
             }
 
-            if (!$isRelevantTab) {
+            if (! $isRelevantTab) {
                 return $this->withCountOnlyResult($results, $boards, $q);
             }
 
             $results['posts'] = $this->buildSearchResult($boards, $q, $context);
+        } catch (TooManyRequestsHttpException $e) {
+            throw $e;
         } catch (\Exception $e) {
             Log::error('Search posts error', ['message' => $e->getMessage(), 'q' => $q]);
         }
@@ -125,14 +125,14 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 게시글 검색 결과를 프론트엔드 응답 구조로 변환합니다.
      *
-     * @param array $response 기존 응답 구조
-     * @param array $results 검색 결과 (core.search.results에서 반환된 데이터)
-     * @param array $context 검색 컨텍스트
+     * @param  array  $response  기존 응답 구조
+     * @param  array  $results  검색 결과 (core.search.results에서 반환된 데이터)
+     * @param  array  $context  검색 컨텍스트
      * @return array 게시글 응답이 추가된 구조
      */
     public function buildPostsResponse(array $response, array $results, array $context): array
     {
-        if (!isset($results['posts'])) {
+        if (! isset($results['posts'])) {
             return $response;
         }
 
@@ -159,7 +159,7 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 빈 게시글 결과를 설정합니다.
      *
-     * @param array $results 기존 검색 결과
+     * @param  array  $results  기존 검색 결과
      * @return array 빈 posts가 추가된 결과
      */
     private function withEmptyPostsResult(array $results): array
@@ -172,17 +172,21 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 다른 탭에서 게시글 건수만 조회합니다 (단일 쿼리).
      *
-     * @param array $results 기존 검색 결과
-     * @param iterable $boards 게시판 목록
-     * @param string $keyword 검색어
+     * @param  array  $results  기존 검색 결과
+     * @param  iterable  $boards  게시판 목록
+     * @param  string  $keyword  검색어
      * @return array count만 포함된 결과
      */
     private function withCountOnlyResult(array $results, iterable $boards, string $keyword): array
     {
         $boardIds = collect($boards)->pluck('id')->all();
-        $totalCount = $this->postService->countAcrossBoards($boardIds, $keyword);
+        $count = $this->postService->countAcrossBoardsBounded($boardIds, $keyword);
 
-        $results['posts'] = ['total' => $totalCount, 'items' => [], 'available_boards' => []];
+        $results['posts'] = [
+            ...$count,
+            'items' => [],
+            'available_boards' => [],
+        ];
 
         return $results;
     }
@@ -190,9 +194,9 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 전체 게시판을 단일 쿼리로 검색하고 결과 구조를 생성합니다.
      *
-     * @param iterable $boards 게시판 목록
-     * @param string $keyword 검색어
-     * @param array $context 검색 컨텍스트
+     * @param  iterable  $boards  게시판 목록
+     * @param  string  $keyword  검색어
+     * @param  array  $context  검색 컨텍스트
      * @return array posts 결과 구조
      */
     private function buildSearchResult(iterable $boards, string $keyword, array $context): array
@@ -213,8 +217,12 @@ class SearchPostsListener implements HookListenerInterface
         }
 
         return [
-            'total'            => $searchResult['total'],
-            'items'            => $searchResult['items']->map(
+            'total' => $searchResult['total'],
+            'total_is_exact' => $searchResult['total_is_exact'] ?? true,
+            'total_relation' => $searchResult['total_relation'] ?? 'eq',
+            'has_more_pages' => $searchResult['has_more_pages'] ?? false,
+            'result_cap' => $searchResult['result_cap'] ?? null,
+            'items' => $searchResult['items']->map(
                 fn ($post) => $this->formatPostResult($post, $keyword)
             )->all(),
             'available_boards' => $this->boardService->getActiveBoardsListForFilter(),
@@ -226,14 +234,18 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 전체 탭 응답 구조를 생성합니다.
      *
-     * @param array $postsData 게시글 데이터
-     * @param array $context 검색 컨텍스트
+     * @param  array  $postsData  게시글 데이터
+     * @param  array  $context  검색 컨텍스트
      * @return array 전체 탭용 응답
      */
     private function buildAllTabResponse(array $postsData, array $context): array
     {
         return [
             'total' => $postsData['total'] ?? 0,
+            'total_is_exact' => $postsData['total_is_exact'] ?? true,
+            'total_relation' => $postsData['total_relation'] ?? 'eq',
+            'has_more_pages' => $postsData['has_more_pages'] ?? false,
+            'result_cap' => $postsData['result_cap'] ?? null,
             'items' => $postsData['items'] ?? [],
         ];
     }
@@ -241,9 +253,9 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * posts 탭 응답 구조를 생성합니다 (DB 페이지네이션).
      *
-     * @param array $response 기존 응답
-     * @param array $postsData 게시글 데이터
-     * @param array $context 검색 컨텍스트
+     * @param  array  $response  기존 응답
+     * @param  array  $postsData  게시글 데이터
+     * @param  array  $context  검색 컨텍스트
      * @return array 페이지네이션이 추가된 응답
      */
     private function buildPostsTabResponse(array $response, array $postsData, array $context): array
@@ -254,11 +266,19 @@ class SearchPostsListener implements HookListenerInterface
 
         $response['posts'] = [
             'total' => $totalItems,
+            'total_is_exact' => $postsData['total_is_exact'] ?? true,
+            'total_relation' => $postsData['total_relation'] ?? 'eq',
+            'has_more_pages' => $postsData['has_more_pages'] ?? false,
+            'result_cap' => $postsData['result_cap'] ?? null,
             'items' => $postsData['items'] ?? [],
         ];
         $response['current_page'] = $page;
         $response['per_page'] = $perPage;
-        $response['last_page'] = max(1, (int) ceil($totalItems / $perPage));
+        $knownLastPage = max(1, (int) ceil($totalItems / $perPage));
+        $response['last_page'] = ! ($postsData['total_is_exact'] ?? true)
+            && ($postsData['has_more_pages'] ?? false)
+                ? max($knownLastPage, $page + 1)
+                : max($knownLastPage, $page);
 
         return $response;
     }
@@ -268,8 +288,8 @@ class SearchPostsListener implements HookListenerInterface
     /**
      * 게시글을 검색 결과 형식으로 변환합니다.
      *
-     * @param object $post 게시글 (board relation 로드 필수)
-     * @param string $keyword 검색어
+     * @param  object  $post  게시글 (board relation 로드 필수)
+     * @param  string  $keyword  검색어
      * @return array 변환된 게시글 데이터
      */
     private function formatPostResult(object $post, string $keyword): array
@@ -288,32 +308,32 @@ class SearchPostsListener implements HookListenerInterface
         }
 
         return [
-            'id'                          => $post->id,
-            'title'                       => $post->title,
-            'title_highlighted'           => $this->highlightKeyword($post->title, $keyword),
-            'content_preview'             => $contentPreview,
+            'id' => $post->id,
+            'title' => $post->title,
+            'title_highlighted' => $this->highlightKeyword($post->title, $keyword),
+            'content_preview' => $contentPreview,
             'content_preview_highlighted' => $contentPreviewHighlighted,
-            'content_mode'                => $contentMode,
-            'board'                       => [
+            'content_mode' => $contentMode,
+            'board' => [
                 'slug' => $boardSlug,
                 'name' => $post->board?->getLocalizedName() ?? '',
             ],
-            'board_name'                  => $post->board?->getLocalizedName() ?? '',
-            'board_slug'                  => $boardSlug,
-            'author_name'                 => $post->author_name ?? $post->user?->name ?? __('board.anonymous'),
-            'created_at'                  => $this->formatCreatedAt($post->created_at),
-            'created_at_formatted'        => $this->formatCreatedAtFormat($post->created_at, g7_module_settings('sirsoft-board', 'display.date_display_format', 'standard')),
-            'view_count'                  => $post->view_count ?? 0,
-            'comment_count'               => $post->comments_count ?? 0,
-            'url'                         => "/board/{$boardSlug}/{$post->id}",
+            'board_name' => $post->board?->getLocalizedName() ?? '',
+            'board_slug' => $boardSlug,
+            'author_name' => $post->author_name ?? $post->user?->name ?? __('board.anonymous'),
+            'created_at' => $this->formatCreatedAt($post->created_at),
+            'created_at_formatted' => $this->formatCreatedAtFormat($post->created_at, g7_module_settings('sirsoft-board', 'display.date_display_format', 'standard')),
+            'view_count' => $post->view_count ?? 0,
+            'comment_count' => $post->comments_count ?? 0,
+            'url' => "/board/{$boardSlug}/{$post->id}",
         ];
     }
 
     /**
      * 텍스트에서 검색어를 하이라이트 처리합니다.
      *
-     * @param string|null $text 원본 텍스트
-     * @param string $keyword 검색어
+     * @param  string|null  $text  원본 텍스트
+     * @param  string  $keyword  검색어
      * @return string 하이라이트 처리된 텍스트
      */
     private function highlightKeyword(?string $text, string $keyword): string
@@ -333,10 +353,10 @@ class SearchPostsListener implements HookListenerInterface
      * HTML 모드: strip_tags로 태그 제거 후 평문 추출
      * 텍스트 모드: 태그 문자열을 그대로 보존 (실제 게시글 표시와 동일하게)
      *
-     * @param string|null $content 본문 내용
-     * @param string $keyword 검색어
-     * @param int $length 추출할 최대 길이
-     * @param string $contentMode 콘텐츠 모드 (text|html)
+     * @param  string|null  $content  본문 내용
+     * @param  string  $keyword  검색어
+     * @param  int  $length  추출할 최대 길이
+     * @param  string  $contentMode  콘텐츠 모드 (text|html)
      * @return string 추출된 미리보기 텍스트
      */
     private function extractContentPreview(?string $content, string $keyword, int $length = 150, string $contentMode = 'text'): string

@@ -170,9 +170,11 @@ scripts/benchmark/g7-performance-toggle.sh on --scope all \
 scripts/benchmark/g7-ab-benchmark.sh --optimized-ref <reviewed-commit>
 ```
 
-기본 실행은 상태별 3회 반복하며 홈, 홈 데이터 API, 게시판 목록·내용·페이징·검색, 통합검색, 쇼핑 홈·목록·내용·검색의 24개 공통 경로를 측정합니다. 구버전에도 없는 통합 storefront API는 비교하지 않고, 실제 쇼핑 홈을 구성하는 분류·상품·최근·인기·신상품 API를 각각 측정합니다.
+기본 실행은 상태별 3회 반복하며 홈, 홈 데이터 API, 게시판 목록·내용·일반 페이징, 쇼핑 홈·목록·내용·검색의 **안전한 21개 공통 경로**만 측정합니다. 구버전에도 없는 통합 storefront API는 비교하지 않고, 실제 쇼핑 홈을 구성하는 분류·상품·최근·인기·신상품 API를 각각 측정합니다.
 
-일반 경로의 안전 기본값은 30초 동안 5초당 route matrix 1개, 최대 1 VU입니다. `--hot-vus`, `--hot-rate`, `--hot-time-unit`으로 부하를 명시적으로 올릴 수 있습니다. 게시판 공용 600회/분 제한을 넘지 않도록 계산하며, dropped iteration이 있으면 해당 run을 무효 처리합니다. 깊은 페이지·게시판 검색·통합검색은 1 VU 단건입니다. 위험 경로 실행 중에만 신규 MySQL SELECT 제한을 임시 적용하고, OFF/ON 전환 전에는 반드시 원래 제한값으로 복구합니다. 매 실행 뒤 SELECT·InnoDB transaction이 0이 될 때까지 기다리며 임의 쿼리 kill은 하지 않습니다.
+일반 경로의 안전 기본값은 30초 동안 5초당 route matrix 1개, 최대 1 VU입니다. `--hot-vus`, `--hot-rate`, `--hot-time-unit`으로 부하를 명시적으로 올릴 수 있습니다. 게시판 공용 600회/분 제한을 넘지 않도록 계산하며, dropped iteration이 있으면 해당 run을 무효 처리합니다. 깊은 페이지·게시판 검색·통합검색은 기본에서 완전히 제외됩니다. `--include-risky --risky-route board_search|global_search|board_deep`를 명시한 경우에도 선택한 경로 **1개만 1 VU·1요청**으로 실행합니다. 위험 요청은 1.5초 DB statement cap, 3초 HTTP cap, CPU·메모리·swap 감시가 모두 준비된 뒤에만 시작합니다. 매 실행 뒤 SELECT·InnoDB transaction이 0이 될 때까지 기다리며 임의 쿼리 kill은 하지 않습니다.
+
+검색 ON/OFF는 `G7_BOARD_PERFORMANCE_VARIANT`으로 알고리즘만 전환합니다. `board_search_sync_cap=1000`과 MySQL `innodb_ft_result_cache_limit=33554432`(32MiB)는 양쪽에 동일하게 유지하는 생존 안전장치입니다. MySQL 8에서는 `SET PERSIST`로 재부팅 후에도 유지하며, 최초 global/persisted 값은 상태 파일에 보존하고 `restore-original --yes`에서만 복구합니다. `SET PERSIST`가 지원되지 않거나 실패하면 비영속 상태로 전환하지 않고 명령을 중단합니다. strict status는 검색 source ref, algorithm/config/schema, sync cap, FTS cap과 persistence 상태를 함께 검증합니다.
 
 작은 운영 서버는 아래 canary부터 시작합니다. `5 VU`는 기본값이 아니라 1 VU와 3 VU 단계가 안전하게 끝났을 때만 사용하는 포화 측정 상한입니다.
 
@@ -181,8 +183,10 @@ scripts/benchmark/g7-ab-benchmark.sh \
   --optimized-ref <reviewed-commit> \
   --repeats 1 --hot-vus 1 --hot-rate 1 --hot-time-unit 5 \
   --hot-duration 5 --request-timeout 5 --statement-timeout 3000 \
-  --deep-page 2 --measurement-window 80 --cpu-max-seconds 90
+  --measurement-window 80 --cpu-max-seconds 90
 ```
+
+위험 경로를 별도 검증할 때만 서버 여유 메모리와 스왑을 확인한 후 위 명령에 예를 들어 `--include-risky --risky-route board_search`를 추가합니다. 다른 검색은 별도 실행으로 분리합니다.
 
 동시에 양쪽 모두 같은 고정 창에서 `/proc`을 표본 수집해 호스트 busy, load average, 가용 메모리, swap과 전체 호스트 용량 대비 PHP-FPM·MySQL CPU 평균·최대를 기록합니다. CPU·load·메모리·swap 안전 임계치를 연속 초과하면 k6를 중단하고 추가 반복과 다음 부하 단계를 실행하지 않습니다. Xdebug가 CLI 또는 FPM에 로드돼 있으면 절대시간 왜곡을 막기 위해 실행을 거부합니다. 결과는 `comparison.md`, `comparison.json`, 경로·CPU CSV와 원시 k6/CPU 파일로 저장합니다.
 

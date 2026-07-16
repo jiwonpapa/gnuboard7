@@ -34,6 +34,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Synchronous board search result cap
+    |--------------------------------------------------------------------------
+    |
+    | Optimized search never performs an unbounded synchronous COUNT. The API
+    | returns an exact total below this boundary and a documented lower bound
+    | once the boundary is reached. Baseline keeps the original exact COUNT.
+    |
+    */
+    'board_search_sync_cap' => max(10, (int) env('G7_BOARD_SEARCH_SYNC_CAP', 1000)),
+
+    /*
+    |--------------------------------------------------------------------------
     | Ecommerce storefront performance variant
     |--------------------------------------------------------------------------
     |
