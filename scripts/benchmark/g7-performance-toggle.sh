@@ -421,8 +421,8 @@ legacy_options() {
         --base-url "${BASE_URL}"
         --defer-runtime
         --lock-token "${LOCK_TOKEN}"
+        --no-smoke
     )
-    [[ "${RUN_SMOKE}" == 1 ]] || LEGACY_OPTIONS+=(--no-smoke)
 }
 
 run_board() {

@@ -133,11 +133,12 @@ assert_contains "${output}" 'board.module_version_sync=drifted'
 assert_contains "${output}" 'board.state=drift'
 
 : > "${CALL_LOG}"
-output="$(run_harness on --scope board --no-smoke)"
+output="$(run_harness on --scope board)"
 assert_contains "${output}" 'overall=optimized'
 calls="$(<"${CALL_LOG}")"
 assert_contains "${calls}" 'board on'
 assert_contains "${calls}" '--defer-runtime'
+assert_contains "${calls}" '--no-smoke'
 assert_contains "${calls}" '--lock-token'
 assert_contains "${calls}" '--optimized-ref HEAD'
 [[ "${calls}" != *'ecommerce on'* ]] || { printf 'board scope called ecommerce transition\n' >&2; exit 1; }
