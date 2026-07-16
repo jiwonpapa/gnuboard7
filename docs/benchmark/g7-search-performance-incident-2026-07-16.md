@@ -26,6 +26,7 @@
 5. MySQL `innodb_ft_result_cache_limit`가 2,000,000,000 bytes였다. MySQL은 FULLTEXT 중간·최종 결과를 메모리에서 처리하므로 2GB 서버에 같은 크기의 쿼리별 상한은 안전하지 않다.
 6. `relevance` 정렬이 실제로는 `created_at DESC`로 처리돼 관련도 계약도 지켜지지 않았다.
 7. 32MiB 보호 적용 뒤 고빈도 ngram 검색어는 SQL `LIMIT`보다 먼저 FULLTEXT 내부 결과 캐시를 채워 MySQL errno 188(`FTS query exceeds result cache limit`)을 반환했고, 게시판 컨트롤러가 이를 일반 500으로 숨겼다.
+8. FTS fallback 뒤 실행되는 회원 검색이 `IN (subquery LIMIT ...)`을 사용해 운영 MySQL에서 errno 1235로 실패했다.
 
 MySQL 공식 문서는 `innodb_ft_result_cache_limit`가 쿼리·스레드별 FULLTEXT 결과 메모리 상한이며, 대규모 결과의 과도한 메모리 사용을 막는 용도라고 설명한다. 이 값은 Global/Dynamic 변수다.
 
@@ -56,6 +57,7 @@ MySQL 공식 문서는 `innodb_ft_result_cache_limit`가 쿼리·스레드별 FU
 - 상한을 넘긴 검색어는 SHA-256 키로 10분간 기억해 같은 FULLTEXT 실패와 32MiB 할당을 반복하지 않는다.
 - fallback 결과는 `total_is_exact=false`, `total_relation=gte`로 완전 검색이 아님을 표시하며 통합검색은 `search_truncated=true`도 반환한다.
 - 일반 DB 오류는 fallback으로 숨기지 않고 그대로 보고하며, 사용자·관리자 목록 컨트롤러는 최종 500 전에 예외를 기록한다.
+- 회원 검색은 제한된 사용자 ID를 먼저 materialize한 뒤 정수 `IN` 목록으로 게시글을 조회해 MySQL 버전별 하위 쿼리 제약을 피한다.
 
 ## 운영 검증 정책
 

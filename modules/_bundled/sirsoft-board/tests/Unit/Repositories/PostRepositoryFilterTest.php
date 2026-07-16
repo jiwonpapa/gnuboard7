@@ -209,6 +209,9 @@ class PostRepositoryFilterTest extends BoardTestCase
         $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, ' union ')));
         $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'board_post_author_terms')));
         $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'users')));
+        $this->assertFalse($queries->contains(
+            fn ($sql) => str_contains($sql, 'user_id in (select') && str_contains($sql, 'limit')
+        ));
         $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, 'count(*) over()')));
         $this->assertTrue($queries->filter(fn ($sql) => str_contains($sql, 'board_posts'))->every(
             fn ($sql) => ! str_contains($sql, ' union ')

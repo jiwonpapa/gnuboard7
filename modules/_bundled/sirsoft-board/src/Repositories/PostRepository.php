@@ -524,9 +524,14 @@ class PostRepository implements PostRepositoryInterface
                         ->orWhere('email', 'like', "%{$likeKeyword}%");
                 })
                 ->orderBy('users.id')
-                ->limit($limit);
+                ->limit($limit)
+                ->pluck('users.id')
+                ->map(static fn ($id) => (int) $id)
+                ->all();
             $branches[] = [
-                'query' => (clone $baseQuery)->whereIn('board_posts.user_id', $matchingUserIds),
+                // MySQL은 LIMIT이 있는 IN subquery를 지원하지 않는 버전이 있으므로
+                // 제한된 회원 ID를 먼저 materialize한 뒤 정수 IN 목록으로 조회합니다.
+                'query' => (clone $baseQuery)->whereIntegerInRaw('board_posts.user_id', $matchingUserIds),
                 'order_by_id' => true,
             ];
         }
