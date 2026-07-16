@@ -177,7 +177,8 @@ ssh "${REMOTE_HOST}" sudo bash -s -- \
     "${ACTION}" "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" \
     "${REMOTE_DB_NAME}" "${REMOTE_DB_PREFIX}" "${BASE_URL}" "${REMOTE_ARCHIVE}" "${RUN_SMOKE}" \
     "${DEFER_RUNTIME}" "${ORCHESTRATION_TOKEN}" <<'REMOTE'
-set -euo pipefail
+set -Eeuo pipefail
+trap 'result=$?; printf "[remote-ecommerce-perf] ERROR line=%s exit=%s command=%q\n" "${LINENO}" "${result}" "${BASH_COMMAND}" >&2; exit "${result}"' ERR
 
 ACTION="$1"; APP_ROOT="$2"; APP_USER="$3"; PHP_BIN="$4"; DB_NAME="$5"; DB_PREFIX="$6"
 BASE_URL="${7%/}"; SOURCE_ARCHIVE="$8"; RUN_SMOKE="$9"
@@ -404,7 +405,7 @@ drop_indexes() {
 }
 
 clear_runtime() {
-    [[ "${DEFER_RUNTIME}" == 0 ]] || return
+    [[ "${DEFER_RUNTIME}" == 0 ]] || return 0
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan config:cache >/dev/null
@@ -415,7 +416,7 @@ clear_runtime() {
 }
 
 warm_and_smoke() {
-    [[ "${RUN_SMOKE}" == 1 && "${DEFER_RUNTIME}" == 0 ]] || return
+    [[ "${RUN_SMOKE}" == 1 && "${DEFER_RUNTIME}" == 0 ]] || return 0
     local path result
     local -a paths=('/api/modules/sirsoft-ecommerce/products?page=1&per_page=12')
     if [[ "$(source_variant)" == optimized-capable ]]; then

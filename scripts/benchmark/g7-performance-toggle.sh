@@ -478,7 +478,7 @@ REMOTE
 }
 
 remove_shared_config_for_full_restore() {
-    [[ "${SCOPE}" == all ]] || return
+    [[ "${SCOPE}" == all ]] || return 0
     "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- "${REMOTE_ROOT}" "${LOCK_TOKEN}" <<'REMOTE'
 set -euo pipefail
 app_root="$1"; token="$2"; lock_dir=/var/lock/g7-performance-toggle.lock.d

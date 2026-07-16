@@ -260,7 +260,8 @@ ssh "${REMOTE_HOST}" sudo bash -s -- \
     "${RUN_SMOKE}" \
     "${DEFER_RUNTIME}" \
     "${ORCHESTRATION_TOKEN}" <<'REMOTE'
-set -euo pipefail
+set -Eeuo pipefail
+trap 'result=$?; printf "[remote-board-perf] ERROR line=%s exit=%s command=%q\n" "${LINENO}" "${result}" "${BASH_COMMAND}" >&2; exit "${result}"' ERR
 
 ACTION="$1"
 APP_ROOT="$2"
@@ -379,7 +380,7 @@ remove_env_variant() {
 }
 
 clear_runtime() {
-    [[ "${DEFER_RUNTIME}" == "0" ]] || return
+    [[ "${DEFER_RUNTIME}" == "0" ]] || return 0
     log "rebuilding Laravel production caches"
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
@@ -618,7 +619,7 @@ EOF
 
 smoke() {
     local result
-    [[ "${RUN_SMOKE}" == "1" && "${DEFER_RUNTIME}" == "0" ]] || return
+    [[ "${RUN_SMOKE}" == "1" && "${DEFER_RUNTIME}" == "0" ]] || return 0
     result="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code} %{time_total}' \
         "${BASE_URL}/api/modules/sirsoft-board/boards/gallery/posts?page=1&per_page=20")"
     log "smoke ${result}"
