@@ -27,6 +27,8 @@ return new class extends Migration
             });
         }
 
+        $this->assertCompatibleAuthorTermsTable();
+
         DB::table('board_post_author_terms')->insertOrIgnoreUsing(
             ['board_id', 'author_name'],
             DB::table('board_posts')
@@ -66,5 +68,88 @@ return new class extends Migration
                 'author_name',
             ]
         );
+    }
+
+    /**
+     * 같은 이름의 불완전한 테이블을 정상 스키마로 오인하지 않습니다.
+     */
+    private function assertCompatibleAuthorTermsTable(): void
+    {
+        $columnNames = collect(Schema::getColumns('board_post_author_terms'))
+            ->pluck('name')
+            ->sort()
+            ->values()
+            ->all();
+        $primary = collect(Schema::getIndexes('board_post_author_terms'))
+            ->first(fn (array $index): bool => $index['primary']);
+
+        if (
+            $columnNames !== ['author_name', 'board_id']
+            || $primary === null
+            || $primary['columns'] !== ['board_id', 'author_name']
+        ) {
+            throw new RuntimeException(
+                'board_post_author_terms table exists with an incompatible schema.'
+            );
+        }
+
+        if (! in_array(DB::connection()->getDriverName(), ['mysql', 'mariadb'], true)) {
+            return;
+        }
+
+        $database = DB::connection()->getDatabaseName();
+        $prefix = DB::getTablePrefix();
+        $shape = DB::selectOne(
+            'SELECT COUNT(*) AS total_columns,
+                    SUM(CASE
+                        WHEN COLUMN_NAME = ? AND DATA_TYPE = ?
+                            AND COLUMN_TYPE LIKE ? AND IS_NULLABLE = ? THEN 1
+                        WHEN COLUMN_NAME = ? AND DATA_TYPE = ?
+                            AND CHARACTER_MAXIMUM_LENGTH = ? AND IS_NULLABLE = ? THEN 1
+                        ELSE 0
+                    END) AS matching_columns
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+            [
+                'board_id',
+                'bigint',
+                '%unsigned%',
+                'NO',
+                'author_name',
+                'varchar',
+                50,
+                'NO',
+                $database,
+                $prefix.'board_post_author_terms',
+            ]
+        );
+        $table = DB::selectOne(
+            'SELECT ENGINE AS engine
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+            [$database, $prefix.'board_post_author_terms']
+        );
+        $sourceColumn = $this->postAuthorTextColumn();
+        $termsColumn = DB::selectOne(
+            'SELECT CHARACTER_SET_NAME AS character_set_name,
+                    COLLATION_NAME AS collation_name
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+            [$database, $prefix.'board_post_author_terms', 'author_name']
+        );
+
+        if (
+            (int) ($shape->total_columns ?? 0) !== 2
+            || (int) ($shape->matching_columns ?? 0) !== 2
+            || ($table->engine ?? null) !== 'InnoDB'
+            || $sourceColumn === null
+            || $termsColumn === null
+            || $termsColumn->character_set_name !== $sourceColumn->character_set_name
+            || $termsColumn->collation_name !== $sourceColumn->collation_name
+        ) {
+            throw new RuntimeException(
+                'board_post_author_terms table exists with an incompatible MySQL schema.'
+            );
+        }
     }
 };

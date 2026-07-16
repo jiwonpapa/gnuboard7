@@ -2,12 +2,16 @@
 
 namespace Modules\Sirsoft\Benchmark\Services\Support;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Modules\Sirsoft\Benchmark\Models\GenerationJob;
 use Modules\Sirsoft\Board\Models\Board;
 
 class BoardCounterSyncService
 {
+    private ?bool $authorTermsAvailable = null;
+
     public function __construct(
         private SyntheticProfileFactory $profileFactory,
         private BoardCacheInvalidator $boardCacheInvalidator
@@ -22,7 +26,7 @@ class BoardCounterSyncService
             throw new \InvalidArgumentException('카운트 동기화 대상 board_id 가 올바르지 않습니다.');
         }
 
-        $this->syncPostCommentCounts($boardId);
+        $this->syncBoardDerivedState($boardId);
 
         $postsCount = (int) DB::table('board_posts')
             ->where('board_id', $boardId)
@@ -83,7 +87,7 @@ class BoardCounterSyncService
         $summaries = [];
 
         foreach ($this->normalizeBoardIds($boardIds) as $boardId) {
-            $this->syncPostCommentCounts($boardId);
+            $this->syncBoardDerivedState($boardId);
 
             $board = Board::query()->find($boardId, ['id', 'slug']);
 
@@ -115,6 +119,57 @@ class BoardCounterSyncService
         }
 
         return $summaries;
+    }
+
+    /**
+     * 벌크 적재가 우회한 게시글 파생 상태를 게시판 단위로 보강합니다.
+     */
+    private function syncBoardDerivedState(int $boardId): void
+    {
+        $this->syncAuthorTermsForBoard($boardId);
+        $this->syncPostCommentCounts($boardId);
+    }
+
+    private function syncAuthorTermsForBoard(int $boardId): void
+    {
+        if (! $this->hasAuthorTermsTable()) {
+            return;
+        }
+
+        try {
+            DB::table('board_post_author_terms')->insertOrIgnoreUsing(
+                ['board_id', 'author_name'],
+                DB::table('board_posts')
+                    ->select(['board_id', 'author_name'])
+                    ->where('board_id', $boardId)
+                    ->whereNotNull('author_name')
+                    ->where('author_name', '<>', '')
+                    ->distinct()
+            );
+        } catch (QueryException $exception) {
+            if (! $this->isMissingAuthorTermsTable($exception)) {
+                throw $exception;
+            }
+
+            $this->authorTermsAvailable = false;
+        }
+    }
+
+    private function hasAuthorTermsTable(): bool
+    {
+        return $this->authorTermsAvailable ??= Schema::hasTable('board_post_author_terms');
+    }
+
+    private function isMissingAuthorTermsTable(QueryException $exception): bool
+    {
+        $driverMessage = strtolower($exception->getPrevious()?->getMessage() ?? $exception->getMessage());
+
+        return str_contains($driverMessage, 'board_post_author_terms') && (
+            in_array((string) $exception->getCode(), ['42S02', '42P01', '1146'], true)
+            || str_contains($driverMessage, 'no such table')
+            || str_contains($driverMessage, "doesn't exist")
+            || str_contains($driverMessage, 'undefined table')
+        );
     }
 
     private function syncPostCommentCounts(int $boardId): void

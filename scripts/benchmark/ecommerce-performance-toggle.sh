@@ -20,9 +20,16 @@ ASSUME_YES=0
 RUN_SMOKE=1
 DEFER_RUNTIME=0
 ORCHESTRATION_TOKEN="-"
+PREFLIGHT_ONLY=0
+PREPARE_ARCHIVE="-"
+PROVIDED_REMOTE_ARCHIVE="-"
 
 COMMON_PATHS=(
+    "modules/_bundled/sirsoft-ecommerce/CHANGELOG.md"
+    "modules/_bundled/sirsoft-ecommerce/composer.json"
     "modules/_bundled/sirsoft-ecommerce/module.json"
+    "modules/_bundled/sirsoft-ecommerce/package-lock.json"
+    "modules/_bundled/sirsoft-ecommerce/package.json"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Controllers/Public/ProductController.php"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductCollection.php"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductListResource.php"
@@ -68,6 +75,11 @@ Options:
   --base-url URL    Storefront base URL.
   --defer-runtime   Internal: let the unified harness rebuild caches once.
   --lock-token ID   Internal: reuse the unified harness transaction lock.
+  --preflight-only  Internal: build and verify the source archive locally only.
+  --prepare-archive PATH
+                    Internal: write the exact verified archive to PATH and exit.
+  --remote-archive PATH
+                    Internal: apply a previously uploaded verified archive.
 EOF
 }
 
@@ -138,6 +150,9 @@ while [[ $# -gt 0 ]]; do
         --base-url) shift; BASE_URL="${1:-}" ;;
         --defer-runtime) DEFER_RUNTIME=1 ;;
         --lock-token) shift; ORCHESTRATION_TOKEN="${1:-}" ;;
+        --preflight-only) PREFLIGHT_ONLY=1 ;;
+        --prepare-archive) shift; PREPARE_ARCHIVE="${1:-}" ;;
+        --remote-archive) shift; PROVIDED_REMOTE_ARCHIVE="${1:-}" ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -151,25 +166,49 @@ case "${ACTION}" in
 esac
 [[ "${ACTION}" != "restore-original" || ${ASSUME_YES} -eq 1 ]] \
     || fail 'restore-original drops indexes and requires --yes'
+if [[ "${ACTION}" != "status" && "${ORCHESTRATION_TOKEN}" == "-" ]]; then
+    fail "mutating actions must run through scripts/benchmark/g7-performance-toggle.sh --scope ecommerce"
+fi
+[[ "${PREPARE_ARCHIVE}" == "-" || "${PROVIDED_REMOTE_ARCHIVE}" == "-" ]] \
+    || fail '--prepare-archive and --remote-archive are mutually exclusive'
 
 for command in ssh scp git tar shasum; do command -v "${command}" >/dev/null || fail "missing ${command}"; done
 [[ -f "${REPO_ROOT}/artisan" ]] || fail "invalid repository root: ${REPO_ROOT}"
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/g7-ecommerce-performance.XXXXXX")"
 REMOTE_ARCHIVE="-"
+REMOTE_ARCHIVE_OWNED=0
 cleanup() {
     rm -rf "${WORK_DIR}"
-    [[ "${REMOTE_ARCHIVE}" == "-" ]] || ssh "${REMOTE_HOST}" rm -f -- "${REMOTE_ARCHIVE}" >/dev/null 2>&1 || true
+    [[ "${REMOTE_ARCHIVE_OWNED}" != 1 || "${REMOTE_ARCHIVE}" == "-" ]] \
+        || ssh "${REMOTE_HOST}" rm -f -- "${REMOTE_ARCHIVE}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 if [[ "${ACTION}" == "on" || "${ACTION}" == "off" || "${ACTION}" == "restore-original" ]]; then
     variant=optimized
     [[ "${ACTION}" == "off" || "${ACTION}" == "restore-original" ]] && variant=baseline
-    archive="$(build_source_archive "${variant}")"
-    REMOTE_ARCHIVE="/tmp/g7-ecommerce-performance-${variant}-$$.tar.gz"
-    log "uploading ${variant} source snapshot"
-    scp -q "${archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
+    if [[ "${PROVIDED_REMOTE_ARCHIVE}" != "-" ]]; then
+        [[ "${PROVIDED_REMOTE_ARCHIVE}" == /tmp/g7-ecommerce-performance-*.tar.gz ]] \
+            || fail 'invalid prepared ecommerce archive path'
+        REMOTE_ARCHIVE="${PROVIDED_REMOTE_ARCHIVE}"
+    else
+        archive="$(build_source_archive "${variant}")"
+        if [[ "${PREPARE_ARCHIVE}" != "-" ]]; then
+            [[ -n "${PREPARE_ARCHIVE}" ]] || fail '--prepare-archive requires a path'
+            install -m 600 "${archive}" "${PREPARE_ARCHIVE}"
+            log "${variant} source archive prepared"
+            exit 0
+        fi
+        if [[ "${PREFLIGHT_ONLY}" == 1 ]]; then
+            log "${variant} source archive preflight complete"
+            exit 0
+        fi
+        REMOTE_ARCHIVE="/tmp/g7-ecommerce-performance-${variant}-$$.tar.gz"
+        REMOTE_ARCHIVE_OWNED=1
+        log "uploading ${variant} source snapshot"
+        scp -q "${archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
+    fi
 fi
 
 log "running ${ACTION} on ${REMOTE_HOST}:${REMOTE_ROOT}"
@@ -225,6 +264,10 @@ fi
 
 log() { printf '[remote-ecommerce-perf] %s\n' "$*"; }
 mysql_scalar() { mysql --batch --skip-column-names -e "$1"; }
+mysql_ddl() {
+    mysql "${DB_NAME}" -e \
+        "SET SESSION lock_wait_timeout=15; SET SESSION innodb_lock_wait_timeout=15; $1"
+}
 
 index_table() {
     case "$1" in
@@ -242,13 +285,52 @@ index_exists() {
 index_visibility() {
     local index="$1" table
     table="$(index_table "${index}")"
-    mysql_scalar "SELECT COALESCE(MIN(IS_VISIBLE), 'MISSING') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table}' AND INDEX_NAME='${index}'"
+    mysql_scalar "SELECT CASE WHEN COUNT(*)=0 THEN 'MISSING' WHEN COUNT(IS_VISIBLE)=COUNT(*) AND COUNT(DISTINCT IS_VISIBLE)=1 THEN MIN(IS_VISIBLE) ELSE 'DRIFTED' END FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table}' AND INDEX_NAME='${index}'"
+}
+
+index_expected_columns() {
+    case "$1" in
+        "${INDEX_LATEST}") printf 'display_status,deleted_at,created_at,id' ;;
+        "${INDEX_PRICE}") printf 'display_status,deleted_at,selling_price,id' ;;
+        "${INDEX_SALES}") printf 'created_at,product_id,quantity' ;;
+    esac
+}
+
+index_expected_count() {
+    case "$1" in
+        "${INDEX_LATEST}"|"${INDEX_PRICE}") printf '4' ;;
+        "${INDEX_SALES}") printf '3' ;;
+    esac
+}
+
+index_shape() {
+    local index="$1" table expected_columns expected_count expected_sequence expected_directions metadata
+    table="$(index_table "${index}")"
+    expected_columns="$(index_expected_columns "${index}")"
+    expected_count="$(index_expected_count "${index}")"
+    case "${expected_count}" in
+        3) expected_sequence='1,2,3'; expected_directions='A,A,A' ;;
+        4) expected_sequence='1,2,3,4'; expected_directions='A,A,A,A' ;;
+        *) return 1 ;;
+    esac
+    metadata="$(mysql_scalar "SELECT CONCAT(COUNT(*), '|', COALESCE(GROUP_CONCAT(SEQ_IN_INDEX ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(GROUP_CONCAT(COALESCE(COLLATION, 'NULL') ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(MIN(NON_UNIQUE), ''), '|', COALESCE(MAX(NON_UNIQUE), ''), '|', COALESCE(MIN(INDEX_TYPE), ''), '|', COALESCE(MAX(INDEX_TYPE), ''), '|', COALESCE(SUM(SUB_PART IS NOT NULL), 0), '|', COALESCE(SUM(COLUMN_NAME IS NULL), 0)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table}' AND INDEX_NAME='${index}'")"
+    if [[ "${metadata%%|*}" == "0" ]]; then
+        printf 'missing'
+    elif [[ "${metadata}" == "${expected_count}|${expected_sequence}|${expected_columns}|${expected_directions}|1|1|BTREE|BTREE|0|0" ]]; then
+        printf 'verified'
+    else
+        printf 'drifted'
+    fi
 }
 
 ensure_idle_database() {
     local count
-    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB='${DB_NAME}' AND COMMAND <> 'Sleep' AND ID <> CONNECTION_ID() AND TIME >= 5")"
-    [[ "${count}" == "0" ]] || { printf 'long-running DB query detected; aborting DDL\n' >&2; exit 1; }
+    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.ID <> CONNECTION_ID() AND ((p.COMMAND IN ('Query','Execute') AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL)")"
+    if [[ "${count}" != "0" ]]; then
+        mysql --table -e "SELECT p.ID,p.USER,p.DB,p.COMMAND,p.TIME,p.STATE,t.trx_started,LEFT(p.INFO,180) AS INFO FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.ID <> CONNECTION_ID() AND ((p.COMMAND IN ('Query','Execute') AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL) ORDER BY p.TIME DESC"
+        printf 'long-running query or open transaction detected; toggle aborted before DDL\n' >&2
+        exit 1
+    fi
 }
 
 set_env_variant() {
@@ -272,6 +354,71 @@ remove_env_variant() {
     mv "${temp}" "${APP_ROOT}/.env"
 }
 
+capture_runtime_generation() {
+    local app_uid pid started owner process_rows candidate_pids
+    app_uid="$(id -u "${APP_USER}")"
+    [[ "${app_uid}" =~ ^[0-9]+$ ]] || return 1
+    process_rows="$(ps -u "${APP_USER}" -o pid=,args= 2>/dev/null || true)"
+    candidate_pids="$(awk '
+        {
+            pid = $1
+            $1 = ""
+            sub(/^[[:space:]]+/, "")
+            artisan = "(^|[[:space:]/])artisan([[:space:]]|$)"
+            fpm = "(^|[[:space:]/])php-fpm[^[:space:]]*:[[:space:]]+pool([[:space:]]|$)"
+            if ($0 ~ artisan || $0 ~ fpm) print pid
+        }
+    ' <<<"${process_rows}")" || return 1
+
+    while IFS= read -r pid; do
+        [[ "${pid}" =~ ^[0-9]+$ && -r "/proc/${pid}/stat" ]] || continue
+        owner="$(stat -c '%u' "/proc/${pid}" 2>/dev/null || true)"
+        [[ "${owner}" == "${app_uid}" ]] || continue
+        started="$(awk '{ sub(/^[0-9]+ \(.*\) /, ""); print $20 }' "/proc/${pid}/stat" 2>/dev/null || true)"
+        [[ "${started}" =~ ^[0-9]+$ ]] || continue
+        printf '%s:%s\n' "${pid}" "${started}"
+    done <<<"${candidate_pids}"
+}
+
+runtime_generation_entry_alive() {
+    local entry="$1" app_uid="$2" pid expected current owner
+    [[ "${entry}" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+    pid="${BASH_REMATCH[1]}"
+    expected="${BASH_REMATCH[2]}"
+    [[ -r "/proc/${pid}/stat" ]] || return 1
+    owner="$(stat -c '%u' "/proc/${pid}" 2>/dev/null || true)"
+    [[ "${owner}" == "${app_uid}" ]] || return 1
+    current="$(awk '{ sub(/^[0-9]+ \(.*\) /, ""); print $20 }' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ "${current}" == "${expected}" ]]
+}
+
+wait_for_runtime_generation() {
+    local app_uid deadline entry pid
+    local -a live=()
+    [[ $# -gt 0 ]] || return 0
+    app_uid="$(id -u "${APP_USER}")"
+    [[ "${app_uid}" =~ ^[0-9]+$ ]] || return 1
+    deadline=$((SECONDS + 60))
+
+    while true; do
+        live=()
+        for entry in "$@"; do
+            runtime_generation_entry_alive "${entry}" "${app_uid}" && live+=("${entry}")
+        done
+        [[ ${#live[@]} -gt 0 ]] || return 0
+        if (( SECONDS >= deadline )); then
+            printf 'baseline runtime activation timed out; previous process generation is still alive\n' >&2
+            for entry in "${live[@]}"; do
+                pid="${entry%%:*}"
+                printf '  stale pid=%s\n' "${pid}" >&2
+                ps -o pid=,user=,etime=,args= -p "${pid}" >&2 || true
+            done
+            return 1
+        fi
+        sleep 1
+    done
+}
+
 backup_source() {
     local dir file path
     local -a paths=()
@@ -280,8 +427,12 @@ backup_source() {
     mkdir -p "${dir}"
     while read -r path; do [[ -e "${APP_ROOT}/${path}" ]] && paths+=("${path}"); done <<'PATHS'
 config/benchmark.php
+modules/_bundled/sirsoft-ecommerce/CHANGELOG.md
+modules/_bundled/sirsoft-ecommerce/composer.json
 modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductCollection.php
 modules/_bundled/sirsoft-ecommerce/module.json
+modules/_bundled/sirsoft-ecommerce/package-lock.json
+modules/_bundled/sirsoft-ecommerce/package.json
 modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductListResource.php
 modules/_bundled/sirsoft-ecommerce/src/Http/Resources/PublicCategoryResource.php
 modules/_bundled/sirsoft-ecommerce/src/Http/Controllers/Public/ProductController.php
@@ -300,7 +451,11 @@ PATHS
         [[ -e "${APP_ROOT}/modules/sirsoft-ecommerce/${path}" ]] \
             && paths+=("modules/sirsoft-ecommerce/${path}")
     done <<'PATHS'
+CHANGELOG.md
+composer.json
 module.json
+package-lock.json
+package.json
 src/Http/Controllers/Public/ProductController.php
 src/Http/Resources/ProductCollection.php
 src/Http/Resources/ProductListResource.php
@@ -334,6 +489,9 @@ apply_archive() {
     stage="$(mktemp -d)"; tar -xzf "${SOURCE_ARCHIVE}" -C "${stage}"
     [[ "$(<"${stage}/.harness/source-variant")" == "${expected}" ]] || exit 1
     manifest="${stage}/.harness/source.sha256"
+    [[ -f "${manifest}" ]] || { printf 'source archive manifest missing\n' >&2; exit 1; }
+    (cd "${stage}" && sha256sum -c .harness/source.sha256 >/dev/null) \
+        || { printf 'source archive checksum mismatch\n' >&2; exit 1; }
     backup_source
     while read -r checksum path; do
         path="${path#\*}"; source="${stage}/${path}"; mode="$(stat -c '%a' "${source}")"
@@ -358,22 +516,38 @@ apply_archive() {
     done < "${manifest}"
     mkdir -p "${STATE_DIR}"
     install -o "${APP_USER}" -g www-data -m 664 "${manifest}" "${SOURCE_MANIFEST}"
+    (cd "${APP_ROOT}" && sha256sum -c "${SOURCE_MANIFEST}" >/dev/null)
     rm -rf "${stage}"
 }
 
 ensure_indexes() {
+    local latest_shape price_shape sales_shape
     local -a product_add=() product_show=() option_add=() option_show=()
     ensure_idle_database
-    [[ "$(index_exists "${INDEX_LATEST}")" != 0 ]] || product_add+=("ADD INDEX ${INDEX_LATEST} (display_status, deleted_at, created_at, id)")
-    [[ "$(index_exists "${INDEX_PRICE}")" != 0 ]] || product_add+=("ADD INDEX ${INDEX_PRICE} (display_status, deleted_at, selling_price, id)")
-    [[ "$(index_exists "${INDEX_SALES}")" != 0 ]] || option_add+=("ADD INDEX ${INDEX_SALES} (created_at, product_id, quantity)")
-    [[ ${#product_add[@]} -eq 0 ]] || mysql "${DB_NAME}" -e "ALTER TABLE ${PRODUCTS_TABLE} $(IFS=', '; printf '%s' "${product_add[*]}")"
-    [[ ${#option_add[@]} -eq 0 ]] || mysql "${DB_NAME}" -e "ALTER TABLE ${OPTIONS_TABLE} $(IFS=', '; printf '%s' "${option_add[*]}")"
+    latest_shape="$(index_shape "${INDEX_LATEST}")"
+    price_shape="$(index_shape "${INDEX_PRICE}")"
+    sales_shape="$(index_shape "${INDEX_SALES}")"
+    [[ "${latest_shape}" != drifted ]] || product_add+=("DROP INDEX ${INDEX_LATEST}")
+    [[ "${latest_shape}" == verified ]] || product_add+=("ADD INDEX ${INDEX_LATEST} (display_status, deleted_at, created_at, id)")
+    [[ "${price_shape}" != drifted ]] || product_add+=("DROP INDEX ${INDEX_PRICE}")
+    [[ "${price_shape}" == verified ]] || product_add+=("ADD INDEX ${INDEX_PRICE} (display_status, deleted_at, selling_price, id)")
+    [[ "${sales_shape}" != drifted ]] || option_add+=("DROP INDEX ${INDEX_SALES}")
+    [[ "${sales_shape}" == verified ]] || option_add+=("ADD INDEX ${INDEX_SALES} (created_at, product_id, quantity)")
+    [[ ${#product_add[@]} -eq 0 ]] || mysql_ddl "ALTER TABLE ${PRODUCTS_TABLE} $(IFS=', '; printf '%s' "${product_add[*]}")"
+    [[ ${#option_add[@]} -eq 0 ]] || mysql_ddl "ALTER TABLE ${OPTIONS_TABLE} $(IFS=', '; printf '%s' "${option_add[*]}")"
+    [[ "$(index_shape "${INDEX_LATEST}")" == verified \
+        && "$(index_shape "${INDEX_PRICE}")" == verified \
+        && "$(index_shape "${INDEX_SALES}")" == verified ]] \
+        || { printf 'ecommerce benchmark index definition drifted\n' >&2; exit 1; }
     [[ "$(index_visibility "${INDEX_LATEST}")" != NO ]] || product_show+=("ALTER INDEX ${INDEX_LATEST} VISIBLE")
     [[ "$(index_visibility "${INDEX_PRICE}")" != NO ]] || product_show+=("ALTER INDEX ${INDEX_PRICE} VISIBLE")
     [[ "$(index_visibility "${INDEX_SALES}")" != NO ]] || option_show+=("ALTER INDEX ${INDEX_SALES} VISIBLE")
-    [[ ${#product_show[@]} -eq 0 ]] || mysql "${DB_NAME}" -e "ALTER TABLE ${PRODUCTS_TABLE} $(IFS=', '; printf '%s' "${product_show[*]}")"
-    [[ ${#option_show[@]} -eq 0 ]] || mysql "${DB_NAME}" -e "ALTER TABLE ${OPTIONS_TABLE} $(IFS=', '; printf '%s' "${option_show[*]}")"
+    [[ ${#product_show[@]} -eq 0 ]] || mysql_ddl "ALTER TABLE ${PRODUCTS_TABLE} $(IFS=', '; printf '%s' "${product_show[*]}")"
+    [[ ${#option_show[@]} -eq 0 ]] || mysql_ddl "ALTER TABLE ${OPTIONS_TABLE} $(IFS=', '; printf '%s' "${option_show[*]}")"
+    [[ "$(index_visibility "${INDEX_LATEST}")" == YES \
+        && "$(index_visibility "${INDEX_PRICE}")" == YES \
+        && "$(index_visibility "${INDEX_SALES}")" == YES ]] \
+        || { printf 'ecommerce benchmark indexes are not visible after activation\n' >&2; exit 1; }
     if [[ "$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${MIGRATIONS_TABLE} WHERE migration='${MIGRATION_NAME}'")" == 0 ]]; then
         batch="$(mysql_scalar "SELECT COALESCE(MAX(batch), 0) + 1 FROM ${DB_NAME}.${MIGRATIONS_TABLE}")"
         mysql "${DB_NAME}" -e "INSERT INTO ${MIGRATIONS_TABLE} (migration,batch) VALUES ('${MIGRATION_NAME}',${batch})"
@@ -386,7 +560,7 @@ hide_indexes() {
     for index in "${INDEX_LATEST}" "${INDEX_PRICE}" "${INDEX_SALES}"; do
         if [[ "$(index_visibility "${index}")" == YES ]]; then
             table="$(index_table "${index}")"
-            mysql "${DB_NAME}" -e "ALTER TABLE ${table} ALTER INDEX ${index} INVISIBLE"
+            mysql_ddl "ALTER TABLE ${table} ALTER INDEX ${index} INVISIBLE"
         fi
     done
 }
@@ -397,7 +571,7 @@ drop_indexes() {
     for index in "${INDEX_SALES}" "${INDEX_PRICE}" "${INDEX_LATEST}"; do
         if [[ "$(index_exists "${index}")" != 0 ]]; then
             table="$(index_table "${index}")"
-            mysql "${DB_NAME}" -e "ALTER TABLE ${table} DROP INDEX ${index}"
+            mysql_ddl "ALTER TABLE ${table} DROP INDEX ${index}"
         fi
     done
     mysql "${DB_NAME}" -e "DELETE FROM ${MIGRATIONS_TABLE} WHERE migration='${MIGRATION_NAME}'"
@@ -405,14 +579,33 @@ drop_indexes() {
 }
 
 clear_runtime() {
-    [[ "${DEFER_RUNTIME}" == 0 ]] || return 0
+    local force="${1:-0}" artisan_commands generation generation_output
+    local -a previous_generation=()
+    [[ "${DEFER_RUNTIME}" == "0" ]] || return 0
+    if [[ "${force}" == "1" ]]; then
+        generation_output="$(capture_runtime_generation)"
+        while IFS= read -r generation; do
+            [[ "${generation}" =~ ^[0-9]+:[0-9]+$ ]] && previous_generation+=("${generation}")
+        done <<<"${generation_output}"
+    fi
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan config:cache >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan route:cache >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan view:cache >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan hooks:cache >/dev/null
+    artisan_commands="$(sudo -u "${APP_USER}" "${PHP_BIN}" artisan list --raw)"
+    if grep -q '^queue:restart[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan queue:restart >/dev/null
+    fi
+    if grep -q '^horizon:terminate[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan horizon:terminate >/dev/null
+    fi
+    if grep -q '^reverb:restart[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan reverb:restart >/dev/null
+    fi
     systemctl reload php8.5-fpm
+    [[ "${force}" != "1" ]] || wait_for_runtime_generation "${previous_generation[@]}"
 }
 
 warm_and_smoke() {
@@ -457,11 +650,12 @@ effective_variant() {
 }
 
 schema_variant() {
-    local a b c
+    local a b c sa sb sc
     a="$(index_visibility "${INDEX_LATEST}")"; b="$(index_visibility "${INDEX_PRICE}")"; c="$(index_visibility "${INDEX_SALES}")"
-    if [[ "${a}${b}${c}" == MISSINGMISSINGMISSING ]]; then printf 'original'
-    elif [[ "${a}${b}${c}" == YESYESYES ]]; then printf 'optimized'
-    elif [[ "${a}${b}${c}" == NONONO ]]; then printf 'baseline-invisible'
+    sa="$(index_shape "${INDEX_LATEST}")"; sb="$(index_shape "${INDEX_PRICE}")"; sc="$(index_shape "${INDEX_SALES}")"
+    if [[ "${sa}${sb}${sc}" == missingmissingmissing && "${a}${b}${c}" == MISSINGMISSINGMISSING ]]; then printf 'original'
+    elif [[ "${sa}${sb}${sc}" == verifiedverifiedverified && "${a}${b}${c}" == YESYESYES ]]; then printf 'optimized'
+    elif [[ "${sa}${sb}${sc}" == verifiedverifiedverified && "${a}${b}${c}" == NONONO ]]; then printf 'baseline-invisible'
     else printf 'mixed'; fi
 }
 
@@ -484,7 +678,7 @@ show_status() {
     if [[ -d "${APP_ROOT}/modules/sirsoft-ecommerce" ]]; then
         active_sync=verified
         for path in \
-            module.json \
+            CHANGELOG.md composer.json module.json package-lock.json package.json \
             src/Http/Controllers/Public/ProductController.php \
             src/Http/Resources/ProductCollection.php \
             src/Http/Resources/ProductListResource.php \
@@ -515,8 +709,11 @@ show_status() {
     printf 'runtime=%s\n' "$(effective_variant)"
     printf 'schema=%s\n' "$(schema_variant)"
     printf 'index.%s=%s\n' "${INDEX_LATEST}" "$(index_visibility "${INDEX_LATEST}")"
+    printf 'index.%s.shape=%s\n' "${INDEX_LATEST}" "$(index_shape "${INDEX_LATEST}")"
     printf 'index.%s=%s\n' "${INDEX_PRICE}" "$(index_visibility "${INDEX_PRICE}")"
+    printf 'index.%s.shape=%s\n' "${INDEX_PRICE}" "$(index_shape "${INDEX_PRICE}")"
     printf 'index.%s=%s\n' "${INDEX_SALES}" "$(index_visibility "${INDEX_SALES}")"
+    printf 'index.%s.shape=%s\n' "${INDEX_SALES}" "$(index_shape "${INDEX_SALES}")"
     printf 'active_module_sync=%s\n' "${active_sync}"
     printf 'active_template_sync=%s\n' "${template_sync}"
     printf 'module_version_sync=%s\n' "${module_version_sync}"
@@ -542,15 +739,25 @@ sync_module_version() {
 case "${ACTION}" in
     on)
         apply_archive optimized; ensure_indexes; set_env_variant optimized; sync_module_version
-        clear_runtime; warm_and_smoke; write_state; show_status
+        clear_runtime; warm_and_smoke; write_state
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     off)
-        apply_archive baseline; set_env_variant baseline; hide_indexes; sync_module_version
-        clear_runtime; warm_and_smoke; write_state; show_status
+        apply_archive baseline; ensure_indexes; set_env_variant baseline; hide_indexes; sync_module_version
+        clear_runtime; warm_and_smoke; write_state
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     restore-original)
-        apply_archive baseline; set_env_variant baseline; clear_runtime
-        drop_indexes; remove_env_variant; sync_module_version; clear_runtime; warm_and_smoke; write_state; show_status
+        apply_archive baseline
+        set_env_variant baseline
+        clear_runtime 1
+        drop_indexes
+        remove_env_variant
+        sync_module_version
+        clear_runtime
+        warm_and_smoke
+        write_state
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     status) show_status ;;
 esac

@@ -9,7 +9,6 @@ use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Database\QueryException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -256,18 +255,11 @@ class PostRepository implements PostRepositoryInterface
             'board_posts.id as matched_post_id',
             'board_posts.user_id as matched_user_id',
         ]);
-        $tablePrefix = DB::getTablePrefix();
-        $matchingUsersAlias = $tablePrefix.'board_search_users';
-        $eligiblePostsTable = $tablePrefix.'board_posts';
-
-        // MySQL JOIN_ORDER 힌트로 작은 users 매칭 집합이 드라이브하게 한다.
-        // 힌트를 지원하지 않는 DBMS에서는 주석으로 무시되어 일반 JOIN으로 동작한다.
+        // 작성자 회원 집합과 조회 대상 게시글을 각각 derived table로 유지한다.
+        // JOIN_ORDER 같은 강제 힌트는 실제 MySQL EXPLAIN으로 효과를 확인하기 전에는 사용하지 않는다.
         $userIds = DB::query()
             ->fromSub($matchingUserIds, 'board_search_users')
-            ->selectRaw(
-                "/*+ JOIN_ORDER({$matchingUsersAlias}, {$eligiblePostsTable}) */ "
-                ."{$tablePrefix}board_search_user_posts.matched_post_id"
-            )
+            ->select('board_search_user_posts.matched_post_id')
             ->joinSub(
                 query: $eligibleUserPosts,
                 as: 'board_search_user_posts',
@@ -302,36 +294,6 @@ class PostRepository implements PostRepositoryInterface
     }
 
     /**
-     * 새 작성자명을 단조 증가형 검색 사전에 보강합니다.
-     */
-    private function rememberAuthorTerm(Post $post): void
-    {
-        if (
-            ! $this->hasAuthorTermsTable()
-            || empty($post->board_id)
-            || empty($post->author_name)
-        ) {
-            return;
-        }
-
-        try {
-            DB::table('board_post_author_terms')->insertOrIgnore([
-                'board_id' => $post->board_id,
-                'author_name' => $post->author_name,
-            ]);
-        } catch (QueryException $exception) {
-            $missingTable = $exception->getCode() === '42S02'
-                || str_contains(strtolower($exception->getMessage()), 'no such table');
-            if (! $missingTable) {
-                throw $exception;
-            }
-
-            // 정확 복구 중 테이블이 먼저 제거된 짧은 전환 경합만 허용합니다.
-            $this->authorTermsAvailable = false;
-        }
-    }
-
-    /**
      * 게시글을 생성합니다.
      *
      * @param  string  $slug  게시판 슬러그
@@ -340,10 +302,7 @@ class PostRepository implements PostRepositoryInterface
      */
     public function create(string $slug, array $data): Post
     {
-        $post = Post::create($data);
-        $this->rememberAuthorTerm($post);
-
-        return $post;
+        return Post::create($data);
     }
 
     /**
@@ -387,7 +346,6 @@ class PostRepository implements PostRepositoryInterface
     {
         $post = $this->findOrFail($slug, $id);
         $post->update($data);
-        $this->rememberAuthorTerm($post);
 
         return $post->fresh();
     }

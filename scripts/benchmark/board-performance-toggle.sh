@@ -15,12 +15,16 @@ REMOTE_PHP_BIN="${G7_BOARD_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_BOARD_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_BOARD_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.4}"
+BENCHMARK_BASELINE_REF="${G7_BOARD_PERF_BENCHMARK_BASELINE_REF:-e64381ddb5ba02caed60933427fbb86ef72ef94e}"
 OPTIMIZED_REF="${G7_BOARD_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://www.g7devops.com}"
 ASSUME_YES=0
 RUN_SMOKE=1
 DEFER_RUNTIME=0
 ORCHESTRATION_TOKEN="-"
+PREFLIGHT_ONLY=0
+PREPARE_ARCHIVE="-"
+PROVIDED_REMOTE_ARCHIVE="-"
 
 COMMON_PATHS=(
     "modules/_bundled/sirsoft-board/CHANGELOG.md"
@@ -31,6 +35,8 @@ COMMON_PATHS=(
     "modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php"
     "modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php"
     "modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php"
+    "modules/_bundled/sirsoft-board/src/Providers/BoardServiceProvider.php"
+    "modules/_bundled/sirsoft-board/src/Repositories/Contracts/PostRepositoryInterface.php"
     "modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php"
     "modules/_bundled/sirsoft-board/src/Services/PostService.php"
 )
@@ -39,6 +45,15 @@ OPTIMIZED_ONLY_PATHS=(
     "config/benchmark.php"
     "modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php"
     "modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php"
+    "modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
+)
+
+BENCHMARK_PATHS=(
+    "modules/_bundled/sirsoft-benchmark/CHANGELOG.md"
+    "modules/_bundled/sirsoft-benchmark/composer.json"
+    "modules/_bundled/sirsoft-benchmark/module.json"
+    "modules/_bundled/sirsoft-benchmark/package.json"
+    "modules/_bundled/sirsoft-benchmark/src/Services/Support/BoardCounterSyncService.php"
 )
 
 usage() {
@@ -65,11 +80,18 @@ Options:
   --db NAME         Remote database name. Default: g7devops
   --db-prefix NAME  Remote table prefix. Default: g7_
   --baseline REF    Git ref for exact source restore. Default: 7.0.4
+  --benchmark-baseline-ref REF
+                    Pre-tuning sirsoft-benchmark Git ref used by exact restore.
   --optimized-ref REF
                     Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    URL used by smoke requests.
   --defer-runtime   Internal: let the unified harness rebuild caches once.
   --lock-token ID   Internal: reuse the unified harness transaction lock.
+  --preflight-only  Internal: build and verify the source archive locally only.
+  --prepare-archive PATH
+                    Internal: write the exact verified archive to PATH and exit.
+  --remote-archive PATH
+                    Internal: apply a previously uploaded verified archive.
   -h, --help        Show this help.
 
 Environment variables use the same names with the G7_BOARD_PERF_ prefix.
@@ -99,14 +121,15 @@ copy_optimized_file() {
     git -C "${REPO_ROOT}" show "${OPTIMIZED_REF}:${path}" > "${destination}/${path}"
 }
 
-copy_git_file() {
-    local path="$1"
-    local destination="$2"
+copy_ref_file() {
+    local ref="$1"
+    local path="$2"
+    local destination="$3"
 
-    git -C "${REPO_ROOT}" cat-file -e "${BASELINE_REF}:${path}" 2>/dev/null \
-        || fail "baseline file not found at ${BASELINE_REF}: ${path}"
+    git -C "${REPO_ROOT}" cat-file -e "${ref}:${path}" 2>/dev/null \
+        || fail "source file not found at ${ref}: ${path}"
     mkdir -p "$(dirname -- "${destination}/${path}")"
-    git -C "${REPO_ROOT}" show "${BASELINE_REF}:${path}" > "${destination}/${path}"
+    git -C "${REPO_ROOT}" show "${ref}:${path}" > "${destination}/${path}"
 }
 
 build_source_archive() {
@@ -123,7 +146,7 @@ build_source_archive() {
         if [[ "${variant}" == "optimized" ]]; then
             copy_optimized_file "${path}" "${stage_dir}"
         else
-            copy_git_file "${path}" "${stage_dir}"
+            copy_ref_file "${BASELINE_REF}" "${path}" "${stage_dir}"
         fi
         manifest_paths+=("${path}")
     done
@@ -134,6 +157,15 @@ build_source_archive() {
             manifest_paths+=("${path}")
         done
     fi
+
+    for path in "${BENCHMARK_PATHS[@]}"; do
+        if [[ "${variant}" == "optimized" ]]; then
+            copy_optimized_file "${path}" "${stage_dir}"
+        else
+            copy_ref_file "${BENCHMARK_BASELINE_REF}" "${path}" "${stage_dir}"
+        fi
+        manifest_paths+=("${path}")
+    done
 
     printf '%s\n' "${variant}" > "${stage_dir}/.harness/source-variant"
     (
@@ -183,6 +215,10 @@ while [[ $# -gt 0 ]]; do
             shift
             BASELINE_REF="${1:-}"
             ;;
+        --benchmark-baseline-ref)
+            shift
+            BENCHMARK_BASELINE_REF="${1:-}"
+            ;;
         --optimized-ref)
             shift
             OPTIMIZED_REF="${1:-}"
@@ -197,6 +233,17 @@ while [[ $# -gt 0 ]]; do
         --lock-token)
             shift
             ORCHESTRATION_TOKEN="${1:-}"
+            ;;
+        --preflight-only)
+            PREFLIGHT_ONLY=1
+            ;;
+        --prepare-archive)
+            shift
+            PREPARE_ARCHIVE="${1:-}"
+            ;;
+        --remote-archive)
+            shift
+            PROVIDED_REMOTE_ARCHIVE="${1:-}"
             ;;
         -h|--help)
             usage
@@ -224,6 +271,11 @@ esac
 if [[ "${ACTION}" == "restore-original" && ${ASSUME_YES} -ne 1 ]]; then
     fail "restore-original drops indexes and requires --yes"
 fi
+if [[ "${ACTION}" != "status" && "${ORCHESTRATION_TOKEN}" == "-" ]]; then
+    fail "mutating actions must run through scripts/benchmark/g7-performance-toggle.sh --scope board"
+fi
+[[ "${PREPARE_ARCHIVE}" == "-" || "${PROVIDED_REMOTE_ARCHIVE}" == "-" ]] \
+    || fail '--prepare-archive and --remote-archive are mutually exclusive'
 
 [[ -f "${REPO_ROOT}/artisan" ]] || fail "repository root is invalid: ${REPO_ROOT}"
 require_command ssh
@@ -234,9 +286,10 @@ require_command shasum
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/g7-board-performance.XXXXXX")"
 REMOTE_ARCHIVE="-"
+REMOTE_ARCHIVE_OWNED=0
 cleanup() {
     rm -rf "${WORK_DIR}"
-    if [[ "${REMOTE_ARCHIVE}" != "-" ]]; then
+    if [[ "${REMOTE_ARCHIVE_OWNED}" == 1 && "${REMOTE_ARCHIVE}" != "-" ]]; then
         ssh "${REMOTE_HOST}" rm -f -- "${REMOTE_ARCHIVE}" >/dev/null 2>&1 || true
     fi
 }
@@ -245,10 +298,27 @@ trap cleanup EXIT
 if [[ "${ACTION}" == "on" || "${ACTION}" == "off" || "${ACTION}" == "restore-original" ]]; then
     source_variant="optimized"
     [[ "${ACTION}" == "restore-original" ]] && source_variant="baseline"
-    local_archive="$(build_source_archive "${source_variant}")"
-    REMOTE_ARCHIVE="/tmp/g7-board-performance-${source_variant}-$$.tar.gz"
-    log "uploading ${source_variant} source snapshot"
-    scp -q "${local_archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
+    if [[ "${PROVIDED_REMOTE_ARCHIVE}" != "-" ]]; then
+        [[ "${PROVIDED_REMOTE_ARCHIVE}" == /tmp/g7-board-performance-*.tar.gz ]] \
+            || fail 'invalid prepared board archive path'
+        REMOTE_ARCHIVE="${PROVIDED_REMOTE_ARCHIVE}"
+    else
+        local_archive="$(build_source_archive "${source_variant}")"
+        if [[ "${PREPARE_ARCHIVE}" != "-" ]]; then
+            [[ -n "${PREPARE_ARCHIVE}" ]] || fail '--prepare-archive requires a path'
+            install -m 600 "${local_archive}" "${PREPARE_ARCHIVE}"
+            log "${source_variant} source archive prepared"
+            exit 0
+        fi
+        if [[ "${PREFLIGHT_ONLY}" == 1 ]]; then
+            log "${source_variant} source archive preflight complete"
+            exit 0
+        fi
+        REMOTE_ARCHIVE="/tmp/g7-board-performance-${source_variant}-$$.tar.gz"
+        REMOTE_ARCHIVE_OWNED=1
+        log "uploading ${source_variant} source snapshot"
+        scp -q "${local_archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
+    fi
 fi
 
 log "running ${ACTION} on ${REMOTE_HOST}:${REMOTE_ROOT}"
@@ -343,7 +413,7 @@ table_index_exists() {
 
 table_index_visibility() {
     local table_name="$1" index_name="$2"
-    mysql_scalar "SELECT COALESCE(MIN(IS_VISIBLE), 'MISSING') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}' AND INDEX_NAME='${index_name}'"
+    mysql_scalar "SELECT CASE WHEN COUNT(*)=0 THEN 'MISSING' WHEN COUNT(IS_VISIBLE)=COUNT(*) AND COUNT(DISTINCT IS_VISIBLE)=1 THEN MIN(IS_VISIBLE) ELSE 'DRIFTED' END FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}' AND INDEX_NAME='${index_name}'"
 }
 
 index_exists() {
@@ -354,25 +424,53 @@ index_visibility() {
     table_index_visibility "${POSTS_TABLE}" "$1"
 }
 
+index_shape() {
+    local index_name="$1" expected_columns="$2" expected_count="$3"
+    local expected_sequence expected_directions metadata
+    case "${expected_count}" in
+        5) expected_sequence='1,2,3,4,5'; expected_directions='A,A,A,A,A' ;;
+        6) expected_sequence='1,2,3,4,5,6'; expected_directions='A,A,A,A,A,A' ;;
+        *) return 1 ;;
+    esac
+    metadata="$(mysql_scalar "SELECT CONCAT(COUNT(*), '|', COALESCE(GROUP_CONCAT(SEQ_IN_INDEX ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(GROUP_CONCAT(COALESCE(COLLATION, 'NULL') ORDER BY SEQ_IN_INDEX SEPARATOR ','), ''), '|', COALESCE(MIN(NON_UNIQUE), ''), '|', COALESCE(MAX(NON_UNIQUE), ''), '|', COALESCE(MIN(INDEX_TYPE), ''), '|', COALESCE(MAX(INDEX_TYPE), ''), '|', COALESCE(SUM(SUB_PART IS NOT NULL), 0), '|', COALESCE(SUM(COLUMN_NAME IS NULL), 0)) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND INDEX_NAME='${index_name}'")"
+    if [[ "${metadata%%|*}" == "0" ]]; then
+        printf 'missing'
+    elif [[ "${metadata}" == "${expected_count}|${expected_sequence}|${expected_columns}|${expected_directions}|1|1|BTREE|BTREE|0|0" ]]; then
+        printf 'verified'
+    else
+        printf 'drifted'
+    fi
+}
+
+list_id_index_shape() {
+    index_shape "${INDEX_ID}" 'board_id,is_notice,parent_id,deleted_at,id' 5
+}
+
+list_views_index_shape() {
+    index_shape "${INDEX_VIEWS}" 'board_id,is_notice,parent_id,deleted_at,view_count,id' 6
+}
+
 table_exists() {
     local table_name="$1"
     mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}'"
 }
 
 author_terms_structure() {
-    local column_shape primary_columns source_collation terms_collation engine
+    local total_columns column_shape primary_columns source_collation terms_collation engine
     if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "0" ]]; then
         printf 'missing'
         return
     fi
 
     engine="$(mysql_scalar "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}'")"
+    total_columns="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}'")"
     column_shape="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND ((COLUMN_NAME='board_id' AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO') OR (COLUMN_NAME='author_name' AND DATA_TYPE='varchar' AND CHARACTER_MAXIMUM_LENGTH=50 AND IS_NULLABLE='NO'))")"
     primary_columns="$(mysql_scalar "SELECT COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), '') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND INDEX_NAME='PRIMARY'")"
     source_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
     terms_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND COLUMN_NAME='author_name'")"
 
-    if [[ "${engine}" == "InnoDB" && "${column_shape}" == "2" \
+    if [[ "${engine}" == "InnoDB" && "${total_columns}" == "2" \
+        && "${column_shape}" == "2" \
         && "${primary_columns}" == "board_id,author_name" \
         && -n "${source_collation}" && "${terms_collation}" == "${source_collation}" ]]; then
         printf 'verified'
@@ -395,9 +493,9 @@ author_terms_status() {
 
 ensure_no_long_queries() {
     local count
-    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.DB='${DB_NAME}' AND p.ID <> CONNECTION_ID() AND ((p.COMMAND <> 'Sleep' AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL)")"
+    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.ID <> CONNECTION_ID() AND ((p.COMMAND IN ('Query','Execute') AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL)")"
     if [[ "${count}" != "0" ]]; then
-        mysql --table -e "SELECT p.ID,p.USER,p.COMMAND,p.TIME,p.STATE,t.trx_started,LEFT(p.INFO,180) AS INFO FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.DB='${DB_NAME}' AND p.ID <> CONNECTION_ID() AND ((p.COMMAND <> 'Sleep' AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL) ORDER BY p.TIME DESC"
+        mysql --table -e "SELECT p.ID,p.USER,p.DB,p.COMMAND,p.TIME,p.STATE,t.trx_started,LEFT(p.INFO,180) AS INFO FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.ID <> CONNECTION_ID() AND ((p.COMMAND IN ('Query','Execute') AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL) ORDER BY p.TIME DESC"
         printf 'long-running query or open transaction detected; toggle aborted before DDL\n' >&2
         exit 1
     fi
@@ -439,8 +537,81 @@ remove_env_variant() {
     mv "${temp_file}" "${APP_ROOT}/.env"
 }
 
+capture_runtime_generation() {
+    local app_uid pid started owner process_rows candidate_pids
+    app_uid="$(id -u "${APP_USER}")"
+    [[ "${app_uid}" =~ ^[0-9]+$ ]] || return 1
+    process_rows="$(ps -u "${APP_USER}" -o pid=,args= 2>/dev/null || true)"
+    candidate_pids="$(awk '
+        {
+            pid = $1
+            $1 = ""
+            sub(/^[[:space:]]+/, "")
+            artisan = "(^|[[:space:]/])artisan([[:space:]]|$)"
+            fpm = "(^|[[:space:]/])php-fpm[^[:space:]]*:[[:space:]]+pool([[:space:]]|$)"
+            if ($0 ~ artisan || $0 ~ fpm) print pid
+        }
+    ' <<<"${process_rows}")" || return 1
+
+    while IFS= read -r pid; do
+        [[ "${pid}" =~ ^[0-9]+$ && -r "/proc/${pid}/stat" ]] || continue
+        owner="$(stat -c '%u' "/proc/${pid}" 2>/dev/null || true)"
+        [[ "${owner}" == "${app_uid}" ]] || continue
+        started="$(awk '{ sub(/^[0-9]+ \(.*\) /, ""); print $20 }' "/proc/${pid}/stat" 2>/dev/null || true)"
+        [[ "${started}" =~ ^[0-9]+$ ]] || continue
+        printf '%s:%s\n' "${pid}" "${started}"
+    done <<<"${candidate_pids}"
+}
+
+runtime_generation_entry_alive() {
+    local entry="$1" app_uid="$2" pid expected current owner
+    [[ "${entry}" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+    pid="${BASH_REMATCH[1]}"
+    expected="${BASH_REMATCH[2]}"
+    [[ -r "/proc/${pid}/stat" ]] || return 1
+    owner="$(stat -c '%u' "/proc/${pid}" 2>/dev/null || true)"
+    [[ "${owner}" == "${app_uid}" ]] || return 1
+    current="$(awk '{ sub(/^[0-9]+ \(.*\) /, ""); print $20 }' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ "${current}" == "${expected}" ]]
+}
+
+wait_for_runtime_generation() {
+    local app_uid deadline entry pid
+    local -a live=()
+    [[ $# -gt 0 ]] || return 0
+    app_uid="$(id -u "${APP_USER}")"
+    [[ "${app_uid}" =~ ^[0-9]+$ ]] || return 1
+    deadline=$((SECONDS + 60))
+
+    while true; do
+        live=()
+        for entry in "$@"; do
+            runtime_generation_entry_alive "${entry}" "${app_uid}" && live+=("${entry}")
+        done
+        [[ ${#live[@]} -gt 0 ]] || return 0
+        if (( SECONDS >= deadline )); then
+            printf 'baseline runtime activation timed out; previous process generation is still alive\n' >&2
+            for entry in "${live[@]}"; do
+                pid="${entry%%:*}"
+                printf '  stale pid=%s\n' "${pid}" >&2
+                ps -o pid=,user=,etime=,args= -p "${pid}" >&2 || true
+            done
+            return 1
+        fi
+        sleep 1
+    done
+}
+
 clear_runtime() {
+    local force="${1:-0}" artisan_commands generation generation_output
+    local -a previous_generation=()
     [[ "${DEFER_RUNTIME}" == "0" ]] || return 0
+    if [[ "${force}" == "1" ]]; then
+        generation_output="$(capture_runtime_generation)"
+        while IFS= read -r generation; do
+            [[ "${generation}" =~ ^[0-9]+:[0-9]+$ ]] && previous_generation+=("${generation}")
+        done <<<"${generation_output}"
+    fi
     log "rebuilding Laravel production caches"
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
@@ -448,7 +619,18 @@ clear_runtime() {
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan route:cache >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan view:cache >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan hooks:cache >/dev/null
+    artisan_commands="$(sudo -u "${APP_USER}" "${PHP_BIN}" artisan list --raw)"
+    if grep -q '^queue:restart[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan queue:restart >/dev/null
+    fi
+    if grep -q '^horizon:terminate[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan horizon:terminate >/dev/null
+    fi
+    if grep -q '^reverb:restart[[:space:]]' <<<"${artisan_commands}"; then
+        sudo -u "${APP_USER}" "${PHP_BIN}" artisan reverb:restart >/dev/null
+    fi
     systemctl reload php8.5-fpm
+    [[ "${force}" != "1" ]] || wait_for_runtime_generation "${previous_generation[@]}"
 }
 
 backup_current_source() {
@@ -471,10 +653,18 @@ modules/_bundled/sirsoft-board/package.json
 modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php
 modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php
 modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php
+modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php
+modules/_bundled/sirsoft-board/src/Providers/BoardServiceProvider.php
+modules/_bundled/sirsoft-board/src/Repositories/Contracts/PostRepositoryInterface.php
 modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php
 modules/_bundled/sirsoft-board/src/Services/PostService.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
+modules/_bundled/sirsoft-benchmark/CHANGELOG.md
+modules/_bundled/sirsoft-benchmark/composer.json
+modules/_bundled/sirsoft-benchmark/module.json
+modules/_bundled/sirsoft-benchmark/package.json
+modules/_bundled/sirsoft-benchmark/src/Services/Support/BoardCounterSyncService.php
 PATHS
 
     while read -r path; do
@@ -489,10 +679,24 @@ package.json
 database/seeders/Sample/PostSampleSeeder.php
 src/Http/Controllers/Admin/PostController.php
 src/Http/Controllers/User/PostController.php
+src/Observers/PostAuthorTermObserver.php
+src/Providers/BoardServiceProvider.php
+src/Repositories/Contracts/PostRepositoryInterface.php
 src/Repositories/PostRepository.php
 src/Services/PostService.php
 database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
 database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
+PATHS
+
+    while read -r path; do
+        [[ -n "${path}" && -e "${APP_ROOT}/modules/sirsoft-benchmark/${path}" ]] \
+            && existing_paths+=("modules/sirsoft-benchmark/${path}")
+    done <<'PATHS'
+CHANGELOG.md
+composer.json
+module.json
+package.json
+src/Services/Support/BoardCounterSyncService.php
 PATHS
 
     if [[ ${#existing_paths[@]} -gt 0 ]]; then
@@ -517,6 +721,9 @@ apply_source_archive() {
     variant="$(<"${stage_dir}/.harness/source-variant")"
     [[ "${variant}" == "${expected_variant}" ]] || { printf 'source archive variant mismatch\n' >&2; exit 1; }
     manifest="${stage_dir}/.harness/source.sha256"
+    [[ -f "${manifest}" ]] || { printf 'source archive manifest missing\n' >&2; exit 1; }
+    (cd "${stage_dir}" && sha256sum -c .harness/source.sha256 >/dev/null) \
+        || { printf 'source archive checksum mismatch\n' >&2; exit 1; }
 
     backup_current_source
 
@@ -533,6 +740,13 @@ apply_source_archive() {
                 active_destination="${APP_ROOT}/modules/sirsoft-board/${relative}"
                 install -D -o "${APP_USER}" -g www-data -m "${mode}" "${source}" "${active_destination}"
                 ;;
+            modules/_bundled/sirsoft-benchmark/*)
+                relative="${path#modules/_bundled/sirsoft-benchmark/}"
+                active_destination="${APP_ROOT}/modules/sirsoft-benchmark/${relative}"
+                [[ ! -d "${APP_ROOT}/modules/sirsoft-benchmark" ]] \
+                    || install -D -o "${APP_USER}" -g www-data -m "${mode}" \
+                        "${source}" "${active_destination}"
+                ;;
         esac
     done < "${manifest}"
 
@@ -541,6 +755,8 @@ apply_source_archive() {
         rm -f "${APP_ROOT}/${ACTIVE_LIST_MIGRATION_PATH}"
         rm -f "${APP_ROOT}/${AUTHOR_TERMS_MIGRATION_PATH}"
         rm -f "${APP_ROOT}/${ACTIVE_AUTHOR_TERMS_MIGRATION_PATH}"
+        rm -f "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
+        rm -f "${APP_ROOT}/modules/sirsoft-board/src/Observers/PostAuthorTermObserver.php"
     fi
 
     mkdir -p "${STATE_DIR}"
@@ -553,27 +769,41 @@ apply_source_archive() {
 }
 
 ensure_indexes_visible() {
-    local id_exists views_exists author_charset author_collation author_status
-    local -a add_clauses visibility_clauses
+    local id_shape views_shape author_charset author_collation author_status author_structure
+    local -a index_clauses visibility_clauses
     ensure_no_long_queries
-    id_exists="$(index_exists "${INDEX_ID}")"
-    views_exists="$(index_exists "${INDEX_VIEWS}")"
-    add_clauses=()
+    id_shape="$(list_id_index_shape)"
+    views_shape="$(list_views_index_shape)"
+    index_clauses=()
 
-    if [[ "${id_exists}" == "0" ]]; then
-        add_clauses+=("ADD INDEX ${INDEX_ID} (board_id, is_notice, parent_id, deleted_at, id)")
+    if [[ "${id_shape}" == "drifted" ]]; then
+        index_clauses+=("DROP INDEX ${INDEX_ID}")
     fi
-    if [[ "${views_exists}" == "0" ]]; then
-        add_clauses+=("ADD INDEX ${INDEX_VIEWS} (board_id, is_notice, parent_id, deleted_at, view_count, id)")
+    if [[ "${id_shape}" != "verified" ]]; then
+        index_clauses+=("ADD INDEX ${INDEX_ID} (board_id, is_notice, parent_id, deleted_at, id)")
     fi
-    if [[ ${#add_clauses[@]} -gt 0 ]]; then
+    if [[ "${views_shape}" == "drifted" ]]; then
+        index_clauses+=("DROP INDEX ${INDEX_VIEWS}")
+    fi
+    if [[ "${views_shape}" != "verified" ]]; then
+        index_clauses+=("ADD INDEX ${INDEX_VIEWS} (board_id, is_notice, parent_id, deleted_at, view_count, id)")
+    fi
+    if [[ ${#index_clauses[@]} -gt 0 ]]; then
         local joined
-        joined="$(IFS=', '; printf '%s' "${add_clauses[*]}")"
-        log "creating missing indexes; this may take time"
+        joined="$(IFS=', '; printf '%s' "${index_clauses[*]}")"
+        log "creating or repairing benchmark indexes; this may take time"
         mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${joined}"
     fi
+    [[ "$(list_id_index_shape)" == "verified" \
+        && "$(list_views_index_shape)" == "verified" ]] \
+        || { printf 'board benchmark index definition drifted\n' >&2; exit 1; }
 
     ensure_no_long_queries
+    author_structure="$(author_terms_structure)"
+    if [[ "${author_structure}" == "drifted" ]]; then
+        log "recreating drifted board author search dictionary"
+        mysql_ddl "DROP TABLE ${AUTHOR_TERMS_TABLE}"
+    fi
     if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "0" ]]; then
         author_charset="$(mysql_scalar "SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
         author_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
@@ -607,6 +837,9 @@ ensure_indexes_visible() {
         visibility_joined="$(IFS=', '; printf '%s' "${visibility_clauses[*]}")"
         mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${visibility_joined}"
     fi
+    [[ "$(index_visibility "${INDEX_ID}")" == "YES" \
+        && "$(index_visibility "${INDEX_VIEWS}")" == "YES" ]] \
+        || { printf 'board benchmark indexes are not visible after activation\n' >&2; exit 1; }
 
     ensure_migration_records
 }
@@ -666,7 +899,7 @@ source_integrity() {
         return
     fi
     filtered_manifest="$(mktemp)"
-    awk '$2 == "config/benchmark.php" || $2 ~ "^modules/_bundled/sirsoft-board/" { print }' \
+    awk '$2 == "config/benchmark.php" || $2 ~ "^modules/_bundled/sirsoft-(board|benchmark)/" { print }' \
         "${SOURCE_MANIFEST}" > "${filtered_manifest}"
     if [[ ! -s "${filtered_manifest}" ]]; then
         rm -f "${filtered_manifest}"
@@ -703,18 +936,24 @@ effective_variant() {
 
 schema_variant() {
     local author_status="${1:-}" id_visibility views_visibility author_structure author_missing
+    local id_shape views_shape
     id_visibility="$(index_visibility "${INDEX_ID}")"
     views_visibility="$(index_visibility "${INDEX_VIEWS}")"
+    id_shape="$(list_id_index_shape)"
+    views_shape="$(list_views_index_shape)"
     [[ -n "${author_status}" ]] || author_status="$(author_terms_status)"
     author_structure="${author_status%%|*}"
     author_missing="${author_status#*|}"
-    if [[ "${id_visibility}" == "MISSING" && "${views_visibility}" == "MISSING" \
+    if [[ "${id_shape}" == "missing" && "${views_shape}" == "missing" \
+        && "${id_visibility}" == "MISSING" && "${views_visibility}" == "MISSING" \
         && "${author_structure}" == "missing" ]]; then
         printf 'original'
-    elif [[ "${id_visibility}" == "YES" && "${views_visibility}" == "YES" \
+    elif [[ "${id_shape}" == "verified" && "${views_shape}" == "verified" \
+        && "${id_visibility}" == "YES" && "${views_visibility}" == "YES" \
         && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
         printf 'optimized'
-    elif [[ "${id_visibility}" == "NO" && "${views_visibility}" == "NO" \
+    elif [[ "${id_shape}" == "verified" && "${views_shape}" == "verified" \
+        && "${id_visibility}" == "NO" && "${views_visibility}" == "NO" \
         && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
         printf 'baseline-invisible'
     else
@@ -748,6 +987,8 @@ smoke() {
 show_status() {
     local module_row module_db_version module_source_version module_version_sync active_sync path
     local author_status author_structure author_missing schema
+    local benchmark_module_row benchmark_db_version benchmark_source_version
+    local benchmark_module_version_sync=not-installed active_benchmark_sync=not-installed
     module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
     module_db_version="$(mysql_scalar "SELECT version FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
     module_source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -761,10 +1002,45 @@ show_status() {
         database/seeders/Sample/PostSampleSeeder.php \
         src/Http/Controllers/Admin/PostController.php \
         src/Http/Controllers/User/PostController.php \
+        src/Providers/BoardServiceProvider.php \
+        src/Repositories/Contracts/PostRepositoryInterface.php \
         src/Repositories/PostRepository.php src/Services/PostService.php; do
         cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-board/${path}" \
             "${APP_ROOT}/modules/sirsoft-board/${path}" || active_sync="drifted"
     done
+    if [[ "$(source_variant)" == "optimized-capable" ]]; then
+        cmp -s \
+            "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Observers/PostAuthorTermObserver.php" \
+            "${APP_ROOT}/modules/sirsoft-board/src/Observers/PostAuthorTermObserver.php" \
+            || active_sync="drifted"
+    fi
+
+    benchmark_module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-benchmark'")"
+    benchmark_db_version="$(mysql_scalar "SELECT version FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-benchmark'")"
+    benchmark_source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${APP_ROOT}/modules/_bundled/sirsoft-benchmark/module.json" 2>/dev/null | head -n 1)"
+    if [[ -n "${benchmark_module_row}" ]]; then
+        benchmark_module_version_sync=drifted
+        [[ -n "${benchmark_source_version}" \
+            && "${benchmark_source_version}" == "${benchmark_db_version}" ]] \
+            && benchmark_module_version_sync=verified
+    fi
+    if [[ -d "${APP_ROOT}/modules/sirsoft-benchmark" ]]; then
+        active_benchmark_sync=verified
+        for path in \
+            CHANGELOG.md composer.json module.json package.json \
+            src/Services/Support/BoardCounterSyncService.php; do
+            cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-benchmark/${path}" \
+                "${APP_ROOT}/modules/sirsoft-benchmark/${path}" \
+                || active_benchmark_sync=drifted
+        done
+    fi
+    if [[ -n "${benchmark_module_row}" && "${active_benchmark_sync}" == not-installed ]] \
+        || [[ -z "${benchmark_module_row}" && "${active_benchmark_sync}" != not-installed ]]; then
+        active_benchmark_sync=drifted
+        benchmark_module_version_sync=drifted
+    fi
+    benchmark_module_row="${benchmark_module_row:-not-installed}"
 
     author_status="$(author_terms_status)"
     author_structure="${author_status%%|*}"
@@ -776,7 +1052,9 @@ show_status() {
     printf 'runtime=%s\n' "$(effective_variant)"
     printf 'schema=%s\n' "${schema}"
     printf 'index.%s=%s\n' "${INDEX_ID}" "$(index_visibility "${INDEX_ID}")"
+    printf 'index.%s.shape=%s\n' "${INDEX_ID}" "$(list_id_index_shape)"
     printf 'index.%s=%s\n' "${INDEX_VIEWS}" "$(index_visibility "${INDEX_VIEWS}")"
+    printf 'index.%s.shape=%s\n' "${INDEX_VIEWS}" "$(list_views_index_shape)"
     if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "1" ]]; then
         printf 'table.board_post_author_terms=present\n'
         printf 'author_terms.schema=%s\n' "${author_structure}"
@@ -789,6 +1067,9 @@ show_status() {
     printf 'active_module_sync=%s\n' "${active_sync}"
     printf 'module_version_sync=%s\n' "${module_version_sync}"
     printf 'module=%s\n' "${module_row}"
+    printf 'active_benchmark_sync=%s\n' "${active_benchmark_sync}"
+    printf 'benchmark_module_version_sync=%s\n' "${benchmark_module_version_sync}"
+    printf 'benchmark_module=%s\n' "${benchmark_module_row}"
     if [[ -f "${APP_ROOT}/config/benchmark.php" ]]; then
         printf 'shared_config=present\n'
     else
@@ -801,13 +1082,22 @@ show_status() {
     fi
 }
 
-sync_module_version() {
-    local version
+sync_module_versions() {
+    local version benchmark_version
     version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
         "${APP_ROOT}/modules/_bundled/sirsoft-board/module.json" | head -n 1)"
     [[ "${version}" =~ ^[0-9A-Za-z.+-]+$ ]] \
         || { printf 'invalid board module version\n' >&2; exit 1; }
     mysql "${DB_NAME}" -e "UPDATE ${MODULES_TABLE} SET version='${version}' WHERE identifier='sirsoft-board'"
+
+    if [[ "$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-benchmark'")" != "0" ]]; then
+        benchmark_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${APP_ROOT}/modules/_bundled/sirsoft-benchmark/module.json" | head -n 1)"
+        [[ "${benchmark_version}" =~ ^[0-9A-Za-z.+-]+$ ]] \
+            || { printf 'invalid benchmark module version\n' >&2; exit 1; }
+        mysql "${DB_NAME}" -e \
+            "UPDATE ${MODULES_TABLE} SET version='${benchmark_version}' WHERE identifier='sirsoft-benchmark'"
+    fi
 }
 
 case "${ACTION}" in
@@ -816,37 +1106,36 @@ case "${ACTION}" in
         apply_source_archive optimized
         ensure_indexes_visible
         set_env_variant optimized
-        sync_module_version
+        sync_module_versions
         clear_runtime
         write_state optimized
         smoke
-        show_status
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     off)
         ensure_no_long_queries
         apply_source_archive optimized
+        ensure_indexes_visible
         set_env_variant baseline
-        sync_module_version
+        sync_module_versions
         clear_runtime
         hide_indexes
         write_state baseline
         smoke
-        show_status
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     restore-original)
         ensure_no_long_queries
-        if [[ -f "${APP_ROOT}/config/benchmark.php" ]]; then
-            set_env_variant baseline
-            clear_runtime
-        fi
-        drop_indexes_and_migration
         apply_source_archive baseline
+        set_env_variant baseline
+        clear_runtime 1
+        drop_indexes_and_migration
         remove_env_variant
-        sync_module_version
+        sync_module_versions
         clear_runtime
         write_state baseline
         smoke
-        show_status
+        [[ "${DEFER_RUNTIME}" == 1 ]] || show_status
         ;;
     status)
         show_status

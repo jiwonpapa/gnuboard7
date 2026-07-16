@@ -4,34 +4,36 @@
 
 동일 스테이징 서버와 동일 데이터에서 그누보드7 7.0.4 원본 목록 경로와 성능 개선 경로를 반복 전환한다.
 
-실행 파일:
+변경 실행 파일:
 
-`scripts/benchmark/board-performance-toggle.sh`
+`scripts/benchmark/g7-performance-toggle.sh`
+
+개별 `board-performance-toggle.sh`는 통합 하네스 내부 실행과 직접 `status` 진단만 허용한다.
 
 ## 기본 명령
 
 ### 개선 적용
 
 ```bash
-scripts/benchmark/board-performance-toggle.sh on
+scripts/benchmark/g7-performance-toggle.sh on --scope board
 ```
 
 다음을 한 번에 수행한다.
 
 - 검토·커밋된 optimized Git ref(기본 `HEAD`) 소스 스냅샷 업로드
-- 번들·활성 `sirsoft-board` 동기화
+- 번들·활성 `sirsoft-board`와 설치된 `sirsoft-benchmark` 작성자 사전 동기화 경로 배포
 - `G7_BOARD_PERFORMANCE_VARIANT=optimized`
 - 신규 인덱스가 없으면 생성, invisible이면 visible 전환
 - 작성자 검색 사전이 없으면 생성하고 누락된 고유 작성자 보강
-- optimized ref의 module 버전을 DB에 반영
-- Laravel production 캐시 재생성과 PHP-FPM reload
+- optimized ref의 게시판·설치된 벤치마크 module 버전을 DB에 반영
+- Laravel production 캐시 재생성, queue·Reverb graceful restart, PHP-FPM reload
 - 게시판 첫 페이지 HTTP smoke
 - 최종 상태 출력
 
 ### 빠른 원본 비교
 
 ```bash
-scripts/benchmark/board-performance-toggle.sh off
+scripts/benchmark/g7-performance-toggle.sh off --scope board
 ```
 
 소스는 optimized-capable 상태로 유지하지만 실행 분기를 공식 7.0.4 원본 로직으로 바꾼다.
@@ -48,7 +50,7 @@ scripts/benchmark/board-performance-toggle.sh off
 ### 현재 상태
 
 ```bash
-scripts/benchmark/board-performance-toggle.sh status
+scripts/benchmark/g7-performance-toggle.sh status --scope board --strict
 ```
 
 출력 항목:
@@ -58,16 +60,18 @@ scripts/benchmark/board-performance-toggle.sh status
 - `runtime`: 실제 선택된 `optimized` 또는 `baseline`
 - `schema`: 신규 인덱스 visible, invisible, 제거 상태
 - 신규 인덱스별 visibility
+- 신규 인덱스별 정확한 컬럼 순서·ASC·BTREE·non-unique·prefix 미사용 검증
 - 작성자 검색 사전의 컬럼·복합 PK·collation·누락 작성자 검증 결과
 - 번들 모듈과 활성 모듈 소스 일치 여부
 - `sirsoft-board` DB 버전과 활성 상태
+- 설치된 `sirsoft-benchmark`의 벌크 작성자 사전 동기화 코드·DB 버전 일치 여부
 - PHP-FPM 상태
 - 마지막 변경 시각과 하네스 상태
 
 ### 정확한 원본 복구
 
 ```bash
-scripts/benchmark/board-performance-toggle.sh restore-original --yes
+scripts/benchmark/g7-performance-toggle.sh restore-original --scope board --yes
 ```
 
 다음을 수행한다.
@@ -80,9 +84,13 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 - module DB 버전 1.0.2 복원
 - 성능 variant 환경값 제거
 
+복구는 통합 하네스가 maintenance mode에서 앱 worker·cron·PHP-FPM을 모두 정지한 뒤 공식 baseline 소스와 스키마를 적용한다. strict 검증과 smoke가 통과해야 다시 공개한다.
+
 이 상태에서 다시 `on`을 실행하면 optimized 소스와 인덱스를 재생성한다. 180만 행 테이블의 인덱스 재생성은 시간이 걸리고 metadata lock을 유발할 수 있으므로 반복 비교에는 `off`를 사용한다.
 
 `restore-original`은 고정된 7.0.4 격리 벤치마크 환경 전용이다. 이후 모듈 기능과 함께 운영 중인 서버의 튜닝 해제에는 소스 계약을 보존하는 `off`만 사용한다.
+
+별도 설치된 `sirsoft-benchmark` 데이터 생성 모듈은 원본 복구에서 제거하지 않는다. 대신 튜닝 직전 기준 커밋의 0.2.4 소스와 의존성으로 함께 되돌려, 7.0.4 게시판 계약과 맞지 않는 벌크 동기화 코드가 남지 않게 한다. 기준 커밋은 `G7_BOARD_PERF_BENCHMARK_BASELINE_REF` 또는 `--benchmark-baseline-ref`로 명시적으로 교체할 수 있다.
 
 ## 상태 표
 
@@ -95,13 +103,16 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 ## 안전장치
 
 - 공통·게시판·쇼핑몰 전환이 겹치지 않도록 원격 전역 lock을 사용한다.
-- 5초 이상 실행 중인 DB 작업이나 sleep 상태의 열린 트랜잭션이 있으면 DDL 전에 중단한다.
+- 같은 DB 서버에 5초 이상 실행 중인 Query/Execute나 열린 InnoDB 트랜잭션이 하나라도 있으면 DDL 전에 보수적으로 중단한다. 기본 DB가 없거나 다른 연결에서 정규화된 테이블명을 쓰는 트랜잭션도 놓치지 않는다.
 - DDL metadata lock 대기는 15초로 제한해 무기한 멈춤을 방지한다.
 - 자동으로 장기 쿼리를 죽이지 않는다.
 - 소스 전환 전 백업을 생성하고 최근 10개만 유지한다.
 - 번들 모듈과 활성 모듈을 함께 교체한다.
+- 원본 복구 아카이브에는 공식 게시판 7.0.4와 튜닝 직전 `sirsoft-benchmark` 스냅샷을 함께 넣어 모듈 간 계약도 원상 복구한다.
 - `.env`의 기존 소유권과 권한을 유지한다.
-- 전환 후 `config`, `route`, `view`, `hooks` 캐시를 재생성하고 PHP-FPM reload와 HTTP smoke를 수행한다.
+- 인덱스는 이름뿐 아니라 컬럼 수·순서·ASC·BTREE·non-unique·prefix 미사용을 확인하고, 잘못된 동일 이름 인덱스는 `on`에서 재생성한다.
+- 통합 전환은 실행 중 benchmark job을 거부하고, 앱 systemd unit·cron·PHP-FPM을 정지한 뒤 기본 930초 drain을 통과해야 소스와 DDL을 변경한다.
+- 전환 후 `config`, `route`, `view`, `hooks` 캐시를 재생성하고 maintenance 상태에서 strict 검증한 뒤 worker·cron 재시작과 HTTP smoke를 수행한다.
 - exact restore는 `--yes` 없이는 실행되지 않는다.
 
 ## 측정 주의
@@ -123,12 +134,12 @@ G7_BOARD_PERF_HOST=g7devops \
 G7_BOARD_PERF_ROOT=/home/g7devops/public_html \
 G7_BOARD_PERF_DB_NAME=g7devops \
 G7_BOARD_PERF_DB_PREFIX=g7_ \
-scripts/benchmark/board-performance-toggle.sh status
+scripts/benchmark/g7-performance-toggle.sh status --scope board --strict
 ```
 
 명령 옵션으로도 `--host`, `--root`, `--app-user`, `--php-bin`, `--db`, `--db-prefix`, `--baseline`, `--optimized-ref`, `--base-url`을 지정할 수 있다. optimized 소스는 미커밋 작업 파일이 아니라 지정 Git ref에서만 생성한다.
 
-전체 또는 공통·쇼핑몰과 조합된 전환에는 `g7-performance-toggle.sh`를 사용한다. 공유 설정 파일의 정확한 제거는 통합 `restore-original --scope all --yes`에서만 수행한다.
+모든 변경은 `g7-performance-toggle.sh`를 사용한다. 공유 설정 파일의 정확한 제거는 통합 `restore-original --scope all --yes`에서만 수행한다.
 
 ## 테스트 근거
 
@@ -156,4 +167,4 @@ scripts/benchmark/board-performance-toggle.sh status
 
 동일 `freebd` 1,000페이지 요청은 `off`에서 11.594초, `on`에서 0.579초로 측정돼 실제 서버에서도 실행 분기가 바뀌는 것을 확인했다. 최종 서버 상태는 `on`이다.
 
-`board_post_author_terms(board_id, author_name)`는 `(board_id, author_name)` 복합 PK를 가진 단조 증가형 검색 사전이다. ON 전환 시 기존 게시글의 고유 작성자를 `INSERT IGNORE ... SELECT DISTINCT`로 보강하고, 신규 작성자·작성자 변경도 Repository가 `INSERT IGNORE`로 동기화한다. 삭제된 작성자 항목이 남아도 실제 게시글과 equality join하므로 잘못된 결과는 반환하지 않는다.
+`board_post_author_terms(board_id, author_name)`는 `(board_id, author_name)` 복합 PK를 가진 단조 증가형 검색 사전이다. ON 전환 시 기존 게시글의 고유 작성자를 `INSERT IGNORE ... SELECT DISTINCT`로 보강한다. 신규·변경 게시글은 Eloquent Observer가, raw bulk 벤치마크 적재는 완료 동기화 단계가 사전을 보강한다. 삭제된 작성자 항목이 남아도 실제 게시글과 equality join하므로 잘못된 결과는 반환하지 않는다.

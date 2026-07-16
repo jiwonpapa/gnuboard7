@@ -6,6 +6,7 @@ require_once __DIR__.'/../ModuleTestCase.php';
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Modules\Sirsoft\Board\Models\Post;
 use Modules\Sirsoft\Board\Repositories\PostRepository;
 use Modules\Sirsoft\Board\Tests\BoardTestCase;
 
@@ -145,14 +146,14 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
         ));
     }
 
-    public function test_repository_create_and_author_update_extend_author_terms(): void
+    public function test_direct_eloquent_create_and_author_update_extend_author_terms(): void
     {
-        $post = $this->repository->create($this->board->slug, [
+        $post = Post::create([
             'board_id' => $this->board->id,
             'title' => '작성자 사전 동기화',
             'content' => '작성자 사전 동기화 테스트',
             'user_id' => null,
-            'author_name' => 'dictionary-author-before',
+            'author_name' => '0',
             'password' => null,
             'ip_address' => '127.0.0.1',
             'is_notice' => false,
@@ -164,10 +165,10 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
 
         $this->assertDatabaseHas('board_post_author_terms', [
             'board_id' => $this->board->id,
-            'author_name' => 'dictionary-author-before',
+            'author_name' => '0',
         ]);
 
-        $this->repository->update($this->board->slug, $post->id, [
+        $post->update([
             'author_name' => 'dictionary-author-after',
         ]);
 

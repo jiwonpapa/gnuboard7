@@ -213,8 +213,9 @@ class PostRepositoryFilterTest extends BoardTestCase
         $this->assertStringContainsString('board_posts', $searchSql);
         $this->assertStringContainsString('board_post_author_terms', $searchSql);
         $this->assertStringContainsString('users', $searchSql);
-        $this->assertStringContainsString('JOIN_ORDER', $searchSql);
         $this->assertStringContainsString('board_search_users', $searchSql);
+        $this->assertStringContainsString('board_search_user_posts', $searchSql);
+        $this->assertStringNotContainsString('JOIN_ORDER', $searchSql);
         $this->assertStringNotContainsString('straight join', strtolower($searchSql));
     }
 

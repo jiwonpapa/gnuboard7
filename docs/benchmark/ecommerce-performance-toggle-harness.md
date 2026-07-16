@@ -8,21 +8,23 @@
 
 ```bash
 # 개선 코드 + 인덱스 적용
-scripts/benchmark/ecommerce-performance-toggle.sh on
+scripts/benchmark/g7-performance-toggle.sh on --scope ecommerce
 
 # 공식 7.0.4 코드 + 인덱스 invisible
-scripts/benchmark/ecommerce-performance-toggle.sh off
+scripts/benchmark/g7-performance-toggle.sh off --scope ecommerce
 
 # 소스, 런타임, 인덱스, 활성 모듈 동기화 상태
-scripts/benchmark/ecommerce-performance-toggle.sh status
+scripts/benchmark/g7-performance-toggle.sh status --scope ecommerce --strict
 
 # 공식 코드 복구 + 벤치마크 인덱스 삭제
-scripts/benchmark/ecommerce-performance-toggle.sh restore-original --yes
+scripts/benchmark/g7-performance-toggle.sh restore-original --scope ecommerce --yes
 ```
 
-모든 전환은 변경 전 파일을 `/home/g7devops/backups/ecommerce-performance-harness`에 보관하고, 번들/활성 모듈과 번들/활성 템플릿을 함께 동기화합니다. optimized 소스는 작업 디렉터리가 아니라 검토·커밋된 Git ref(기본 `HEAD`)에서 생성합니다. 전환 후 `config`, `route`, `view`, `hooks` 캐시를 재생성해 실제 production 조건을 유지합니다.
+모든 전환은 변경 전 파일을 `/home/g7devops/backups/ecommerce-performance-harness`에 보관하고, 번들/활성 모듈과 번들/활성 템플릿을 함께 동기화합니다. optimized 소스는 작업 디렉터리가 아니라 검토·커밋된 Git ref(기본 `HEAD`)에서 생성합니다.
 
-전체 또는 공통·게시판과 조합된 전환에는 `scripts/benchmark/g7-performance-toggle.sh`를 사용합니다. 통합 하네스는 세 영역에 하나의 원격 lock을 적용하고 캐시 재생성과 PHP-FPM reload를 한 번만 실행합니다.
+변경은 항상 `scripts/benchmark/g7-performance-toggle.sh`를 사용합니다. 개별 쇼핑몰 스크립트의 변경 명령은 내부 token 없이는 거부하며 직접 `status`만 허용합니다. 통합 하네스는 세 영역에 하나의 원격 lock을 적용합니다.
+
+통합 전환은 실제 적용 archive를 maintenance 전에 업로드·checksum 검증하고 실행 중 benchmark job을 거부합니다. 종료 신호 뒤 앱 systemd unit·cron·PHP-FPM을 기본 930초 안에서 drain하며, DB 무활동 gate를 통과한 뒤에만 소스·DDL을 변경합니다. metadata·InnoDB lock 대기는 15초입니다. 인덱스는 이름뿐 아니라 컬럼 순서·ASC·BTREE·non-unique·prefix 미사용까지 검증하고 잘못된 정의는 `on`에서 재생성합니다. HTTP smoke와 마지막 strict 상태가 모두 통과해야 완료하며, 실패 시 unit을 다시 중지하고 maintenance를 유지합니다.
 
 ## 패치 파일
 
