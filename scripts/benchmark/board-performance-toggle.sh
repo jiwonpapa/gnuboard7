@@ -504,7 +504,7 @@ search_sync_cap() {
 
 ft_persisted_value() {
     local available value
-    if ! available="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='performance_schema' AND TABLE_NAME='persisted_variables')"; then
+    if ! available="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='performance_schema' AND TABLE_NAME='persisted_variables'")"; then
         printf 'failed to inspect MySQL persisted variable support\n' >&2
         return 1
     fi
@@ -512,7 +512,7 @@ ft_persisted_value() {
         printf 'unsupported'
         return
     fi
-    if ! value="$(mysql_scalar "SELECT VARIABLE_VALUE FROM performance_schema.persisted_variables WHERE UPPER(VARIABLE_NAME)='INNODB_FT_RESULT_CACHE_LIMIT')"; then
+    if ! value="$(mysql_scalar "SELECT VARIABLE_VALUE FROM performance_schema.persisted_variables WHERE UPPER(VARIABLE_NAME)='INNODB_FT_RESULT_CACHE_LIMIT'")"; then
         printf 'failed to inspect persisted FULLTEXT result cache value\n' >&2
         return 1
     fi

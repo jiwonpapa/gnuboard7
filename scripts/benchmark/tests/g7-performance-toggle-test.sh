@@ -174,6 +174,26 @@ assert_text_order() {
     }
 }
 
+assert_remote_payload_syntax() {
+    local file="$1" payload
+    payload="$(awk '
+        capture && $0 == "REMOTE" { exit }
+        capture { print }
+        /<<'\''REMOTE'\''/ { capture = 1 }
+    ' "${file}")"
+    [[ -n "${payload}" ]] || {
+        printf 'embedded remote payload not found: %s\n' "${file}" >&2
+        exit 1
+    }
+    if ! printf '%s\n' "${payload}" | bash -n; then
+        printf 'embedded remote payload syntax failed: %s\n' "${file}" >&2
+        exit 1
+    fi
+}
+
+assert_remote_payload_syntax "${BOARD_HARNESS}"
+assert_remote_payload_syntax "${ECOMMERCE_HARNESS}"
+
 output="$(run_harness status --strict)"
 assert_contains "${output}" 'common.state=optimized'
 assert_contains "${output}" 'board.state=optimized'
