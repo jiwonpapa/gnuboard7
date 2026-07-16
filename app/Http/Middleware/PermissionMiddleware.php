@@ -126,7 +126,7 @@ class PermissionMiddleware
             return false;
         }
 
-        if (config('benchmark.board_list_variant', 'optimized') !== 'optimized') {
+        if (config('benchmark.common_variant', 'optimized') !== 'optimized') {
             return $guestRole->permissions()
                 ->where('identifier', $permission)
                 ->where('type', $type)

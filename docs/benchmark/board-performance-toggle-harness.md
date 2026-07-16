@@ -18,7 +18,7 @@ scripts/benchmark/board-performance-toggle.sh on
 
 다음을 한 번에 수행한다.
 
-- 현재 로컬의 optimized 소스 스냅샷 업로드
+- 검토·커밋된 optimized Git ref(기본 `HEAD`) 소스 스냅샷 업로드
 - 번들·활성 `sirsoft-board` 동기화
 - `G7_BOARD_PERFORMANCE_VARIANT=optimized`
 - 신규 인덱스가 없으면 생성, invisible이면 visible 전환
@@ -36,11 +36,10 @@ scripts/benchmark/board-performance-toggle.sh off
 소스는 optimized-capable 상태로 유지하지만 실행 분기를 공식 7.0.4 원본 로직으로 바꾼다.
 
 - 넓은 컬럼을 직접 OFFSET하는 원본 페이지네이션
+- FULLTEXT·작성자·회원 조건을 하나의 OR로 평가하는 원본 통합검색
 - 공지·답글 상한 없는 원본 로직
 - 답글이 없어도 답글 확인 SQL을 실행하는 원본 로직
 - 필터 COUNT 단기 캐시 미사용
-- guest 권한별 `EXISTS` 실행
-- 활성 모듈·언어팩 원본 조회
 - 신규 인덱스 두 개는 `INVISIBLE`
 
 이 모드는 빠른 읽기 성능 A/B 비교용이다. invisible index도 INSERT/UPDATE 시 유지되므로 **쓰기 비용과 디스크까지 원본과 같지는 않다**.
@@ -72,7 +71,7 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 다음을 수행한다.
 
 - 공식 Git tag `7.0.4`에서 성능 패치 대상 파일 복원
-- `config/benchmark.php` 제거
+- 공유 `config/benchmark.php`는 보존하고 게시판 환경값만 제거
 - 신규 migration 파일 제거
 - 신규 인덱스 두 개 실제 삭제
 - migration 기록 삭제
@@ -87,11 +86,11 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 |---|---|---|---|---|
 | `on` | optimized | visible | optimized-capable | 개선 성능 측정 |
 | `off` | G7 7.0.4 baseline | invisible | optimized-capable | 빠른 읽기 A/B 비교 |
-| `restore-original --yes` | G7 7.0.4 baseline | 없음 | 공식 7.0.4 | 코드·DB 정확 복구 |
+| `restore-original --yes` | G7 7.0.4 baseline | 없음 | 공식 7.0.4 게시판 | 게시판 코드·DB 정확 복구 |
 
 ## 안전장치
 
-- 동시에 두 전환이 실행되지 않도록 원격 `flock`을 사용한다.
+- 공통·게시판·쇼핑몰 전환이 겹치지 않도록 원격 전역 lock을 사용한다.
 - 5초 이상 실행 중인 DB 작업이 있으면 DDL 전에 중단한다.
 - 자동으로 장기 쿼리를 죽이지 않는다.
 - 소스 전환 전 백업을 생성하고 최근 10개만 유지한다.
@@ -120,15 +119,20 @@ G7_BOARD_PERF_DB_PREFIX=g7_ \
 scripts/benchmark/board-performance-toggle.sh status
 ```
 
-명령 옵션으로도 `--host`, `--root`, `--app-user`, `--php-bin`, `--db`, `--db-prefix`, `--baseline`, `--base-url`을 지정할 수 있다.
+명령 옵션으로도 `--host`, `--root`, `--app-user`, `--php-bin`, `--db`, `--db-prefix`, `--baseline`, `--optimized-ref`, `--base-url`을 지정할 수 있다. optimized 소스는 미커밋 작업 파일이 아니라 지정 Git ref에서만 생성한다.
+
+전체 또는 공통·쇼핑몰과 조합된 전환에는 `g7-performance-toggle.sh`를 사용한다. 공유 설정 파일의 정확한 제거는 통합 `restore-original --scope all --yes`에서만 수행한다.
 
 ## 테스트 근거
 
 타깃 테스트는 optimized와 baseline 분기를 같은 테스트 프로세스에서 모두 검증한다.
 
-- optimized: ID-only 선조회, 공지 10건, 답글 SQL 생략, COUNT·권한·언어팩 재사용
-- baseline: 넓은 OFFSET, 공지 전체, 답글 확인 SQL, 반복 COUNT·권한·언어팩 쿼리
+- optimized: ID-only 선조회, 공지 10건, 답글 SQL 생략, 필터 COUNT 재사용
+- optimized 검색: 제목·본문 FULLTEXT, 작성자, 회원 결과를 DB 내부 ID UNION으로 분리
+- baseline: 넓은 OFFSET, 단일 OR 검색, 공지 전체, 답글 확인 SQL, 반복 COUNT 쿼리
 - 결과: 75 tests, 143 assertions 통과
+
+권한·활성 모듈·언어팩과 훅 등록 로그는 게시판 축에서 분리되어 통합 하네스의 `common` 축으로 전환한다.
 
 스테이징 왕복 검증:
 

@@ -76,7 +76,7 @@ class ModuleRouteServiceProvider extends ServiceProvider
         }
 
         // 활성화된 모듈 identifier 목록 가져오기
-        $activeModuleIdentifiers = config('benchmark.board_list_variant', 'optimized') === 'optimized'
+        $activeModuleIdentifiers = config('benchmark.common_variant', 'optimized') === 'optimized'
             ? ModuleManager::getActiveModuleIdentifiers()
             : Module::where('status', ExtensionStatus::Active->value)
                 ->pluck('identifier')

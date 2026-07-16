@@ -4,7 +4,9 @@ namespace Modules\Sirsoft\Ecommerce\Http\Resources;
 
 use App\Helpers\PermissionHelper;
 use App\Http\Resources\BaseApiResource;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
 use Modules\Sirsoft\Ecommerce\Http\Resources\Traits\HasMultiCurrencyPrices;
 
 /**
@@ -22,6 +24,9 @@ class ProductListResource extends BaseApiResource
      */
     public function toArray(Request $request): array
     {
+        $listPrice = $this->resolvePriceFields($this->list_price, $request);
+        $sellingPrice = $this->resolvePriceFields($this->selling_price, $request);
+
         return [
             'id' => $this->id,
             'name' => $this->name,
@@ -31,15 +36,15 @@ class ProductListResource extends BaseApiResource
             'thumbnail_url' => $this->getThumbnailUrl(),
 
             // 가격
-            'list_price' => $this->roundToBaseCurrency($this->list_price),
-            'list_price_formatted' => $this->formatBaseCurrency($this->list_price),
-            'selling_price' => $this->roundToBaseCurrency($this->selling_price),
-            'selling_price_formatted' => $this->formatBaseCurrency($this->selling_price),
+            'list_price' => $listPrice['raw'],
+            'list_price_formatted' => $listPrice['formatted'],
+            'selling_price' => $sellingPrice['raw'],
+            'selling_price_formatted' => $sellingPrice['formatted'],
             'discount_rate' => $this->getDiscountRate(),
 
             // 다중 통화 가격
-            'multi_currency_list_price' => $this->buildMultiCurrencyPrices($this->list_price),
-            'multi_currency_selling_price' => $this->buildMultiCurrencyPrices($this->selling_price),
+            'multi_currency_list_price' => $listPrice['multi_currency'],
+            'multi_currency_selling_price' => $sellingPrice['multi_currency'],
 
             // 재고
             'stock_quantity' => $this->stock_quantity,
@@ -65,12 +70,9 @@ class ProductListResource extends BaseApiResource
             ])),
             'primary_category' => $this->whenLoaded('categories', fn () => $this->categories->firstWhere('pivot.is_primary', true)?->getLocalizedName()
             ),
-            'categories_with_path' => $this->whenLoaded('categories', fn () => $this->categories->map(fn ($cat) => [
-                'id' => $cat->id,
-                'path' => $cat->getBreadcrumb(),
-                'path_string' => collect($cat->getBreadcrumb())->pluck('name')->implode(' > '),
-                'is_primary' => $cat->pivot->is_primary,
-            ])),
+            'categories_with_path' => $this->whenLoaded('categories', fn () => $this->categories->map(
+                fn ($cat) => $this->resolveCategoryPath($cat)
+            )),
 
             // 브랜드 (다국어)
             'brand_name' => $this->whenLoaded('brand', fn () => $this->brand?->getLocalizedName()),
@@ -114,6 +116,99 @@ class ProductListResource extends BaseApiResource
 
             // 권한 정보 (is_owner + abilities)
             ...$this->resourceMeta($request),
+        ];
+    }
+
+    /**
+     * 가격 변환 결과를 같은 요청 안에서 재사용합니다.
+     *
+     * @return array{raw: float|int, formatted: string, multi_currency: array}
+     */
+    private function resolvePriceFields(float|int|null $price, Request $request): array
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized') {
+            return [
+                'raw' => $this->roundToBaseCurrency($price),
+                'formatted' => $this->formatBaseCurrency($price),
+                'multi_currency' => $this->buildMultiCurrencyPrices($price ?? 0),
+            ];
+        }
+
+        $cache = $request->attributes->get('g7_ecommerce_price_resource_cache', []);
+        $context = $this->resolvePriceCacheContext($request);
+        $cacheKey = $context['key'].':'.serialize($price ?? 0);
+
+        if (isset($cache[$cacheKey])) {
+            return $cache[$cacheKey];
+        }
+
+        $multiCurrency = $this->buildMultiCurrencyPrices($price ?? 0);
+        $cache[$cacheKey] = [
+            'raw' => $this->roundToCurrency($price, $context['default_currency']),
+            'formatted' => $multiCurrency[$context['default_currency']]['formatted']
+                ?? $this->formatCurrencyPrice($price ?? 0, $context['default_currency']),
+            'multi_currency' => $multiCurrency,
+        ];
+        $request->attributes->set('g7_ecommerce_price_resource_cache', $cache);
+
+        return $cache[$cacheKey];
+    }
+
+    /**
+     * 요청 동안 고정되는 locale/통화 설정 식별자는 한 번만 계산합니다.
+     *
+     * @return array{key: string, locale: string, default_currency: string}
+     */
+    private function resolvePriceCacheContext(Request $request): array
+    {
+        $contexts = $request->attributes->get('g7_ecommerce_price_resource_contexts', []);
+        $locale = app()->getLocale();
+        $context = $contexts[static::class] ?? null;
+
+        if (is_array($context) && ($context['locale'] ?? null) === $locale) {
+            return $context;
+        }
+
+        $defaultCurrency = $this->getDefaultCurrencyCode();
+        $context = [
+            'key' => implode(':', [
+                static::class,
+                $locale,
+                $defaultCurrency,
+                hash('xxh3', serialize($this->getCurrencySettings())),
+            ]),
+            'locale' => $locale,
+            'default_currency' => $defaultCurrency,
+        ];
+        $contexts[static::class] = $context;
+        $request->attributes->set('g7_ecommerce_price_resource_contexts', $contexts);
+
+        return $context;
+    }
+
+    /**
+     * 동일 카테고리의 브레드크럼을 한 번만 계산합니다.
+     *
+     * @return array{id: int, path: array, path_string: string, is_primary: bool}
+     */
+    private function resolveCategoryPath($category): array
+    {
+        if (config('benchmark.ecommerce_variant') !== 'optimized') {
+            return [
+                'id' => $category->id,
+                'path' => $category->getBreadcrumb(),
+                'path_string' => collect($category->getBreadcrumb())->pluck('name')->implode(' > '),
+                'is_primary' => $category->pivot->is_primary,
+            ];
+        }
+
+        $breadcrumb = $category->getBreadcrumb();
+
+        return [
+            'id' => $category->id,
+            'path' => $breadcrumb,
+            'path_string' => collect($breadcrumb)->pluck('name')->implode(' > '),
+            'is_primary' => $category->pivot->is_primary,
         ];
     }
 
@@ -173,12 +268,12 @@ class ProductListResource extends BaseApiResource
         $abilities = self::resolveRequestAbilityMap($map, $request);
         $resource = $this->resource;
 
-        while ($resource instanceof \Illuminate\Http\Resources\Json\JsonResource) {
+        while ($resource instanceof JsonResource) {
             $resource = $resource->resource;
         }
 
         foreach ($map as $key => $identifier) {
-            if ($abilities[$key] && $resource instanceof \Illuminate\Database\Eloquent\Model) {
+            if ($abilities[$key] && $resource instanceof Model) {
                 $abilities[$key] = PermissionHelper::checkScopeAccess($resource, $identifier, $request->user());
             }
         }

@@ -102,6 +102,7 @@ class HookListenerRegistrar
     {
         $key = ($source ?? 'unknown').'::'.$listenerClass;
         self::$registered[$key] = true;
+        $optimizedLogging = config('benchmark.common_variant', 'optimized') === 'optimized';
 
         foreach ($subscribedHooks as $hookName => $config) {
             $method = $config['method'] ?? 'handle';
@@ -124,13 +125,23 @@ class HookListenerRegistrar
                 self::addQueuedAction($hookName, $listenerClass, $method, $priority);
             }
 
-            Log::info('훅 리스너 등록 완료', [
-                'hook' => $hookName,
+            if (! $optimizedLogging) {
+                Log::info('훅 리스너 등록 완료', [
+                    'hook' => $hookName,
+                    'listener' => $listenerClass,
+                    'method' => $method,
+                    'priority' => $priority,
+                    'type' => $type,
+                    'sync' => $forceSync,
+                    'source' => $source,
+                ]);
+            }
+        }
+
+        if ($optimizedLogging) {
+            Log::info('훅 리스너 등록 요약', [
                 'listener' => $listenerClass,
-                'method' => $method,
-                'priority' => $priority,
-                'type' => $type,
-                'sync' => $forceSync,
+                'hook_count' => count($subscribedHooks),
                 'source' => $source,
             ]);
         }

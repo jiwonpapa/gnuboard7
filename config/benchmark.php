@@ -1,9 +1,24 @@
 <?php
 
+$commonVariant = env('G7_COMMON_PERFORMANCE_VARIANT', 'optimized');
 $boardListVariant = env('G7_BOARD_PERFORMANCE_VARIANT', 'optimized');
 $ecommerceVariant = env('G7_ECOMMERCE_PERFORMANCE_VARIANT', 'optimized');
 
 return [
+    /*
+    |--------------------------------------------------------------------------
+    | Common bootstrap performance variant
+    |--------------------------------------------------------------------------
+    |
+    | optimized: aggregate high-volume bootstrap diagnostics such as hook
+    | listener registration logs. baseline: preserve the original per-item
+    | diagnostics for controlled A/B benchmarks and troubleshooting.
+    |
+    */
+    'common_variant' => in_array($commonVariant, ['baseline', 'optimized'], true)
+        ? $commonVariant
+        : 'optimized',
+
     /*
     |--------------------------------------------------------------------------
     | Board list performance variant

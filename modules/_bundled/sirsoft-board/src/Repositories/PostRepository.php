@@ -89,33 +89,6 @@ class PostRepository implements PostRepositoryInterface
      */
     private function applyFilters($query, array $filters): void
     {
-        // 검색
-        if (! empty($filters['search'])) {
-            $keyword = $this->escapeLikeKeyword($filters['search']);
-            $searchField = $filters['search_field'] ?? 'all';
-
-            $query->where(function ($q) use ($keyword, $searchField) {
-                // 제목+내용 검색: FULLTEXT 활용 (all, title_content)
-                if ($searchField === 'all' || $searchField === 'title_content') {
-                    if (DatabaseFulltextEngine::supportsFulltext()) {
-                        $q->orWhereRaw('MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)', [$keyword]);
-                    } else {
-                        $q->orWhere('title', 'like', "%{$keyword}%")
-                            ->orWhere('content', 'like', "%{$keyword}%");
-                    }
-                }
-
-                // 작성자 검색
-                if ($searchField === 'all' || $searchField === 'author' || $searchField === 'author_name') {
-                    $q->orWhere('author_name', 'like', "%{$keyword}%")
-                        ->orWhereHas('user', function ($uq) use ($keyword) {
-                            $uq->where('name', 'like', "%{$keyword}%")
-                                ->orWhere('email', 'like', "%{$keyword}%");
-                        });
-                }
-            });
-        }
-
         // 상태 필터
         if (! empty($filters['status'])) {
             if ($filters['status'] === 'secret') {
@@ -163,6 +136,134 @@ class PostRepository implements PostRepositoryInterface
             // 종료일 23:59:59까지 검색
             $query->where('created_at', '<=', $filters['created_at_to'].' 23:59:59');
         }
+
+        // optimized ID branch가 나머지 필터를 포함하도록 검색은 마지막에 적용한다.
+        if (! empty($filters['search'])) {
+            $this->applySearchFilter(
+                $query,
+                $filters['search'],
+                $filters['search_field'] ?? 'all'
+            );
+        }
+    }
+
+    /**
+     * 게시글 검색 조건을 적용합니다.
+     *
+     * baseline은 기존 OR 쿼리를 보존하고, optimized all 검색은 FULLTEXT,
+     * 작성자 스냅샷, 회원 정보 매칭을 별도 ID 집합으로 분리합니다.
+     */
+    private function applySearchFilter(Builder $query, string $search, string $searchField): void
+    {
+        $keyword = $this->escapeLikeKeyword($search);
+
+        if (
+            $searchField === 'all'
+            && config('benchmark.board_list_variant', 'optimized') === 'optimized'
+        ) {
+            $this->applyOptimizedAllSearch($query, $search, $keyword);
+
+            return;
+        }
+
+        // G7 7.0.4 기준 경로. baseline A/B 비교와 개별 search_field 계약을 보존한다.
+        $query->where(function ($q) use ($keyword, $searchField) {
+            if ($searchField === 'all' || $searchField === 'title_content') {
+                if (DatabaseFulltextEngine::supportsFulltext()) {
+                    $q->orWhereRaw('MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)', [$keyword]);
+                } else {
+                    $q->orWhere('title', 'like', "%{$keyword}%")
+                        ->orWhere('content', 'like', "%{$keyword}%");
+                }
+            }
+
+            if ($searchField === 'all' || $searchField === 'author' || $searchField === 'author_name') {
+                $q->orWhere('author_name', 'like', "%{$keyword}%")
+                    ->orWhereHas('user', function ($uq) use ($keyword) {
+                        $uq->where('name', 'like', "%{$keyword}%")
+                            ->orWhere('email', 'like', "%{$keyword}%");
+                    });
+            }
+        });
+    }
+
+    /**
+     * all 검색을 인덱스 가능한 ID UNION 서브쿼리로 변환합니다.
+     */
+    private function applyOptimizedAllSearch(Builder $query, string $search, string $likeKeyword): void
+    {
+        // 게시판/공지/원글/권한/삭제 및 필터 조건을 각 branch에 복제해 스캔을 줄인다.
+        $fulltextIds = (clone $query)->select('board_posts.id as matched_post_id');
+        if (DatabaseFulltextEngine::supportsFulltext()) {
+            $fulltextKeyword = DatabaseFulltextEngine::sanitizeBooleanModeKeyword($search);
+            if ($fulltextKeyword === '') {
+                $fulltextIds->whereRaw('1 = 0');
+            } else {
+                $fulltextIds->whereRaw(
+                    'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)',
+                    [$fulltextKeyword]
+                );
+            }
+        } else {
+            $fulltextIds->where(function ($q) use ($likeKeyword) {
+                $q->where('title', 'like', "%{$likeKeyword}%")
+                    ->orWhere('content', 'like', "%{$likeKeyword}%");
+            });
+        }
+
+        $authorNameIds = (clone $query)
+            ->select('board_posts.id as matched_post_id')
+            ->where('author_name', 'like', "%{$likeKeyword}%");
+
+        // 회원을 먼저 선별한 뒤 board_posts.user_id 인덱스로 연결해
+        // 대량 게시글 각 행의 상관 EXISTS 반복을 피한다.
+        $matchingUserIds = DB::table('users')
+            ->select('users.id as matched_user_id')
+            ->where(function ($users) use ($likeKeyword) {
+                $users->where('name', 'like', "%{$likeKeyword}%")
+                    ->orWhere('email', 'like', "%{$likeKeyword}%");
+            })
+            ->distinct();
+
+        $eligibleUserPosts = (clone $query)->select([
+            'board_posts.id as matched_post_id',
+            'board_posts.user_id as matched_user_id',
+        ]);
+        $tablePrefix = DB::getTablePrefix();
+        $matchingUsersAlias = $tablePrefix.'board_search_users';
+        $eligiblePostsAlias = $tablePrefix.'board_search_user_posts';
+
+        // MySQL JOIN_ORDER 힌트로 작은 users 매칭 집합이 드라이브하게 한다.
+        // 힌트를 지원하지 않는 DBMS에서는 주석으로 무시되어 일반 JOIN으로 동작한다.
+        $userIds = DB::query()
+            ->fromSub($matchingUserIds, 'board_search_users')
+            ->selectRaw(
+                "/*+ JOIN_ORDER({$matchingUsersAlias}, {$eligiblePostsAlias}) */ "
+                ."{$eligiblePostsAlias}.matched_post_id"
+            )
+            ->joinSub(
+                query: $eligibleUserPosts,
+                as: 'board_search_user_posts',
+                first: function ($join) {
+                    $join->on(
+                        'board_search_user_posts.matched_user_id',
+                        '=',
+                        'board_search_users.matched_user_id'
+                    );
+                }
+            );
+
+        // derived UNION을 먼저 materialize한 후 outer list와 조인한다.
+        // WHERE IN + UNION은 MySQL이 outer 행마다 DEPENDENT SUBQUERY로 변환할 수 있어
+        // FULLTEXT branch조차 PK eq_ref로 평가되므로 사용하지 않는다.
+        // UNION(distinct)으로 여러 branch에 동시 매칭된 ID 중복을 제거해 목록 중복을 막는다.
+        $matchingIds = $fulltextIds
+            ->union($authorNameIds)
+            ->union($userIds);
+
+        $query->joinSub($matchingIds, 'board_search_matches', function ($join) {
+            $join->on('board_posts.id', '=', 'board_search_matches.matched_post_id');
+        });
     }
 
     /**

@@ -48,12 +48,16 @@ class ProductController extends PublicBaseController
             $popularProducts = $this->productService->getPopularProducts(8);
             $newProducts = $this->productService->getNewProducts(8);
 
+            $categoryData = config('benchmark.ecommerce_variant') === 'optimized'
+                ? PublicCategoryResource::resolveTree($categories)
+                : PublicCategoryResource::collection($categories)->resolve($request);
+
             return ResponseHelper::moduleSuccess(
                 'sirsoft-ecommerce',
                 'messages.products.fetch_success',
                 [
                     'categories' => [
-                        'data' => PublicCategoryResource::collection($categories)->resolve($request),
+                        'data' => $categoryData,
                     ],
                     'recentProducts' => [
                         'data' => ProductListResource::collection($recentProducts)->resolve($request),

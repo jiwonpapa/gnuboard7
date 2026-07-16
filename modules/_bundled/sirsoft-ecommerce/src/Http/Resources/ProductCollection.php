@@ -45,9 +45,9 @@ class ProductCollection extends BaseApiCollection
             : $this->resolveAbilitiesFromMap($this->abilityMap(), $request->user());
 
         $result = [
-            'data' => $this->mapWithRowNumber(function ($product) {
-                return (new ProductListResource($product))->resolve(request());
-            }),
+            'data' => $this->mapWithRowNumber(function ($product) use ($request) {
+                return (new ProductListResource($product))->resolve($request);
+            }, $request->input('sort_order', 'desc')),
             'abilities' => $abilities,
         ];
 
@@ -80,9 +80,9 @@ class ProductCollection extends BaseApiCollection
             : $this->resolveAbilitiesFromMap($this->abilityMap(), $request->user());
 
         $result = [
-            'data' => $this->mapWithRowNumber(function ($product) {
-                return (new ProductListResource($product))->resolve(request());
-            }),
+            'data' => $this->mapWithRowNumber(function ($product) use ($request) {
+                return (new ProductListResource($product))->resolve($request);
+            }, $request->input('sort_order', 'desc')),
             'abilities' => $abilities,
             'statistics' => $statistics,
         ];

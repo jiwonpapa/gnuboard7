@@ -42,7 +42,7 @@ class PermissionMiddlewareTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        config()->set('benchmark.board_list_variant', 'optimized');
+        config()->set('benchmark.common_variant', 'optimized');
 
         // PermissionHelper static 캐시 초기화 (테스트 간 격리)
         $reflection = new \ReflectionClass(PermissionHelper::class);
@@ -454,7 +454,7 @@ class PermissionMiddlewareTest extends TestCase
 
     public function test_baseline_variant_runs_the_original_guest_permission_query(): void
     {
-        config()->set('benchmark.board_list_variant', 'baseline');
+        config()->set('benchmark.common_variant', 'baseline');
         $guestRole = Role::create([
             'identifier' => 'guest',
             'name' => ['ko' => '비회원', 'en' => 'Guest'],

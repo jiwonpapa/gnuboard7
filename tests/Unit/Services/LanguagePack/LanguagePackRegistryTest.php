@@ -27,7 +27,7 @@ class LanguagePackRegistryTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        config()->set('benchmark.board_list_variant', 'optimized');
+        config()->set('benchmark.common_variant', 'optimized');
         $this->registry = $this->app->make(LanguagePackRegistry::class);
     }
 
@@ -157,7 +157,7 @@ class LanguagePackRegistryTest extends TestCase
 
     public function test_baseline_variant_runs_the_original_core_locale_query(): void
     {
-        config()->set('benchmark.board_list_variant', 'baseline');
+        config()->set('benchmark.common_variant', 'baseline');
         $this->makePack('sirsoft', 'ja');
         $this->registry->invalidate();
 

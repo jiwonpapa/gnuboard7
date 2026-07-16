@@ -4,6 +4,13 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [Unreleased]
+
+### Changed
+
+- 상품 검색 결과 ID를 전부 PHP 메모리로 가져오지 않고 데이터베이스 안에서 합친 뒤 현재 페이지만 반환하도록 개선했습니다.
+- 쇼핑몰 첫 화면의 분류 트리와 상품 가격·권한 응답을 같은 요청에서 재사용해, 응답 내용은 유지하면서 반복 직렬화 비용을 줄였습니다.
+
 ## [1.0.4] - 2026-07-16
 
 ### Fixed

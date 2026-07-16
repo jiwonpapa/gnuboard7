@@ -60,11 +60,30 @@ class ProductRepository implements ProductRepositoryInterface
             $keyword = $filters['search_keyword'];
             $field = $filters['search_field'] ?? 'all';
 
-            // FULLTEXT 대상 필드(all/name/description)는 Scout 검색 ID 와 보조필드 LIKE 매칭 ID 의
-            // 합집합(union)을 미리 산출한 뒤 plain Eloquent whereIn 으로 조회한다.
-            // (total 계산 경로와 결과 조회 경로가 동일한 검색 조건을 보장 — Scout queryCallback
-            //  total 재계산 시 보조필드 OR 가 MATCH 절 없이 재적용되어 total=0 이 되는 결함 회피)
+            // FULLTEXT 대상 필드(all/name/description): optimized는 DB derived UNION + outer
+            // pagination, baseline은 Scout/LIKE 매칭 ID를 PHP 배열로 합친 기존 경로를 사용한다.
+            // 두 경로 모두 total 계산과 결과 조회에 동일한 매칭 집합을 사용한다.
             if (in_array($field, ['all', 'name', 'description'])) {
+                if ($this->usesOptimizedDatabaseSearch()) {
+                    $columns = $field === 'all' ? ['name', 'description'] : [$field];
+                    $auxiliaryColumns = $field === 'all'
+                        ? ['product_code', 'sku', 'barcode']
+                        : [];
+
+                    $this->applyOptimizedKeywordConstraint(
+                        $query,
+                        $keyword,
+                        $columns,
+                        $auxiliaryColumns,
+                        includeNumericId: $field === 'all'
+                    );
+
+                    $this->applyAdminFilters($query, $filters);
+                    $this->applyAdminSorting($query, $filters);
+
+                    return $query->paginate($perPage);
+                }
+
                 // FULLTEXT 매칭 ID (Scout 엔진 순수 검색 — queryCallback 없음)
                 $ftIds = Product::search($keyword)->keys()->all();
 
@@ -592,12 +611,24 @@ class ProductRepository implements ProductRepositoryInterface
     {
         $page = (int) floor($offset / $limit) + 1;
 
-        // FULLTEXT(name/description) 매칭 + 보조필드(product_code/id) 매칭의 합집합.
-        // 통합검색도 관리자 검색과 동일하게 상품코드/ID 로 상품을 찾을 수 있어야 한다.
-        $matchedIds = $this->resolveKeywordMatchedProductIds($keyword);
+        $query = $this->model->newQuery();
 
-        $paginator = $this->model->newQuery()
-            ->whereIn('id', $matchedIds ?: [0])
+        if ($this->usesOptimizedDatabaseSearch()) {
+            // DB 내부 ID UNION을 outer paginator에 연결해 PHP로 전체 ID를 전송하지 않는다.
+            $this->applyOptimizedKeywordConstraint(
+                $query,
+                $keyword,
+                ['name', 'description'],
+                ['product_code'],
+                includeNumericId: true
+            );
+        } else {
+            // baseline: 기존 Scout keys()->all() 전체 ID materialization 경로.
+            $matchedIds = $this->resolveKeywordMatchedProductIds($keyword);
+            $query->whereIn('id', $matchedIds ?: [0]);
+        }
+
+        $paginator = $query
             ->where('display_status', ProductDisplayStatus::VISIBLE->value)
             ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
             ->withCount('visibleReviews as review_count')
@@ -642,14 +673,113 @@ class ProductRepository implements ProductRepositoryInterface
      */
     public function countByKeyword(string $keyword, ?int $categoryId = null): int
     {
-        // searchByKeyword 와 동일한 매칭 조건(FULLTEXT ∪ 보조필드)으로 total 산출.
-        $matchedIds = $this->resolveKeywordMatchedProductIds($keyword);
+        $query = $this->model->newQuery();
 
-        return $this->model->newQuery()
-            ->whereIn('id', $matchedIds ?: [0])
+        if ($this->usesOptimizedDatabaseSearch()) {
+            $this->applyOptimizedKeywordConstraint(
+                $query,
+                $keyword,
+                ['name', 'description'],
+                ['product_code'],
+                includeNumericId: true
+            );
+        } else {
+            // baseline: searchByKeyword 와 동일한 전체 ID materialization 경로.
+            $matchedIds = $this->resolveKeywordMatchedProductIds($keyword);
+            $query->whereIn('id', $matchedIds ?: [0]);
+        }
+
+        return $query
             ->where('display_status', ProductDisplayStatus::VISIBLE->value)
             ->when($categoryId !== null, fn ($q) => $q->whereHas('categories', fn ($c) => $c->where('ecommerce_categories.id', $categoryId)))
             ->count();
+    }
+
+    /**
+     * FULLTEXT 및 보조 필드 매칭을 DB 내부 ID UNION 서브쿼리로 적용합니다.
+     *
+     * 각 FULLTEXT 컬럼을 별도 branch로 나누어 개별 인덱스를 사용할 수 있게 하고,
+     * outer query가 COUNT와 LIMIT/OFFSET을 수행하므로 total은 정확하게 유지하면서
+     * 결과 행만 애플리케이션으로 전송합니다.
+     *
+     * @param  array<int, string>  $fulltextColumns
+     * @param  array<int, string>  $auxiliaryColumns
+     */
+    private function applyOptimizedKeywordConstraint(
+        Builder $query,
+        string $keyword,
+        array $fulltextColumns,
+        array $auxiliaryColumns = [],
+        bool $includeNumericId = false
+    ): void {
+        $branches = [];
+
+        foreach ($fulltextColumns as $column) {
+            $branch = $this->model->newQuery()
+                ->select('ecommerce_products.id as matched_product_id');
+
+            if (DatabaseFulltextEngine::supportsFulltext()) {
+                $fulltextKeyword = DatabaseFulltextEngine::sanitizeBooleanModeKeyword($keyword);
+                if ($fulltextKeyword === '') {
+                    $branch->whereRaw('1 = 0');
+                } else {
+                    $branch->whereRaw(
+                        "MATCH(`{$column}`) AGAINST(? IN BOOLEAN MODE)",
+                        [$fulltextKeyword]
+                    );
+                }
+            } else {
+                $branch->where($column, 'like', "%{$keyword}%");
+            }
+
+            $branches[] = $branch;
+        }
+
+        if ($auxiliaryColumns !== [] || ($includeNumericId && ctype_digit($keyword))) {
+            $auxiliary = $this->model->newQuery()
+                ->select('ecommerce_products.id as matched_product_id')
+                ->where(function ($auxiliaryQuery) use ($keyword, $auxiliaryColumns, $includeNumericId) {
+                    foreach ($auxiliaryColumns as $column) {
+                        $auxiliaryQuery->orWhere($column, 'like', "%{$keyword}%");
+                    }
+
+                    if ($includeNumericId && ctype_digit($keyword)) {
+                        $auxiliaryQuery->orWhere('id', (int) $keyword);
+                    }
+                });
+
+            $branches[] = $auxiliary;
+        }
+
+        if ($branches === []) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $matchingIds = array_shift($branches);
+        foreach ($branches as $branch) {
+            $matchingIds->union($branch);
+        }
+
+        // MySQL이 WHERE IN + UNION을 outer 행별 DEPENDENT SUBQUERY로 변환하지 않도록
+        // 중복이 제거된 ID derived table을 먼저 materialize하여 조인한다.
+        $query->select('ecommerce_products.*')
+            ->joinSub($matchingIds, 'product_search_matches', function ($join) {
+                $join->on('ecommerce_products.id', '=', 'product_search_matches.matched_product_id');
+            });
+    }
+
+    /**
+     * DB FULLTEXT 전용 optimized 경로 사용 여부를 반환합니다.
+     *
+     * Meilisearch 등 외부 Scout 엔진을 선택한 설치는 외부 색인의
+     * 토큰/필터/정렬 계약을 유지하도록 baseline Scout 경로를 계속 사용합니다.
+     */
+    private function usesOptimizedDatabaseSearch(): bool
+    {
+        return config('benchmark.ecommerce_variant', 'optimized') === 'optimized'
+            && config('scout.driver', 'mysql-fulltext') === 'mysql-fulltext';
     }
 
     /**

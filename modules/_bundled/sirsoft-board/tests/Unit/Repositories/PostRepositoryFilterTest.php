@@ -5,6 +5,7 @@ namespace Modules\Sirsoft\Board\Tests\Unit\Repositories;
 // ModuleTestCase 수동 로드 (autoload 전에 로드 필요)
 require_once __DIR__.'/../../ModuleTestCase.php';
 
+use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Board\Repositories\PostRepository;
 use Modules\Sirsoft\Board\Tests\BoardTestCase;
 
@@ -171,5 +172,66 @@ class PostRepositoryFilterTest extends BoardTestCase
         // Then: author_name에 '중요'가 포함된 공지 분류 게시글만 반환
         // (분류 + 검색 필터 동시 적용 검증이 목적)
         $this->assertCount(0, $result->items());
+    }
+
+    /**
+     * optimized all 검색은 FULLTEXT/작성자/회원 branch를 derived UNION으로 분리합니다.
+     */
+    public function test_optimized_all_search_uses_split_id_union_and_keeps_author_match(): void
+    {
+        config()->set('benchmark.board_list_variant', 'optimized');
+
+        $matchedId = $this->createTestPost([
+            'title' => '검색어 없는 제목',
+            'content' => '검색어 없는 본문',
+            'author_name' => 'needlexyzauthor',
+        ]);
+        $this->createTestPost(['author_name' => '다른작성자']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $result = $this->repository->paginate($this->board->slug, [
+            'search' => 'needlexyz',
+            'search_field' => 'all',
+        ], 15);
+
+        $ids = collect($result->items())->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $this->assertContains($matchedId, $ids);
+
+        $searchSql = collect(DB::getQueryLog())
+            ->pluck('query')
+            ->first(fn ($sql) => str_contains(strtolower($sql), ' union '));
+
+        $this->assertNotNull($searchSql, 'optimized all 검색은 ID UNION derived table 경로를 사용해야 합니다.');
+        $this->assertStringContainsString('board_posts', $searchSql);
+        $this->assertStringContainsString('users', $searchSql);
+        $this->assertStringContainsString('JOIN_ORDER', $searchSql);
+        $this->assertStringNotContainsString('straight join', strtolower($searchSql));
+    }
+
+    /**
+     * baseline 검색은 A/B 비교를 위해 기존 단일 OR 경로를 보존합니다.
+     */
+    public function test_baseline_all_search_keeps_original_or_query(): void
+    {
+        config()->set('benchmark.board_list_variant', 'baseline');
+        $this->createTestPost(['author_name' => 'baselineauthorxyz']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $result = $this->repository->paginate($this->board->slug, [
+            'search' => 'baselineauthorxyz',
+            'search_field' => 'all',
+        ], 15);
+
+        $this->assertNotEmpty($result->items());
+
+        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
+        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, ' union ')));
+        $this->assertTrue($queries->contains(
+            fn ($sql) => str_contains($sql, 'author_name') && str_contains($sql, 'exists')
+        ));
     }
 }

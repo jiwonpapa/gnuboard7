@@ -56,7 +56,7 @@ class LanguagePackRegistry
             return $this->activeCoreLocalesCache;
         }
 
-        $fromDb = config('benchmark.board_list_variant', 'optimized') === 'optimized'
+        $fromDb = config('benchmark.common_variant', 'optimized') === 'optimized'
             ? $this->getActivePacks(LanguagePackScope::Core->value)
                 ->pluck('locale')
                 ->unique()

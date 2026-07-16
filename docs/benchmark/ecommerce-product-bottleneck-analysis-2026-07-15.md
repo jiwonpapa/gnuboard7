@@ -284,3 +284,85 @@ PHP-FPM `max_children` 증가는 이 작업 뒤에 메모리와 CPU를 측정해
 패치는 `scripts/benchmark/ecommerce-performance-toggle.sh`로 공식 원본과 반복 전환할 수 있습니다. 상세 파일과 인덱스 목록은 `docs/benchmark/ecommerce-performance-toggle-harness.md`에 기록했습니다.
 
 초기 A/B는 하네스가 production 캐시를 재생성하지 않아 절대 수치를 폐기했습니다. 위 결과는 config/routes/views/hooks 캐시를 복구한 뒤 2만 건으로 전 구간을 다시 측정한 최종 수치입니다.
+
+## 11. 2026-07-16 CPU 프로파일링 후속
+
+### 측정 방식과 판정 범위
+
+- `perf` 99Hz 시스템 전체 샘플링과 `pidstat`을 k6 상품 목록 부하와 동시에 실행했습니다.
+- PHP 호출 경로는 PHP 8.5 지원 `phpspy`로 운영 설정을 바꾸지 않고 샘플링했습니다.
+- 함수별 호출 횟수와 하위 호출 구조는 Xdebug 3.5.3 profiler를 트리거 요청에만 켜서 목록·storefront 각각 2회 확인했습니다.
+- Xdebug의 절대 시간은 계측 오버헤드가 포함되므로 운영 응답시간으로 사용하지 않고, 같은 요청 내부의 비율과 호출 횟수 판정에만 사용했습니다. 측정 후 Xdebug는 FPM·CLI 모두 비활성화했습니다.
+
+### 시스템 CPU 분포
+
+`TARGET=list`, 10 VU, 18초, think time 0 조건에서 307건을 처리했고 오류율은 0%, p95는 768ms였습니다.
+
+| perf 샘플 대상 | 전체 CPU 샘플 비중 |
+|---|---:|
+| PHP-FPM | 52.94% |
+| MySQL connection thread | 13.93% |
+| Redis | 1.17% |
+| Nginx | 0.37% |
+| idle | 27.30% |
+
+idle을 제외하면 PHP-FPM이 약 72.8%, MySQL이 약 19.2%입니다. 현재 잔여 병목은 디스크 I/O가 아니라 PHP 실행과 MySQL 행 처리이며, Redis는 CPU 병목이 아닙니다. 다만 phpspy의 wall-time 스택 209개 중 60개가 `Redis::get`에 걸려 있어 요청 부팅 중 Redis 왕복도 FPM 점유시간을 늘립니다.
+
+### 전 요청 공통 병목: 훅 등록 로그
+
+`HookListenerRegistrar::applySubscribedHooks()`는 요청을 부팅할 때 리스너 73개, 훅 348개를 등록하면서 훅마다 `Log::info()`를 호출했습니다.
+
+| 호출 | 횟수 | Xdebug 계측 내 누적 |
+|---|---:|---:|
+| `HookListenerRegistrar::applySubscribedHooks` | 73 | 약 137ms |
+| `Facade::__callStatic` → `LogManager::info` | 348~350 | 약 122~127ms |
+| `LogManager::parseDriver` | 354 | 약 98ms |
+
+운영 로그 레벨에서 실제 파일 기록이 걸러져도 `Log::info()` 진입과 기본 드라이버 해석은 매번 수행됩니다. 건별 로그를 제거하고 리스너별 또는 전체 등록 요약 1건으로 바꾸는 것이 전 API 공통 P0입니다.
+
+### 상품 목록: 조회보다 응답 변환이 큼
+
+12개 상품 목록의 두 프로파일은 거의 같은 호출 구조를 보였습니다.
+
+| 경로 | Xdebug 계측 내 누적 | 컨트롤러 내부 비중 |
+|---|---:|---:|
+| `ProductController::index` | 약 643ms | 100% |
+| `ProductCollection::toArray` | 약 493ms | 76.7% |
+| `ProductService::getPublicList` | 약 144ms | 22.4% |
+
+`ProductRepository::getPublicList` 안에서는 실제 관계 조회가 약 82ms, breadcrumb 준비가 약 24ms, ID pluck과 COUNT가 합계 약 18ms였습니다. 반면 12개 상품 직렬화에서는 다음 반복이 발생했습니다.
+
+- `ProductListResource::toArray`: 12회
+- `whenLoaded`: 108회
+- Eloquent magic attribute read: 312회
+- 다중통화 가격 생성: 24회, 내부 통화 포맷 120회
+- 번역·locale 조회: 288회
+- 권한 확인: 5회
+
+컬렉션은 전달받은 FormRequest에 권한 캐시를 저장하지만 행 리소스 콜백은 전역 `request()`를 다시 전달합니다. 두 Request 객체의 attribute cache가 분리되어 컬렉션 3개 + 행 2개의 권한 확인이 중복됩니다. 같은 `$request`를 행 리소스에 전달하면 이 중복과 전역 컨테이너 조회를 없앨 수 있습니다.
+
+### storefront: 최종 payload 직렬화가 주병목
+
+현재 storefront는 최상위 카테고리 20개를 포함해 전체 카테고리 200개, 인기상품 8개, 신상품 8개를 약 79KB로 반환합니다.
+
+| 호출 | 횟수 |
+|---|---:|
+| 전체 `JsonResource::resolve` | 420 |
+| `ResourceCollection::toArray` | 204 |
+| `PublicCategoryResource::toArray` | 200 |
+| `ProductListResource::toArray` | 16 |
+
+캐시 히트 프로파일에서 `ProductController::storefront` 약 1.115초 중 명시적 Resource resolve가 약 630ms, `ResponseHelper::moduleSuccess`의 최종 JSON 변환이 약 437ms였습니다. 조회·캐시 접근은 카테고리 약 11ms, 인기상품 약 25ms, 신상품 약 9ms였습니다. 즉 컨트롤러 내부 시간의 약 95.7%가 응답 조립·직렬화 경로였습니다.
+
+카테고리마다 `children`을 다시 `PublicCategoryResource::collection()`으로 감싸므로 빈 자식까지 ResourceCollection 계층을 만듭니다. 단순 쿼리 캐시만으로는 200개 모델의 재직렬화 비용이 남습니다.
+
+### 수정 우선순위
+
+1. **P0 공통**: 훅 등록의 건별 `Log::info()` 348회를 제거하고 부팅 요약 1건으로 축소합니다.
+2. **P0 storefront**: guest용 최종 배열 payload를 locale·통화·배송국가 기준으로 짧게 캐시합니다. 회원 권한/소유자 필드는 공통 payload와 분리해 합성합니다.
+3. **P1 목록 DTO**: 공개 목록 전용 경량 배열 변환기를 사용하고 locale·통화 설정·포맷 결과를 요청 단위로 재사용합니다.
+4. **P1 카테고리**: 재귀 ResourceCollection 대신 캐시 가능한 평면 조회 결과로 트리를 한 번 조립합니다.
+5. **P1 권한**: 컬렉션과 행 리소스가 동일 Request attribute cache를 사용하도록 정리합니다.
+6. **P2 모델 비용**: 목록 필드를 축소하고 불필요한 Eloquent 모델·cast·관계 hydration을 줄입니다.
+
+이 순서를 적용한 뒤 같은 10 VU 테스트에서 CPU와 p95를 다시 측정해야 합니다. PHP-FPM worker 증가는 2 vCPU에서 CPU 경합만 키울 수 있으므로 선행 조치가 아닙니다. 코드 최적화 후에도 풀기능 쇼핑몰 운영 여유를 확보하려면 4 vCPU / 8GB가 권장선입니다.

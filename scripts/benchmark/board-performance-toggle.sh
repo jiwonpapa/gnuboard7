@@ -15,15 +15,14 @@ REMOTE_PHP_BIN="${G7_BOARD_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_BOARD_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_BOARD_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.4}"
+OPTIMIZED_REF="${G7_BOARD_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://www.g7devops.com}"
 ASSUME_YES=0
 RUN_SMOKE=1
+DEFER_RUNTIME=0
+ORCHESTRATION_TOKEN="-"
 
 COMMON_PATHS=(
-    "CHANGELOG.md"
-    "app/Http/Middleware/PermissionMiddleware.php"
-    "app/Providers/ModuleRouteServiceProvider.php"
-    "app/Services/LanguagePack/LanguagePackRegistry.php"
     "modules/_bundled/sirsoft-board/CHANGELOG.md"
     "modules/_bundled/sirsoft-board/composer.json"
     "modules/_bundled/sirsoft-board/module.json"
@@ -62,7 +61,11 @@ Options:
   --db NAME         Remote database name. Default: g7devops
   --db-prefix NAME  Remote table prefix. Default: g7_
   --baseline REF    Git ref for exact source restore. Default: 7.0.4
+  --optimized-ref REF
+                    Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    URL used by smoke requests.
+  --defer-runtime   Internal: let the unified harness rebuild caches once.
+  --lock-token ID   Internal: reuse the unified harness transaction lock.
   -h, --help        Show this help.
 
 Environment variables use the same names with the G7_BOARD_PERF_ prefix.
@@ -82,13 +85,14 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
-copy_worktree_file() {
+copy_optimized_file() {
     local path="$1"
     local destination="$2"
 
-    [[ -f "${REPO_ROOT}/${path}" ]] || fail "optimized file not found: ${path}"
+    git -C "${REPO_ROOT}" cat-file -e "${OPTIMIZED_REF}:${path}" 2>/dev/null \
+        || fail "optimized file not found at ${OPTIMIZED_REF}: ${path}"
     mkdir -p "$(dirname -- "${destination}/${path}")"
-    cp "${REPO_ROOT}/${path}" "${destination}/${path}"
+    git -C "${REPO_ROOT}" show "${OPTIMIZED_REF}:${path}" > "${destination}/${path}"
 }
 
 copy_git_file() {
@@ -113,7 +117,7 @@ build_source_archive() {
 
     for path in "${COMMON_PATHS[@]}"; do
         if [[ "${variant}" == "optimized" ]]; then
-            copy_worktree_file "${path}" "${stage_dir}"
+            copy_optimized_file "${path}" "${stage_dir}"
         else
             copy_git_file "${path}" "${stage_dir}"
         fi
@@ -122,7 +126,7 @@ build_source_archive() {
 
     if [[ "${variant}" == "optimized" ]]; then
         for path in "${OPTIMIZED_ONLY_PATHS[@]}"; do
-            copy_worktree_file "${path}" "${stage_dir}"
+            copy_optimized_file "${path}" "${stage_dir}"
             manifest_paths+=("${path}")
         done
     fi
@@ -175,9 +179,20 @@ while [[ $# -gt 0 ]]; do
             shift
             BASELINE_REF="${1:-}"
             ;;
+        --optimized-ref)
+            shift
+            OPTIMIZED_REF="${1:-}"
+            ;;
         --base-url)
             shift
             BASE_URL="${1:-}"
+            ;;
+        --defer-runtime)
+            DEFER_RUNTIME=1
+            ;;
+        --lock-token)
+            shift
+            ORCHESTRATION_TOKEN="${1:-}"
             ;;
         -h|--help)
             usage
@@ -223,7 +238,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "${ACTION}" == "on" || "${ACTION}" == "restore-original" ]]; then
+if [[ "${ACTION}" == "on" || "${ACTION}" == "off" || "${ACTION}" == "restore-original" ]]; then
     source_variant="optimized"
     [[ "${ACTION}" == "restore-original" ]] && source_variant="baseline"
     local_archive="$(build_source_archive "${source_variant}")"
@@ -242,7 +257,9 @@ ssh "${REMOTE_HOST}" sudo bash -s -- \
     "${REMOTE_DB_PREFIX}" \
     "${BASE_URL}" \
     "${REMOTE_ARCHIVE}" \
-    "${RUN_SMOKE}" <<'REMOTE'
+    "${RUN_SMOKE}" \
+    "${DEFER_RUNTIME}" \
+    "${ORCHESTRATION_TOKEN}" <<'REMOTE'
 set -euo pipefail
 
 ACTION="$1"
@@ -254,6 +271,8 @@ DB_PREFIX="$6"
 BASE_URL="${7%/}"
 SOURCE_ARCHIVE="$8"
 RUN_SMOKE="$9"
+DEFER_RUNTIME="${10}"
+ORCHESTRATION_TOKEN="${11}"
 
 ENV_KEY="G7_BOARD_PERFORMANCE_VARIANT"
 POSTS_TABLE="${DB_PREFIX}board_posts"
@@ -272,8 +291,28 @@ SOURCE_MANIFEST="${STATE_DIR}/board-performance-source.sha256"
 [[ "${DB_PREFIX}" =~ ^[A-Za-z0-9_]*$ ]] || { printf 'invalid DB prefix\n' >&2; exit 1; }
 [[ -d "${APP_ROOT}" && -f "${APP_ROOT}/artisan" ]] || { printf 'invalid app root\n' >&2; exit 1; }
 
-exec 9>/var/lock/g7-board-performance-toggle.lock
-flock -n 9 || { printf 'another board performance toggle is running\n' >&2; exit 1; }
+GLOBAL_LOCK_DIR="/var/lock/g7-performance-toggle.lock.d"
+LOCK_OWNED=0
+
+release_global_lock() {
+    if [[ "${LOCK_OWNED}" == "1" ]]; then
+        rm -f "${GLOBAL_LOCK_DIR}/owner"
+        rmdir "${GLOBAL_LOCK_DIR}" 2>/dev/null || true
+    fi
+}
+
+if [[ "${ORCHESTRATION_TOKEN}" != "-" ]]; then
+    [[ -f "${GLOBAL_LOCK_DIR}/owner" ]] \
+        || { printf 'unified performance lock is missing\n' >&2; exit 1; }
+    [[ "$(<"${GLOBAL_LOCK_DIR}/owner")" == "${ORCHESTRATION_TOKEN}" ]] \
+        || { printf 'unified performance lock owner mismatch\n' >&2; exit 1; }
+else
+    mkdir "${GLOBAL_LOCK_DIR}" 2>/dev/null \
+        || { printf 'another performance toggle is running\n' >&2; exit 1; }
+    printf 'direct-board-%s\n' "$$" > "${GLOBAL_LOCK_DIR}/owner"
+    LOCK_OWNED=1
+    trap release_global_lock EXIT
+fi
 
 log() {
     printf '[remote-board-perf] %s\n' "$*"
@@ -340,6 +379,7 @@ remove_env_variant() {
 }
 
 clear_runtime() {
+    [[ "${DEFER_RUNTIME}" == "0" ]] || return
     log "rebuilding Laravel production caches"
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
@@ -361,11 +401,7 @@ backup_current_source() {
     while read -r path; do
         [[ -n "${path}" && -e "${APP_ROOT}/${path}" ]] && existing_paths+=("${path}")
     done <<'PATHS'
-CHANGELOG.md
 config/benchmark.php
-app/Http/Middleware/PermissionMiddleware.php
-app/Providers/ModuleRouteServiceProvider.php
-app/Services/LanguagePack/LanguagePackRegistry.php
 modules/_bundled/sirsoft-board/CHANGELOG.md
 modules/_bundled/sirsoft-board/composer.json
 modules/_bundled/sirsoft-board/module.json
@@ -374,6 +410,20 @@ modules/_bundled/sirsoft-board/package.json
 modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php
 modules/_bundled/sirsoft-board/src/Services/PostService.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
+PATHS
+
+    while read -r path; do
+        [[ -n "${path}" && -e "${APP_ROOT}/modules/sirsoft-board/${path}" ]] \
+            && existing_paths+=("modules/sirsoft-board/${path}")
+    done <<'PATHS'
+CHANGELOG.md
+composer.json
+module.json
+package-lock.json
+package.json
+src/Repositories/PostRepository.php
+src/Services/PostService.php
+database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
 PATHS
 
     if [[ ${#existing_paths[@]} -gt 0 ]]; then
@@ -418,7 +468,6 @@ apply_source_archive() {
     done < "${manifest}"
 
     if [[ "${variant}" == "baseline" ]]; then
-        rm -f "${APP_ROOT}/config/benchmark.php"
         rm -f "${APP_ROOT}/${MIGRATION_PATH}"
         rm -f "${APP_ROOT}/${ACTIVE_MIGRATION_PATH}"
     fi
@@ -497,30 +546,39 @@ drop_indexes_and_migration() {
 }
 
 source_integrity() {
+    local filtered_manifest
     if [[ ! -f "${SOURCE_MANIFEST}" ]]; then
         printf 'unknown'
         return
     fi
-    if (cd "${APP_ROOT}" && sha256sum -c "${SOURCE_MANIFEST}" >/dev/null 2>&1); then
+    filtered_manifest="$(mktemp)"
+    awk '$2 == "config/benchmark.php" || $2 ~ "^modules/_bundled/sirsoft-board/" { print }' \
+        "${SOURCE_MANIFEST}" > "${filtered_manifest}"
+    if [[ ! -s "${filtered_manifest}" ]]; then
+        rm -f "${filtered_manifest}"
+        printf 'unknown'
+        return
+    fi
+    if (cd "${APP_ROOT}" && sha256sum -c "${filtered_manifest}" >/dev/null 2>&1); then
         printf 'verified'
     else
         printf 'drifted'
     fi
+    rm -f "${filtered_manifest}"
 }
 
 source_variant() {
-    if [[ ! -f "${APP_ROOT}/config/benchmark.php" ]]; then
-        printf 'official-7.0.4'
-    elif grep -q 'board_list_variant' "${APP_ROOT}/config/benchmark.php"; then
+    if grep -q "benchmark.board_list_variant" \
+        "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php"; then
         printf 'optimized-capable'
     else
-        printf 'unknown'
+        printf 'official-7.0.4'
     fi
 }
 
 effective_variant() {
     local value
-    if [[ ! -f "${APP_ROOT}/config/benchmark.php" ]]; then
+    if [[ "$(source_variant)" != "optimized-capable" ]]; then
         printf 'baseline'
         return
     fi
@@ -560,7 +618,7 @@ EOF
 
 smoke() {
     local result
-    [[ "${RUN_SMOKE}" == "1" ]] || return
+    [[ "${RUN_SMOKE}" == "1" && "${DEFER_RUNTIME}" == "0" ]] || return
     result="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code} %{time_total}' \
         "${BASE_URL}/api/modules/sirsoft-board/boards/gallery/posts?page=1&per_page=20")"
     log "smoke ${result}"
@@ -568,17 +626,21 @@ smoke() {
 }
 
 show_status() {
-    local module_row active_sync
+    local module_row module_db_version module_source_version module_version_sync active_sync path
     module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
-    active_sync="drifted"
-    if cmp -s \
-        "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php" \
-        "${APP_ROOT}/modules/sirsoft-board/src/Repositories/PostRepository.php" \
-        && cmp -s \
-        "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Services/PostService.php" \
-        "${APP_ROOT}/modules/sirsoft-board/src/Services/PostService.php"; then
-        active_sync="verified"
-    fi
+    module_db_version="$(mysql_scalar "SELECT version FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
+    module_source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${APP_ROOT}/modules/_bundled/sirsoft-board/module.json" | head -n 1)"
+    module_version_sync=drifted
+    [[ -n "${module_source_version}" && "${module_source_version}" == "${module_db_version}" ]] \
+        && module_version_sync=verified
+    active_sync="verified"
+    for path in \
+        CHANGELOG.md composer.json module.json package-lock.json package.json \
+        src/Repositories/PostRepository.php src/Services/PostService.php; do
+        cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-board/${path}" \
+            "${APP_ROOT}/modules/sirsoft-board/${path}" || active_sync="drifted"
+    done
 
     printf 'source=%s\n' "$(source_variant)"
     printf 'source_integrity=%s\n' "$(source_integrity)"
@@ -587,12 +649,27 @@ show_status() {
     printf 'index.%s=%s\n' "${INDEX_ID}" "$(index_visibility "${INDEX_ID}")"
     printf 'index.%s=%s\n' "${INDEX_VIEWS}" "$(index_visibility "${INDEX_VIEWS}")"
     printf 'active_module_sync=%s\n' "${active_sync}"
+    printf 'module_version_sync=%s\n' "${module_version_sync}"
     printf 'module=%s\n' "${module_row}"
+    if [[ -f "${APP_ROOT}/config/benchmark.php" ]]; then
+        printf 'shared_config=present\n'
+    else
+        printf 'shared_config=missing\n'
+    fi
     printf 'php_fpm=%s\n' "$(systemctl is-active php8.5-fpm)"
     if [[ -f "${STATE_FILE}" ]]; then
         printf 'last_state:\n'
         sed 's/^/  /' "${STATE_FILE}"
     fi
+}
+
+sync_module_version() {
+    local version
+    version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${APP_ROOT}/modules/_bundled/sirsoft-board/module.json" | head -n 1)"
+    [[ "${version}" =~ ^[0-9A-Za-z.+-]+$ ]] \
+        || { printf 'invalid board module version\n' >&2; exit 1; }
+    mysql "${DB_NAME}" -e "UPDATE ${MODULES_TABLE} SET version='${version}' WHERE identifier='sirsoft-board'"
 }
 
 case "${ACTION}" in
@@ -601,7 +678,7 @@ case "${ACTION}" in
         apply_source_archive optimized
         ensure_indexes_visible
         set_env_variant optimized
-        mysql "${DB_NAME}" -e "UPDATE ${MODULES_TABLE} SET version='1.1.1' WHERE identifier='sirsoft-board'"
+        sync_module_version
         clear_runtime
         write_state optimized
         smoke
@@ -609,10 +686,10 @@ case "${ACTION}" in
         ;;
     off)
         ensure_no_long_queries
-        if [[ -f "${APP_ROOT}/config/benchmark.php" ]]; then
-            set_env_variant baseline
-            clear_runtime
-        fi
+        apply_source_archive optimized
+        set_env_variant baseline
+        sync_module_version
+        clear_runtime
         hide_indexes
         write_state baseline
         smoke
@@ -627,7 +704,7 @@ case "${ACTION}" in
         drop_indexes_and_migration
         apply_source_archive baseline
         remove_env_variant
-        mysql "${DB_NAME}" -e "UPDATE ${MODULES_TABLE} SET version='1.0.2' WHERE identifier='sirsoft-board'"
+        sync_module_version
         clear_runtime
         write_state baseline
         smoke

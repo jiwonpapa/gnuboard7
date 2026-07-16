@@ -14,14 +14,19 @@ REMOTE_PHP_BIN="${G7_ECOMMERCE_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_ECOMMERCE_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_ECOMMERCE_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_ECOMMERCE_PERF_BASELINE_REF:-7.0.4}"
+OPTIMIZED_REF="${G7_ECOMMERCE_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_ECOMMERCE_PERF_BASE_URL:-https://www.g7devops.com}"
 ASSUME_YES=0
 RUN_SMOKE=1
+DEFER_RUNTIME=0
+ORCHESTRATION_TOKEN="-"
 
 COMMON_PATHS=(
+    "modules/_bundled/sirsoft-ecommerce/module.json"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Controllers/Public/ProductController.php"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductCollection.php"
     "modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductListResource.php"
+    "modules/_bundled/sirsoft-ecommerce/src/Http/Resources/PublicCategoryResource.php"
     "modules/_bundled/sirsoft-ecommerce/src/Models/Category.php"
     "modules/_bundled/sirsoft-ecommerce/src/Models/Product.php"
     "modules/_bundled/sirsoft-ecommerce/src/Providers/EcommerceServiceProvider.php"
@@ -58,18 +63,23 @@ Options:
   --db NAME         Remote database name. Default: g7devops
   --db-prefix NAME  Remote table prefix. Default: g7_
   --baseline REF    Exact source restore ref. Default: 7.0.4
+  --optimized-ref REF
+                    Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    Storefront base URL.
+  --defer-runtime   Internal: let the unified harness rebuild caches once.
+  --lock-token ID   Internal: reuse the unified harness transaction lock.
 EOF
 }
 
 log() { printf '[ecommerce-perf] %s\n' "$*"; }
 fail() { printf '[ecommerce-perf] ERROR: %s\n' "$*" >&2; exit 1; }
 
-copy_worktree_file() {
+copy_optimized_file() {
     local path="$1" destination="$2"
-    [[ -f "${REPO_ROOT}/${path}" ]] || fail "optimized file not found: ${path}"
+    git -C "${REPO_ROOT}" cat-file -e "${OPTIMIZED_REF}:${path}" 2>/dev/null \
+        || fail "optimized file not found at ${OPTIMIZED_REF}: ${path}"
     mkdir -p "$(dirname -- "${destination}/${path}")"
-    cp "${REPO_ROOT}/${path}" "${destination}/${path}"
+    git -C "${REPO_ROOT}" show "${OPTIMIZED_REF}:${path}" > "${destination}/${path}"
 }
 
 copy_git_file() {
@@ -81,14 +91,15 @@ copy_git_file() {
 }
 
 build_source_archive() {
-    local variant="$1" stage_dir="${WORK_DIR}/${variant}"
+    local variant="$1"
+    local stage_dir="${WORK_DIR}/${variant}"
     local archive="${WORK_DIR}/ecommerce-performance-${variant}.tar.gz" path
     local -a manifest_paths=()
 
     mkdir -p "${stage_dir}/.harness"
     for path in "${COMMON_PATHS[@]}"; do
         if [[ "${variant}" == "optimized" ]]; then
-            copy_worktree_file "${path}" "${stage_dir}"
+            copy_optimized_file "${path}" "${stage_dir}"
         else
             copy_git_file "${path}" "${stage_dir}"
         fi
@@ -97,7 +108,7 @@ build_source_archive() {
 
     if [[ "${variant}" == "optimized" ]]; then
         for path in "${OPTIMIZED_ONLY_PATHS[@]}"; do
-            copy_worktree_file "${path}" "${stage_dir}"
+            copy_optimized_file "${path}" "${stage_dir}"
             manifest_paths+=("${path}")
         done
     fi
@@ -123,7 +134,10 @@ while [[ $# -gt 0 ]]; do
         --db) shift; REMOTE_DB_NAME="${1:-}" ;;
         --db-prefix) shift; REMOTE_DB_PREFIX="${1:-}" ;;
         --baseline) shift; BASELINE_REF="${1:-}" ;;
+        --optimized-ref) shift; OPTIMIZED_REF="${1:-}" ;;
         --base-url) shift; BASE_URL="${1:-}" ;;
+        --defer-runtime) DEFER_RUNTIME=1 ;;
+        --lock-token) shift; ORCHESTRATION_TOKEN="${1:-}" ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -161,14 +175,17 @@ fi
 log "running ${ACTION} on ${REMOTE_HOST}:${REMOTE_ROOT}"
 ssh "${REMOTE_HOST}" sudo bash -s -- \
     "${ACTION}" "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" \
-    "${REMOTE_DB_NAME}" "${REMOTE_DB_PREFIX}" "${BASE_URL}" "${REMOTE_ARCHIVE}" "${RUN_SMOKE}" <<'REMOTE'
+    "${REMOTE_DB_NAME}" "${REMOTE_DB_PREFIX}" "${BASE_URL}" "${REMOTE_ARCHIVE}" "${RUN_SMOKE}" \
+    "${DEFER_RUNTIME}" "${ORCHESTRATION_TOKEN}" <<'REMOTE'
 set -euo pipefail
 
 ACTION="$1"; APP_ROOT="$2"; APP_USER="$3"; PHP_BIN="$4"; DB_NAME="$5"; DB_PREFIX="$6"
 BASE_URL="${7%/}"; SOURCE_ARCHIVE="$8"; RUN_SMOKE="$9"
+DEFER_RUNTIME="${10}"; ORCHESTRATION_TOKEN="${11}"
 ENV_KEY="G7_ECOMMERCE_PERFORMANCE_VARIANT"
 PRODUCTS_TABLE="${DB_PREFIX}ecommerce_products"
 OPTIONS_TABLE="${DB_PREFIX}ecommerce_order_options"
+MODULES_TABLE="${DB_PREFIX}modules"
 MIGRATIONS_TABLE="${DB_PREFIX}migrations"
 MIGRATION_NAME="2026_07_15_000004_add_ecommerce_storefront_indexes"
 MIGRATION_PATH="modules/_bundled/sirsoft-benchmark/database/migrations/${MIGRATION_NAME}.php"
@@ -182,8 +199,28 @@ SOURCE_MANIFEST="${STATE_DIR}/ecommerce-performance-source.sha256"
 
 [[ "${DB_NAME}" =~ ^[A-Za-z0-9_]+$ && "${DB_PREFIX}" =~ ^[A-Za-z0-9_]*$ ]] || exit 1
 [[ -f "${APP_ROOT}/artisan" ]] || exit 1
-exec 9>/var/lock/g7-ecommerce-performance-toggle.lock
-flock -n 9 || { printf 'another ecommerce performance toggle is running\n' >&2; exit 1; }
+GLOBAL_LOCK_DIR="/var/lock/g7-performance-toggle.lock.d"
+LOCK_OWNED=0
+
+release_global_lock() {
+    if [[ "${LOCK_OWNED}" == "1" ]]; then
+        rm -f "${GLOBAL_LOCK_DIR}/owner"
+        rmdir "${GLOBAL_LOCK_DIR}" 2>/dev/null || true
+    fi
+}
+
+if [[ "${ORCHESTRATION_TOKEN}" != "-" ]]; then
+    [[ -f "${GLOBAL_LOCK_DIR}/owner" ]] \
+        || { printf 'unified performance lock is missing\n' >&2; exit 1; }
+    [[ "$(<"${GLOBAL_LOCK_DIR}/owner")" == "${ORCHESTRATION_TOKEN}" ]] \
+        || { printf 'unified performance lock owner mismatch\n' >&2; exit 1; }
+else
+    mkdir "${GLOBAL_LOCK_DIR}" 2>/dev/null \
+        || { printf 'another performance toggle is running\n' >&2; exit 1; }
+    printf 'direct-ecommerce-%s\n' "$$" > "${GLOBAL_LOCK_DIR}/owner"
+    LOCK_OWNED=1
+    trap release_global_lock EXIT
+fi
 
 log() { printf '[remote-ecommerce-perf] %s\n' "$*"; }
 mysql_scalar() { mysql --batch --skip-column-names -e "$1"; }
@@ -243,7 +280,9 @@ backup_source() {
     while read -r path; do [[ -e "${APP_ROOT}/${path}" ]] && paths+=("${path}"); done <<'PATHS'
 config/benchmark.php
 modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductCollection.php
+modules/_bundled/sirsoft-ecommerce/module.json
 modules/_bundled/sirsoft-ecommerce/src/Http/Resources/ProductListResource.php
+modules/_bundled/sirsoft-ecommerce/src/Http/Resources/PublicCategoryResource.php
 modules/_bundled/sirsoft-ecommerce/src/Http/Controllers/Public/ProductController.php
 modules/_bundled/sirsoft-ecommerce/src/Models/Category.php
 modules/_bundled/sirsoft-ecommerce/src/Models/Product.php
@@ -256,6 +295,32 @@ modules/_bundled/sirsoft-benchmark/database/migrations/2026_07_15_000004_add_eco
 templates/_bundled/sirsoft-basic/layouts/shop/index.json
 templates/_bundled/sirsoft-basic/layouts/shop/show.json
 PATHS
+    while read -r path; do
+        [[ -e "${APP_ROOT}/modules/sirsoft-ecommerce/${path}" ]] \
+            && paths+=("modules/sirsoft-ecommerce/${path}")
+    done <<'PATHS'
+module.json
+src/Http/Controllers/Public/ProductController.php
+src/Http/Resources/ProductCollection.php
+src/Http/Resources/ProductListResource.php
+src/Http/Resources/PublicCategoryResource.php
+src/Models/Category.php
+src/Models/Product.php
+src/Providers/EcommerceServiceProvider.php
+src/Repositories/ProductRepository.php
+src/Services/CategoryService.php
+src/Services/ProductService.php
+src/routes/api.php
+PATHS
+    while read -r path; do
+        [[ -e "${APP_ROOT}/templates/sirsoft-basic/${path}" ]] \
+            && paths+=("templates/sirsoft-basic/${path}")
+    done <<'PATHS'
+layouts/shop/index.json
+layouts/shop/show.json
+PATHS
+    [[ ! -e "${APP_ROOT}/${ACTIVE_MIGRATION_PATH}" ]] \
+        || paths+=("${ACTIVE_MIGRATION_PATH}")
     if [[ ${#paths[@]} -gt 0 ]]; then
         tar -czf "${file}" -C "${APP_ROOT}" "${paths[@]}"
         chown "${APP_USER}:www-data" "${file}"
@@ -339,6 +404,7 @@ drop_indexes() {
 }
 
 clear_runtime() {
+    [[ "${DEFER_RUNTIME}" == 0 ]] || return
     cd "${APP_ROOT}"
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan optimize:clear >/dev/null
     sudo -u "${APP_USER}" "${PHP_BIN}" artisan config:cache >/dev/null
@@ -349,7 +415,7 @@ clear_runtime() {
 }
 
 warm_and_smoke() {
-    [[ "${RUN_SMOKE}" == 1 ]] || return
+    [[ "${RUN_SMOKE}" == 1 && "${DEFER_RUNTIME}" == 0 ]] || return
     local path result
     local -a paths=('/api/modules/sirsoft-ecommerce/products?page=1&per_page=12')
     if [[ "$(source_variant)" == optimized-capable ]]; then
@@ -369,6 +435,16 @@ source_variant() {
         printf 'optimized-capable'
     else
         printf 'official-7.0.4'
+    fi
+}
+
+source_integrity() {
+    if [[ ! -f "${SOURCE_MANIFEST}" ]]; then
+        printf 'unknown'
+    elif (cd "${APP_ROOT}" && sha256sum -c "${SOURCE_MANIFEST}" >/dev/null 2>&1); then
+        printf 'verified'
+    else
+        printf 'drifted'
     fi
 }
 
@@ -392,6 +468,7 @@ write_state() {
     mkdir -p "${STATE_DIR}"
     cat > "${STATE_FILE}.tmp" <<EOF
 source=$(source_variant)
+source_integrity=$(source_integrity)
 runtime=$(effective_variant)
 schema=$(schema_variant)
 changed_at=$(date --iso-8601=seconds)
@@ -401,38 +478,78 @@ EOF
 }
 
 show_status() {
-    local active_sync=missing
+    local active_sync=missing template_sync=missing module_row module_db_version
+    local module_source_version module_version_sync=drifted
     if [[ -d "${APP_ROOT}/modules/sirsoft-ecommerce" ]]; then
         active_sync=verified
         for path in \
-            src/Repositories/ProductRepository.php src/Models/Product.php src/Models/Category.php \
-            src/Services/ProductService.php src/Services/CategoryService.php; do
+            module.json \
+            src/Http/Controllers/Public/ProductController.php \
+            src/Http/Resources/ProductCollection.php \
+            src/Http/Resources/ProductListResource.php \
+            src/Http/Resources/PublicCategoryResource.php \
+            src/Models/Category.php src/Models/Product.php \
+            src/Providers/EcommerceServiceProvider.php \
+            src/Repositories/ProductRepository.php \
+            src/Services/CategoryService.php src/Services/ProductService.php \
+            src/routes/api.php; do
             cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-ecommerce/${path}" "${APP_ROOT}/modules/sirsoft-ecommerce/${path}" || active_sync=drifted
         done
     fi
+    if [[ -d "${APP_ROOT}/templates/sirsoft-basic" ]]; then
+        template_sync=verified
+        for path in layouts/shop/index.json layouts/shop/show.json; do
+            cmp -s "${APP_ROOT}/templates/_bundled/sirsoft-basic/${path}" \
+                "${APP_ROOT}/templates/sirsoft-basic/${path}" || template_sync=drifted
+        done
+    fi
+    module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-ecommerce'")"
+    module_db_version="$(mysql_scalar "SELECT version FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-ecommerce'")"
+    module_source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${APP_ROOT}/modules/_bundled/sirsoft-ecommerce/module.json" | head -n 1)"
+    [[ -n "${module_source_version}" && "${module_source_version}" == "${module_db_version}" ]] \
+        && module_version_sync=verified
     printf 'source=%s\n' "$(source_variant)"
+    printf 'source_integrity=%s\n' "$(source_integrity)"
     printf 'runtime=%s\n' "$(effective_variant)"
     printf 'schema=%s\n' "$(schema_variant)"
     printf 'index.%s=%s\n' "${INDEX_LATEST}" "$(index_visibility "${INDEX_LATEST}")"
     printf 'index.%s=%s\n' "${INDEX_PRICE}" "$(index_visibility "${INDEX_PRICE}")"
     printf 'index.%s=%s\n' "${INDEX_SALES}" "$(index_visibility "${INDEX_SALES}")"
     printf 'active_module_sync=%s\n' "${active_sync}"
+    printf 'active_template_sync=%s\n' "${template_sync}"
+    printf 'module_version_sync=%s\n' "${module_version_sync}"
+    printf 'module=%s\n' "${module_row}"
+    if [[ -f "${APP_ROOT}/config/benchmark.php" ]]; then
+        printf 'shared_config=present\n'
+    else
+        printf 'shared_config=missing\n'
+    fi
     printf 'php_fpm=%s\n' "$(systemctl is-active php8.5-fpm)"
     [[ ! -f "${STATE_FILE}" ]] || { printf 'last_state:\n'; sed 's/^/  /' "${STATE_FILE}"; }
 }
 
+sync_module_version() {
+    local version
+    version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${APP_ROOT}/modules/_bundled/sirsoft-ecommerce/module.json" | head -n 1)"
+    [[ "${version}" =~ ^[0-9A-Za-z.+-]+$ ]] \
+        || { printf 'invalid ecommerce module version\n' >&2; exit 1; }
+    mysql "${DB_NAME}" -e "UPDATE ${MODULES_TABLE} SET version='${version}' WHERE identifier='sirsoft-ecommerce'"
+}
+
 case "${ACTION}" in
     on)
-        apply_archive optimized; ensure_indexes; set_env_variant optimized
+        apply_archive optimized; ensure_indexes; set_env_variant optimized; sync_module_version
         clear_runtime; warm_and_smoke; write_state; show_status
         ;;
     off)
-        apply_archive baseline; set_env_variant baseline; hide_indexes
+        apply_archive baseline; set_env_variant baseline; hide_indexes; sync_module_version
         clear_runtime; warm_and_smoke; write_state; show_status
         ;;
     restore-original)
         apply_archive baseline; set_env_variant baseline; clear_runtime
-        drop_indexes; remove_env_variant; clear_runtime; warm_and_smoke; write_state; show_status
+        drop_indexes; remove_env_variant; sync_module_version; clear_runtime; warm_and_smoke; write_state; show_status
         ;;
     status) show_status ;;
 esac
