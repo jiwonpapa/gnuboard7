@@ -18,6 +18,11 @@ BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.4}"
 BENCHMARK_BASELINE_REF="${G7_BOARD_PERF_BENCHMARK_BASELINE_REF:-e64381ddb5ba02caed60933427fbb86ef72ef94e}"
 OPTIMIZED_REF="${G7_BOARD_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://www.g7devops.com}"
+SSH_CONNECT_TIMEOUT_SECONDS="${G7_BOARD_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-${G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-10}}"
+SSH_SERVER_ALIVE_INTERVAL_SECONDS="${G7_BOARD_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-${G7_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-15}}"
+SSH_SERVER_ALIVE_COUNT_MAX="${G7_BOARD_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-${G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-3}}"
+SSH_BIN="${G7_BOARD_PERF_SSH_BIN:-${G7_PERF_SSH_BIN:-ssh}}"
+SCP_BIN="${G7_BOARD_PERF_SCP_BIN:-${G7_PERF_SCP_BIN:-scp}}"
 ASSUME_YES=0
 RUN_SMOKE=1
 DEFER_RUNTIME=0
@@ -85,6 +90,12 @@ Options:
   --optimized-ref REF
                     Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    URL used by smoke requests.
+  --ssh-connect-timeout SEC
+                    SSH connection timeout. Default: 10.
+  --ssh-alive-interval SEC
+                    SSH keepalive interval. Default: 15.
+  --ssh-alive-count N
+                    Missed keepalives before disconnect. Default: 3.
   --defer-runtime   Internal: let the unified harness rebuild caches once.
   --lock-token ID   Internal: reuse the unified harness transaction lock.
   --preflight-only  Internal: build and verify the source archive locally only.
@@ -227,6 +238,18 @@ while [[ $# -gt 0 ]]; do
             shift
             BASE_URL="${1:-}"
             ;;
+        --ssh-connect-timeout)
+            shift
+            SSH_CONNECT_TIMEOUT_SECONDS="${1:-}"
+            ;;
+        --ssh-alive-interval)
+            shift
+            SSH_SERVER_ALIVE_INTERVAL_SECONDS="${1:-}"
+            ;;
+        --ssh-alive-count)
+            shift
+            SSH_SERVER_ALIVE_COUNT_MAX="${1:-}"
+            ;;
         --defer-runtime)
             DEFER_RUNTIME=1
             ;;
@@ -276,13 +299,29 @@ if [[ "${ACTION}" != "status" && "${ORCHESTRATION_TOKEN}" == "-" ]]; then
 fi
 [[ "${PREPARE_ARCHIVE}" == "-" || "${PROVIDED_REMOTE_ARCHIVE}" == "-" ]] \
     || fail '--prepare-archive and --remote-archive are mutually exclusive'
+[[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ \
+    && "${SSH_CONNECT_TIMEOUT_SECONDS}" -ge 1 && "${SSH_CONNECT_TIMEOUT_SECONDS}" -le 60 ]] \
+    || fail '--ssh-connect-timeout must be between 1 and 60 seconds'
+[[ "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" =~ ^[0-9]+$ \
+    && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -ge 5 \
+    && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -le 300 ]] \
+    || fail '--ssh-alive-interval must be between 5 and 300 seconds'
+[[ "${SSH_SERVER_ALIVE_COUNT_MAX}" =~ ^[0-9]+$ \
+    && "${SSH_SERVER_ALIVE_COUNT_MAX}" -ge 1 && "${SSH_SERVER_ALIVE_COUNT_MAX}" -le 10 ]] \
+    || fail '--ssh-alive-count must be between 1 and 10'
 
 [[ -f "${REPO_ROOT}/artisan" ]] || fail "repository root is invalid: ${REPO_ROOT}"
-require_command ssh
-require_command scp
+require_command "${SSH_BIN}"
+require_command "${SCP_BIN}"
 require_command git
 require_command tar
 require_command shasum
+SSH_OPTIONS=(
+    -o BatchMode=yes
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
+    -o "ServerAliveInterval=${SSH_SERVER_ALIVE_INTERVAL_SECONDS}"
+    -o "ServerAliveCountMax=${SSH_SERVER_ALIVE_COUNT_MAX}"
+)
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/g7-board-performance.XXXXXX")"
 REMOTE_ARCHIVE="-"
@@ -290,7 +329,8 @@ REMOTE_ARCHIVE_OWNED=0
 cleanup() {
     rm -rf "${WORK_DIR}"
     if [[ "${REMOTE_ARCHIVE_OWNED}" == 1 && "${REMOTE_ARCHIVE}" != "-" ]]; then
-        ssh "${REMOTE_HOST}" rm -f -- "${REMOTE_ARCHIVE}" >/dev/null 2>&1 || true
+        "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" \
+            rm -f -- "${REMOTE_ARCHIVE}" >/dev/null 2>&1 || true
     fi
 }
 trap cleanup EXIT
@@ -317,12 +357,13 @@ if [[ "${ACTION}" == "on" || "${ACTION}" == "off" || "${ACTION}" == "restore-ori
         REMOTE_ARCHIVE="/tmp/g7-board-performance-${source_variant}-$$.tar.gz"
         REMOTE_ARCHIVE_OWNED=1
         log "uploading ${source_variant} source snapshot"
-        scp -q "${local_archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
+        "${SCP_BIN}" "${SSH_OPTIONS[@]}" -q \
+            "${local_archive}" "${REMOTE_HOST}:${REMOTE_ARCHIVE}"
     fi
 fi
 
 log "running ${ACTION} on ${REMOTE_HOST}:${REMOTE_ROOT}"
-ssh "${REMOTE_HOST}" sudo bash -s -- \
+"${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
     "${ACTION}" \
     "${REMOTE_ROOT}" \
     "${REMOTE_APP_USER}" \

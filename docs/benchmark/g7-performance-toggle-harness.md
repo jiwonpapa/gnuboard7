@@ -172,13 +172,23 @@ scripts/benchmark/g7-ab-benchmark.sh --optimized-ref <reviewed-commit>
 
 기본 실행은 상태별 3회 반복하며 홈, 홈 데이터 API, 게시판 목록·내용·페이징·검색, 통합검색, 쇼핑 홈·목록·내용·검색의 24개 공통 경로를 측정합니다. 구버전에도 없는 통합 storefront API는 비교하지 않고, 실제 쇼핑 홈을 구성하는 분류·상품·최근·인기·신상품 API를 각각 측정합니다.
 
-일반 경로는 30초 동안 초당 1개 route matrix를 고정 도착률로 예약하고 최대 10 VU는 이 일정을 유지하는 용도로만 사용합니다. 게시판 공용 600회/분 제한을 넘지 않도록 계산하며, dropped iteration이 있으면 해당 run을 무효 처리합니다. 깊은 페이지·게시판 검색·통합검색은 1 VU 단건입니다. 위험 경로 실행 중에는 신규 MySQL SELECT에 15초 제한을 임시 적용하고 매 실행 뒤 SELECT·InnoDB transaction이 0이 될 때까지 기다립니다. 임의 쿼리 kill은 하지 않습니다.
+일반 경로의 안전 기본값은 30초 동안 5초당 route matrix 1개, 최대 1 VU입니다. `--hot-vus`, `--hot-rate`, `--hot-time-unit`으로 부하를 명시적으로 올릴 수 있습니다. 게시판 공용 600회/분 제한을 넘지 않도록 계산하며, dropped iteration이 있으면 해당 run을 무효 처리합니다. 깊은 페이지·게시판 검색·통합검색은 1 VU 단건입니다. 위험 경로 실행 중에만 신규 MySQL SELECT 제한을 임시 적용하고, OFF/ON 전환 전에는 반드시 원래 제한값으로 복구합니다. 매 실행 뒤 SELECT·InnoDB transaction이 0이 될 때까지 기다리며 임의 쿼리 kill은 하지 않습니다.
 
-동시에 양쪽 모두 같은 105초 고정 창에서 `/proc`을 표본 수집해 호스트 busy와 전체 호스트 용량 대비 PHP-FPM·MySQL CPU 평균·최대를 기록합니다. Xdebug가 CLI 또는 FPM에 로드돼 있으면 절대시간 왜곡을 막기 위해 실행을 거부합니다. 결과는 `comparison.md`, `comparison.json`, 경로·CPU CSV와 원시 k6/CPU 파일로 저장합니다.
+작은 운영 서버는 아래 canary부터 시작합니다. `5 VU`는 기본값이 아니라 1 VU와 3 VU 단계가 안전하게 끝났을 때만 사용하는 포화 측정 상한입니다.
+
+```bash
+scripts/benchmark/g7-ab-benchmark.sh \
+  --optimized-ref <reviewed-commit> \
+  --repeats 1 --hot-vus 1 --hot-rate 1 --hot-time-unit 5 \
+  --hot-duration 5 --request-timeout 5 --statement-timeout 3000 \
+  --deep-page 2 --measurement-window 80 --cpu-max-seconds 90
+```
+
+동시에 양쪽 모두 같은 고정 창에서 `/proc`을 표본 수집해 호스트 busy, load average, 가용 메모리, swap과 전체 호스트 용량 대비 PHP-FPM·MySQL CPU 평균·최대를 기록합니다. CPU·load·메모리·swap 안전 임계치를 연속 초과하면 k6를 중단하고 추가 반복과 다음 부하 단계를 실행하지 않습니다. Xdebug가 CLI 또는 FPM에 로드돼 있으면 절대시간 왜곡을 막기 위해 실행을 거부합니다. 결과는 `comparison.md`, `comparison.json`, 경로·CPU CSV와 원시 k6/CPU 파일로 저장합니다.
 
 각 API는 페이지 번호·상세 대상 ID·검색 결과 등 응답 계약까지 확인합니다. 오류·404·잘못된 응답 시간과 dropped iteration은 개선 수치에서 제외하고 invalid로 표시하며 명령은 실패로 끝납니다. OFF·ON 어느 한쪽이라도 지정한 반복 횟수의 run 파일 자체를 만들지 못하면 비교 보고서는 만들지 않고 원시 로그만 보존합니다.
 
-A/B 전체 수명 동안 일반 전환과 같은 원격 lock을 보유하므로 다른 ON/OFF 명령과 교차하지 않습니다. 정상·실패 종료 모두 마지막에 `on --scope all`, `status --strict`, 공개 HTTP 상태를 확인합니다. fail-closed snapshot이 있으면 복구 모드로 재개하며, MySQL 제한 때문에 실패했을 가능성에 대비해 제한 원복 뒤 한 번 더 검증합니다. OFF를 시도하기 전 연결 점검이 실패했다면 서버 상태를 변경하지 않습니다.
+A/B 전체 수명 동안 일반 전환과 같은 원격 lock을 보유하므로 다른 ON/OFF 명령과 교차하지 않습니다. 정상·실패 종료 모두 MySQL 제한을 먼저 원복한 뒤 `on --scope all`, `status --strict`, 공개 HTTP 상태를 확인합니다. fail-closed snapshot이 있으면 복구 모드로 재개합니다. OFF를 시도하기 전 연결 점검이 실패했다면 서버 상태를 변경하지 않습니다.
 
 ## 런타임 재생성
 

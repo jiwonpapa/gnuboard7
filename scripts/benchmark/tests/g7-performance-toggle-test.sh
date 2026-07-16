@@ -34,7 +34,34 @@ cat > "${FAKE_BIN}/scp" <<'EOF'
 set -euo pipefail
 printf 'scp %s\n' "$*" >> "${FAKE_CALL_LOG}"
 if [[ -n "${FAKE_ARCHIVE_CAPTURE:-}" ]]; then
-    cp "$2" "${FAKE_ARCHIVE_CAPTURE}"
+    positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o)
+                [[ $# -ge 2 ]] || exit 2
+                shift 2
+                ;;
+            -q)
+                shift
+                ;;
+            --)
+                shift
+                while [[ $# -gt 0 ]]; do
+                    positional+=("$1")
+                    shift
+                done
+                ;;
+            -*)
+                shift
+                ;;
+            *)
+                positional+=("$1")
+                shift
+                ;;
+        esac
+    done
+    [[ ${#positional[@]} -ge 2 ]] || exit 2
+    cp "${positional[0]}" "${FAKE_ARCHIVE_CAPTURE}"
 fi
 EOF
 
@@ -186,12 +213,43 @@ assert_contains "${output}" 'board.state=drift'
 output="$(run_harness on --scope board)"
 assert_contains "${output}" 'overall=optimized'
 calls="$(<"${CALL_LOG}")"
+assert_contains "${calls}" 'ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+assert_contains "${calls}" 'scp -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
 assert_contains "${calls}" 'board on'
 assert_contains "${calls}" '--defer-runtime'
 assert_contains "${calls}" '--no-smoke'
 assert_contains "${calls}" '--lock-token'
 assert_contains "${calls}" '--optimized-ref HEAD'
+assert_contains "${calls}" '--ssh-connect-timeout 10'
+assert_contains "${calls}" '--ssh-alive-interval 15'
+assert_contains "${calls}" '--ssh-alive-count 3'
 [[ "${calls}" != *'ecommerce on'* ]] || { printf 'board scope called ecommerce transition\n' >&2; exit 1; }
+
+: > "${CALL_LOG}"
+run_harness status --ssh-connect-timeout 7 --ssh-alive-interval 20 --ssh-alive-count 2 >/dev/null
+calls="$(<"${CALL_LOG}")"
+assert_contains "${calls}" 'ssh -o BatchMode=yes -o ConnectTimeout=7 -o ServerAliveInterval=20 -o ServerAliveCountMax=2'
+assert_contains "${calls}" '--ssh-connect-timeout 7'
+assert_contains "${calls}" '--ssh-alive-interval 20'
+assert_contains "${calls}" '--ssh-alive-count 2'
+
+: > "${CALL_LOG}"
+G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS=8 \
+G7_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS=25 \
+G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX=4 \
+FAKE_CALL_LOG="${CALL_LOG}" PATH="${FAKE_BIN}:${PATH}" \
+    "${BOARD_HARNESS}" status --host fake >/dev/null
+assert_file_contains "${CALL_LOG}" \
+    'ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=25 -o ServerAliveCountMax=4'
+
+: > "${CALL_LOG}"
+G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS=9 \
+G7_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS=30 \
+G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX=5 \
+FAKE_CALL_LOG="${CALL_LOG}" PATH="${FAKE_BIN}:${PATH}" \
+    "${ECOMMERCE_HARNESS}" status --host fake >/dev/null
+assert_file_contains "${CALL_LOG}" \
+    'ssh -o BatchMode=yes -o ConnectTimeout=9 -o ServerAliveInterval=30 -o ServerAliveCountMax=5'
 
 set +e
 output="$(

@@ -26,8 +26,9 @@ BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
 DRAIN_TIMEOUT="${G7_PERF_DRAIN_TIMEOUT:-930}"
 
 REPEATS="${G7_AB_REPEATS:-3}"
-HOT_VUS="${G7_AB_HOT_VUS:-10}"
+HOT_VUS="${G7_AB_HOT_VUS:-1}"
 HOT_ARRIVAL_RATE="${G7_AB_HOT_ARRIVAL_RATE:-1}"
+HOT_TIME_UNIT_SECONDS="${G7_AB_HOT_TIME_UNIT_SECONDS:-5}"
 HOT_DURATION_SECONDS="${G7_AB_HOT_DURATION_SECONDS:-30}"
 REQUEST_TIMEOUT_SECONDS="${G7_AB_REQUEST_TIMEOUT_SECONDS:-20}"
 BOARD_SLUG="${G7_AB_BOARD_SLUG:-freebd}"
@@ -42,6 +43,17 @@ IDLE_TIMEOUT_SECONDS="${G7_AB_IDLE_TIMEOUT_SECONDS:-60}"
 CPU_INTERVAL_SECONDS="${G7_AB_CPU_INTERVAL_SECONDS:-1}"
 CPU_MAX_SECONDS="${G7_AB_CPU_MAX_SECONDS:-180}"
 MEASUREMENT_WINDOW_SECONDS="${G7_AB_MEASUREMENT_WINDOW_SECONDS:-}"
+SSH_CONNECT_TIMEOUT_SECONDS="${G7_AB_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
+SSH_SERVER_ALIVE_INTERVAL_SECONDS="${G7_AB_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-15}"
+SSH_SERVER_ALIVE_COUNT_MAX="${G7_AB_SSH_SERVER_ALIVE_COUNT_MAX:-3}"
+HOST_BUSY_ABORT_PCT="${G7_AB_HOST_BUSY_ABORT_PCT:-90}"
+HOST_BUSY_ABORT_CONSECUTIVE="${G7_AB_HOST_BUSY_ABORT_CONSECUTIVE:-5}"
+LOAD_ABORT_PER_CPU="${G7_AB_LOAD_ABORT_PER_CPU:-1.0}"
+LOAD_ABORT_CONSECUTIVE="${G7_AB_LOAD_ABORT_CONSECUTIVE:-3}"
+MEM_AVAILABLE_ABORT_MB="${G7_AB_MEM_AVAILABLE_ABORT_MB:-256}"
+MEM_AVAILABLE_LOW_MB="${G7_AB_MEM_AVAILABLE_LOW_MB:-400}"
+MEM_AVAILABLE_LOW_CONSECUTIVE="${G7_AB_MEM_AVAILABLE_LOW_CONSECUTIVE:-3}"
+SWAP_GROWTH_ABORT_MB="${G7_AB_SWAP_GROWTH_ABORT_MB:-64}"
 OUTPUT_DIR="${G7_AB_OUTPUT_DIR:-}"
 
 usage() {
@@ -59,8 +71,9 @@ Sequence:
 
 Benchmark options:
   --repeats N              Identical runs per phase. Default: 3.
-  --hot-vus N              Preallocated/max VUs for ordinary routes. Default: 10.
-  --hot-rate N             Fixed ordinary matrices per second. Default: 1.
+  --hot-vus N              Preallocated/max VUs for ordinary routes. Default: 1.
+  --hot-rate N             Fixed ordinary matrices per time unit. Default: 1.
+  --hot-time-unit SEC      Arrival time unit. Safe default: 5.
   --hot-duration SEC       Ordinary-route load duration. Default: 30.
   --request-timeout SEC    Per-request k6 timeout. Default: 20.
   --board-slug SLUG        Public board slug. Default: freebd.
@@ -88,6 +101,10 @@ Deployment options:
   --baseline REF           Official baseline ref. Default: 7.0.4.
   --optimized-ref REF      Reviewed optimized ref; resolved to a commit SHA.
   --drain-timeout SEC      Runtime drain timeout. Default: 930.
+  --ssh-connect-timeout SEC
+                            SSH connection timeout. Default: 10.
+  --ssh-alive-interval SEC SSH keepalive interval. Default: 15.
+  --ssh-alive-count N      Missed keepalives before disconnect. Default: 3.
   -h, --help               Show this help.
 
 The deep page, board search, and global search run exactly once with one VU.
@@ -103,6 +120,7 @@ while [[ $# -gt 0 ]]; do
         --repeats) shift; REPEATS="${1:-}" ;;
         --hot-vus) shift; HOT_VUS="${1:-}" ;;
         --hot-rate) shift; HOT_ARRIVAL_RATE="${1:-}" ;;
+        --hot-time-unit) shift; HOT_TIME_UNIT_SECONDS="${1:-}" ;;
         --hot-duration) shift; HOT_DURATION_SECONDS="${1:-}" ;;
         --request-timeout) shift; REQUEST_TIMEOUT_SECONDS="${1:-}" ;;
         --board-slug) shift; BOARD_SLUG="${1:-}" ;;
@@ -128,6 +146,9 @@ while [[ $# -gt 0 ]]; do
         --baseline) shift; BASELINE_REF="${1:-}" ;;
         --optimized-ref) shift; OPTIMIZED_REF="${1:-}" ;;
         --drain-timeout) shift; DRAIN_TIMEOUT="${1:-}" ;;
+        --ssh-connect-timeout) shift; SSH_CONNECT_TIMEOUT_SECONDS="${1:-}" ;;
+        --ssh-alive-interval) shift; SSH_SERVER_ALIVE_INTERVAL_SECONDS="${1:-}" ;;
+        --ssh-alive-count) shift; SSH_SERVER_ALIVE_COUNT_MAX="${1:-}" ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -139,7 +160,9 @@ done
 [[ "${HOT_VUS}" =~ ^[0-9]+$ && "${HOT_VUS}" -ge 1 && "${HOT_VUS}" -le 50 ]] \
     || fail '--hot-vus must be between 1 and 50'
 [[ "${HOT_ARRIVAL_RATE}" =~ ^[0-9]+$ && "${HOT_ARRIVAL_RATE}" -ge 1 && "${HOT_ARRIVAL_RATE}" -le 10 ]] \
-    || fail '--hot-rate must be between 1 and 10 matrices per second'
+    || fail '--hot-rate must be between 1 and 10 matrices per time unit'
+[[ "${HOT_TIME_UNIT_SECONDS}" =~ ^[0-9]+$ && "${HOT_TIME_UNIT_SECONDS}" -ge 1 && "${HOT_TIME_UNIT_SECONDS}" -le 60 ]] \
+    || fail '--hot-time-unit must be between 1 and 60 seconds'
 [[ "${HOT_DURATION_SECONDS}" =~ ^[0-9]+$ && "${HOT_DURATION_SECONDS}" -ge 5 && "${HOT_DURATION_SECONDS}" -le 300 ]] \
     || fail '--hot-duration must be between 5 and 300 seconds'
 [[ "${REQUEST_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${REQUEST_TIMEOUT_SECONDS}" -ge 5 && "${REQUEST_TIMEOUT_SECONDS}" -le 60 ]] \
@@ -163,17 +186,49 @@ fi
     || fail '--measurement-window must be between hot-duration + 75 and 900 seconds'
 [[ "${CPU_MAX_SECONDS}" -ge "${MEASUREMENT_WINDOW_SECONDS}" ]] \
     || fail '--cpu-max-seconds must be at least measurement-window seconds'
-board_requests_per_minute=$((HOT_ARRIVAL_RATE * 8 * 60 + 2))
+board_requests_per_minute=$(((HOT_ARRIVAL_RATE * 8 * 60 + HOT_TIME_UNIT_SECONDS - 1) / HOT_TIME_UNIT_SECONDS + 2))
 [[ "${board_requests_per_minute}" -le 600 ]] \
     || fail '--hot-rate would exceed the shared board throttle (600 requests/minute)'
 [[ "${DRAIN_TIMEOUT}" =~ ^[0-9]+$ && "${DRAIN_TIMEOUT}" -ge 30 && "${DRAIN_TIMEOUT}" -le 3600 ]] \
     || fail '--drain-timeout must be between 30 and 3600 seconds'
+[[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${SSH_CONNECT_TIMEOUT_SECONDS}" -ge 1 && "${SSH_CONNECT_TIMEOUT_SECONDS}" -le 60 ]] \
+    || fail '--ssh-connect-timeout must be between 1 and 60 seconds'
+[[ "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" =~ ^[0-9]+$ && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -ge 5 && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -le 300 ]] \
+    || fail '--ssh-alive-interval must be between 5 and 300 seconds'
+[[ "${SSH_SERVER_ALIVE_COUNT_MAX}" =~ ^[0-9]+$ && "${SSH_SERVER_ALIVE_COUNT_MAX}" -ge 1 && "${SSH_SERVER_ALIVE_COUNT_MAX}" -le 10 ]] \
+    || fail '--ssh-alive-count must be between 1 and 10'
+[[ "${HOST_BUSY_ABORT_PCT}" =~ ^[0-9]+$ && "${HOST_BUSY_ABORT_PCT}" -ge 50 && "${HOST_BUSY_ABORT_PCT}" -le 100 ]] \
+    || fail 'G7_AB_HOST_BUSY_ABORT_PCT must be between 50 and 100'
+[[ "${HOST_BUSY_ABORT_CONSECUTIVE}" =~ ^[0-9]+$ && "${HOST_BUSY_ABORT_CONSECUTIVE}" -ge 1 && "${HOST_BUSY_ABORT_CONSECUTIVE}" -le 30 ]] \
+    || fail 'G7_AB_HOST_BUSY_ABORT_CONSECUTIVE must be between 1 and 30'
+[[ "${LOAD_ABORT_PER_CPU}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+    || fail 'G7_AB_LOAD_ABORT_PER_CPU must be a positive number'
+awk -v value="${LOAD_ABORT_PER_CPU}" 'BEGIN { exit !(value > 0 && value <= 10) }' \
+    || fail 'G7_AB_LOAD_ABORT_PER_CPU must be greater than 0 and at most 10'
+[[ "${LOAD_ABORT_CONSECUTIVE}" =~ ^[0-9]+$ && "${LOAD_ABORT_CONSECUTIVE}" -ge 1 && "${LOAD_ABORT_CONSECUTIVE}" -le 30 ]] \
+    || fail 'G7_AB_LOAD_ABORT_CONSECUTIVE must be between 1 and 30'
+[[ "${MEM_AVAILABLE_ABORT_MB}" =~ ^[0-9]+$ && "${MEM_AVAILABLE_ABORT_MB}" -ge 64 ]] \
+    || fail 'G7_AB_MEM_AVAILABLE_ABORT_MB must be at least 64'
+[[ "${MEM_AVAILABLE_LOW_MB}" =~ ^[0-9]+$ && "${MEM_AVAILABLE_LOW_MB}" -gt "${MEM_AVAILABLE_ABORT_MB}" ]] \
+    || fail 'G7_AB_MEM_AVAILABLE_LOW_MB must exceed the immediate abort threshold'
+[[ "${MEM_AVAILABLE_LOW_CONSECUTIVE}" =~ ^[0-9]+$ && "${MEM_AVAILABLE_LOW_CONSECUTIVE}" -ge 1 && "${MEM_AVAILABLE_LOW_CONSECUTIVE}" -le 30 ]] \
+    || fail 'G7_AB_MEM_AVAILABLE_LOW_CONSECUTIVE must be between 1 and 30'
+[[ "${SWAP_GROWTH_ABORT_MB}" =~ ^[0-9]+$ && "${SWAP_GROWTH_ABORT_MB}" -ge 1 ]] \
+    || fail 'G7_AB_SWAP_GROWTH_ABORT_MB must be positive'
 [[ "${REMOTE_DB_NAME}" =~ ^[A-Za-z0-9_]+$ ]] || fail 'database name contains unsupported characters'
 [[ "${REMOTE_DB_PREFIX}" =~ ^[A-Za-z0-9_]*$ ]] || fail 'database prefix contains unsupported characters'
 [[ -n "${BOARD_SLUG}" && -n "${SHOP_SEARCH}" ]] \
     || fail 'board slug and shop search term must not be empty'
 
 BASE_URL="${BASE_URL%/}"
+EXPECTED_HOT_ITERATIONS=$(((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS + HOT_TIME_UNIT_SECONDS - 1) / HOT_TIME_UNIT_SECONDS))
+EXPECTED_ITERATIONS=$((EXPECTED_HOT_ITERATIONS + 1))
+SSH_OPTIONS=(
+    -o BatchMode=yes
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
+    -o "ServerAliveInterval=${SSH_SERVER_ALIVE_INTERVAL_SECONDS}"
+    -o "ServerAliveCountMax=${SSH_SERVER_ALIVE_COUNT_MAX}"
+)
 [[ -x "${TOGGLE_SCRIPT}" ]] || fail "toggle harness is not executable: ${TOGGLE_SCRIPT}"
 [[ -f "${K6_SCRIPT}" ]] || fail "k6 route script not found: ${K6_SCRIPT}"
 [[ -f "${REPO_ROOT}/artisan" ]] || fail "invalid repository root: ${REPO_ROOT}"
@@ -207,6 +262,7 @@ MYSQL_GUARD_ORIGINAL=''
 CPU_SAMPLER_PID=''
 CPU_STOP_FILE=''
 CPU_SAMPLE_FILE=''
+K6_PID=''
 AB_MUTATION_STARTED=0
 CLEANUP_RUNNING=0
 MAIN_STATUS=0
@@ -225,11 +281,14 @@ TOGGLE_OPTIONS=(
     --base-url "${BASE_URL}"
     --board-slug "${BOARD_SLUG}"
     --drain-timeout "${DRAIN_TIMEOUT}"
+    --ssh-connect-timeout "${SSH_CONNECT_TIMEOUT_SECONDS}"
+    --ssh-alive-interval "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}"
+    --ssh-alive-count "${SSH_SERVER_ALIVE_COUNT_MAX}"
     --parent-lock-token "${TOKEN}"
 )
 
 acquire_ab_lock() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-acquire "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-acquire "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
 action="$1"; token="$2"; lock_dir="$3"
 [[ "${action}" == ab-lock-acquire && "${token}" =~ ^g7-ab-[A-Za-z0-9_-]+$ ]]
@@ -251,7 +310,7 @@ REMOTE
 
 assert_ab_lock() {
     [[ "${AB_LOCK_ACQUIRED}" == 1 ]] || return 1
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-assert "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE' >/dev/null
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-assert "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE' >/dev/null
 set -euo pipefail
 [[ "$1" == ab-lock-assert && "$3" == /var/lock/g7-performance-toggle.lock.d ]]
 [[ -f "$3/owner" && "$(<"$3/owner")" == "$2" ]]
@@ -260,7 +319,7 @@ REMOTE
 
 release_ab_lock() {
     [[ "${AB_LOCK_ACQUIRED}" == 1 ]] || return 0
-    if ! "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-release "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
+    if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- ab-lock-release "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
 [[ "$1" == ab-lock-release && "$3" == /var/lock/g7-performance-toggle.lock.d ]]
 [[ -f "$3/owner" && "$(<"$3/owner")" == "$2" ]]
@@ -301,7 +360,7 @@ install_mysql_guard() {
     local output result
     MYSQL_GUARD_ACTIVE=1
     set +e
-    output="$("${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    output="$("${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         mysql-guard-install "${REMOTE_DB_NAME}" "${STATEMENT_TIMEOUT_MS}" "${MYSQL_GUARD_SNAPSHOT}" \
         "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
@@ -345,7 +404,7 @@ REMOTE
 
 restore_mysql_guard() {
     [[ "${MYSQL_GUARD_ACTIVE}" == 1 ]] || return 0
-    if ! "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         mysql-guard-restore "${MYSQL_GUARD_SNAPSHOT}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
 action="$1"; snapshot="$2"; token="$3"; lock_dir="$4"
@@ -370,7 +429,7 @@ REMOTE
 }
 
 wait_for_database_idle() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         mysql-idle-gate "${REMOTE_DB_NAME}" "${IDLE_TIMEOUT_SECONDS}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
 action="$1"; db_name="$2"; timeout="$3"; token="$4"; lock_dir="$5"
@@ -418,7 +477,7 @@ REMOTE
 }
 
 assert_xdebug_disabled() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         xdebug-check "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE'
 set -euo pipefail
 action="$1"; app_user="$2"; php_bin="$3"; token="$4"; lock_dir="$5"
@@ -441,19 +500,28 @@ REMOTE
 }
 
 start_cpu_sampler() {
-    local phase="$1" run="$2" readiness=0
+    local phase="$1" run="$2" readiness=0 sampler_start_exit=0
     CPU_SAMPLE_FILE="${OUTPUT_DIR}/runs/${phase}-${run}-cpu.csv"
     CPU_STOP_FILE="/tmp/${TOKEN}-${phase}-${run}.stop"
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         cpu-sample "${CPU_STOP_FILE}" "${CPU_INTERVAL_SECONDS}" "${MEASUREMENT_WINDOW_SECONDS}" \
-        "${CPU_MAX_SECONDS}" "${TOKEN}" "${AB_LOCK_DIR}" \
+        "${CPU_MAX_SECONDS}" "${HOST_BUSY_ABORT_PCT}" "${HOST_BUSY_ABORT_CONSECUTIVE}" \
+        "${LOAD_ABORT_PER_CPU}" "${LOAD_ABORT_CONSECUTIVE}" \
+        "${MEM_AVAILABLE_ABORT_MB}" "${MEM_AVAILABLE_LOW_MB}" "${MEM_AVAILABLE_LOW_CONSECUTIVE}" \
+        "${SWAP_GROWTH_ABORT_MB}" "${TOKEN}" "${AB_LOCK_DIR}" \
         >"${CPU_SAMPLE_FILE}" 2>"${OUTPUT_DIR}/runs/${phase}-${run}-cpu.log" <<'REMOTE' &
 set -euo pipefail
 action="$1"; stop_file="$2"; interval="$3"; window_seconds="$4"; max_seconds="$5"
-token="$6"; lock_dir="$7"
+host_limit="$6"; host_count_limit="$7"; load_per_cpu="$8"; load_count_limit="$9"
+mem_abort_mb="${10}"; mem_low_mb="${11}"; mem_count_limit="${12}"; swap_growth_limit_mb="${13}"
+token="${14}"; lock_dir="${15}"
 [[ "${action}" == cpu-sample ]]
 [[ "${stop_file}" =~ ^/tmp/g7-ab-[A-Za-z0-9_-]+[.]stop$ ]]
 [[ "${interval}" =~ ^[0-9]+$ && "${window_seconds}" =~ ^[0-9]+$ && "${max_seconds}" =~ ^[0-9]+$ ]]
+[[ "${host_limit}" =~ ^[0-9]+$ && "${host_count_limit}" =~ ^[0-9]+$ ]]
+[[ "${load_per_cpu}" =~ ^[0-9]+([.][0-9]+)?$ && "${load_count_limit}" =~ ^[0-9]+$ ]]
+[[ "${mem_abort_mb}" =~ ^[0-9]+$ && "${mem_low_mb}" =~ ^[0-9]+$ && "${mem_count_limit}" =~ ^[0-9]+$ ]]
+[[ "${swap_growth_limit_mb}" =~ ^[0-9]+$ ]]
 (( window_seconds <= max_seconds ))
 [[ "${lock_dir}" == /var/lock/g7-performance-toggle.lock.d && "$(<"${lock_dir}/owner")" == "${token}" ]]
 rm -f -- "${stop_file}"
@@ -468,6 +536,17 @@ read_host() {
     read -r label user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
     HOST_TOTAL=$((user + nice + system + idle + iowait + irq + softirq + steal))
     HOST_IDLE=$((idle + iowait))
+}
+
+read_resources() {
+    local ignored mem_available_kb swap_total_kb swap_free_kb
+    read -r LOAD1 ignored < /proc/loadavg
+    mem_available_kb="$(awk '$1 == "MemAvailable:" { print $2; exit }' /proc/meminfo)"
+    swap_total_kb="$(awk '$1 == "SwapTotal:" { print $2; exit }' /proc/meminfo)"
+    swap_free_kb="$(awk '$1 == "SwapFree:" { print $2; exit }' /proc/meminfo)"
+    [[ "${mem_available_kb}" =~ ^[0-9]+$ && "${swap_total_kb}" =~ ^[0-9]+$ && "${swap_free_kb}" =~ ^[0-9]+$ ]]
+    MEM_AVAILABLE_MB=$((mem_available_kb / 1024))
+    SWAP_USED_MB=$(((swap_total_kb - swap_free_kb) / 1024))
 }
 
 read_process_deltas() {
@@ -501,26 +580,78 @@ read_process_deltas() {
     done
 }
 
-printf 'sample,elapsed_seconds,timestamp,host_busy_pct,php_fpm_host_capacity_pct,mysql_host_capacity_pct\n'
+CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+if [[ ! "${CPU_COUNT}" =~ ^[0-9]+$ || "${CPU_COUNT}" == 0 ]]; then
+    CPU_COUNT="$(awk '/^processor[[:space:]]*:/ { count++ } END { print count + 0 }' /proc/cpuinfo)"
+fi
+(( CPU_COUNT > 0 )) || CPU_COUNT=1
+LOAD_LIMIT="$(awk -v cpus="${CPU_COUNT}" -v per_cpu="${load_per_cpu}" 'BEGIN { printf "%.3f", cpus * per_cpu }')"
+
 read_host
+read_resources
+if (( MEM_AVAILABLE_MB < mem_abort_mb )); then
+    printf 'G7_CPU_FAIL_FAST reason=mem_available_immediate sample=0 mem=%sMB\n' "${MEM_AVAILABLE_MB}" >&2
+    exit 86
+fi
+printf 'sample,elapsed_seconds,timestamp,cpu_count,host_busy_pct,php_fpm_host_capacity_pct,mysql_host_capacity_pct,load1,mem_available_mb,swap_used_mb,abort_reason\n'
 previous_total="${HOST_TOTAL}"
 previous_idle="${HOST_IDLE}"
+swap_used_baseline_mb="${SWAP_USED_MB}"
 read_process_deltas
 started="${SECONDS}"
 sample=0
+host_high_count=0
+load_high_count=0
+mem_low_count=0
 while [[ ! -e "${stop_file}" ]] && (( SECONDS - started < window_seconds )); do
     sleep "${interval}"
     read_host
     read_process_deltas
+    read_resources
     total_delta=$((HOST_TOTAL - previous_total))
     idle_delta=$((HOST_IDLE - previous_idle))
     if (( total_delta > 0 )); then
         host_busy="$(awk -v total="${total_delta}" -v idle="${idle_delta}" 'BEGIN { printf "%.3f", (total-idle)*100/total }')"
         php_cpu="$(awk -v ticks="${PHP_DELTA}" -v total="${total_delta}" 'BEGIN { printf "%.3f", ticks*100/total }')"
         mysql_cpu="$(awk -v ticks="${MYSQL_DELTA}" -v total="${total_delta}" 'BEGIN { printf "%.3f", ticks*100/total }')"
+        if awk -v value="${host_busy}" -v limit="${host_limit}" 'BEGIN { exit !(value >= limit) }'; then
+            host_high_count=$((host_high_count + 1))
+        else
+            host_high_count=0
+        fi
+        if awk -v value="${LOAD1}" -v limit="${LOAD_LIMIT}" 'BEGIN { exit !(value >= limit) }'; then
+            load_high_count=$((load_high_count + 1))
+        else
+            load_high_count=0
+        fi
+        if (( MEM_AVAILABLE_MB < mem_low_mb )); then
+            mem_low_count=$((mem_low_count + 1))
+        else
+            mem_low_count=0
+        fi
+        swap_growth_mb=$((SWAP_USED_MB - swap_used_baseline_mb))
+        (( swap_growth_mb >= 0 )) || swap_growth_mb=0
+        abort_reason=''
+        if (( MEM_AVAILABLE_MB < mem_abort_mb )); then
+            abort_reason='mem_available_immediate'
+        elif (( swap_growth_mb >= swap_growth_limit_mb )); then
+            abort_reason='swap_growth'
+        elif (( host_high_count >= host_count_limit )); then
+            abort_reason='host_busy_consecutive'
+        elif (( load_high_count >= load_count_limit )); then
+            abort_reason='load1_consecutive'
+        elif (( mem_low_count >= mem_count_limit )); then
+            abort_reason='mem_available_consecutive'
+        fi
         sample=$((sample + 1))
-        printf '%s,%s,%s,%s,%s,%s\n' "${sample}" "$((SECONDS - started))" \
-            "$(date --iso-8601=seconds)" "${host_busy}" "${php_cpu}" "${mysql_cpu}"
+        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "${sample}" "$((SECONDS - started))" \
+            "$(date --iso-8601=seconds)" "${CPU_COUNT}" "${host_busy}" "${php_cpu}" "${mysql_cpu}" \
+            "${LOAD1}" "${MEM_AVAILABLE_MB}" "${SWAP_USED_MB}" "${abort_reason}"
+        if [[ -n "${abort_reason}" ]]; then
+            printf 'G7_CPU_FAIL_FAST reason=%s host=%s%% load1=%s/%s mem=%sMB swap_growth=%sMB\n' \
+                "${abort_reason}" "${host_busy}" "${LOAD1}" "${LOAD_LIMIT}" "${MEM_AVAILABLE_MB}" "${swap_growth_mb}" >&2
+            exit 86
+        fi
     fi
     previous_total="${HOST_TOTAL}"
     previous_idle="${HOST_IDLE}"
@@ -536,24 +667,42 @@ REMOTE
         sleep 0.1
         readiness=$((readiness + 1))
     done
-    wait "${CPU_SAMPLER_PID}" || true
+    wait "${CPU_SAMPLER_PID}" || sampler_start_exit=$?
     CPU_SAMPLER_PID=''
+    CPU_STOP_FILE=''
+    [[ "${sampler_start_exit}" != 86 ]] || return 3
     return 1
 }
 
 wait_cpu_sampler() {
-    local sampler_result=0
+    local sampler_result=0 wait_result=0 deadline forced=0
     [[ -n "${CPU_SAMPLER_PID}" ]] || return 1
-    wait "${CPU_SAMPLER_PID}" || sampler_result=$?
+    deadline=$((SECONDS + CPU_MAX_SECONDS + SSH_CONNECT_TIMEOUT_SECONDS + 5))
+    while kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1 && (( SECONDS < deadline )); do
+        sleep 0.2
+    done
+    if kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1; then
+        forced=1
+        kill -TERM "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
+        sleep 1
+        kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1 \
+            && kill -KILL "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
+    fi
+    wait "${CPU_SAMPLER_PID}" || wait_result=$?
+    if [[ "${forced}" == 1 ]]; then
+        sampler_result=124
+    else
+        sampler_result="${wait_result}"
+    fi
     CPU_SAMPLER_PID=''
     CPU_STOP_FILE=''
     return "${sampler_result}"
 }
 
 stop_cpu_sampler() {
-    local sampler_result=0
+    local sampler_result=0 wait_result=0 deadline forced=0
     [[ -n "${CPU_SAMPLER_PID}" ]] || return 0
-    if ! "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         cpu-stop "${CPU_STOP_FILE}" "${TOKEN}" "${AB_LOCK_DIR}" <<'REMOTE' >/dev/null 2>&1
 set -euo pipefail
 [[ "$1" == cpu-stop && "$2" =~ ^/tmp/g7-ab-[A-Za-z0-9_-]+[.]stop$ && "$4" == /var/lock/g7-performance-toggle.lock.d ]]
@@ -564,28 +713,69 @@ REMOTE
         kill "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
         sampler_result=1
     fi
-    wait "${CPU_SAMPLER_PID}" || sampler_result=1
+    deadline=$((SECONDS + CPU_INTERVAL_SECONDS + 5))
+    while kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1 && (( SECONDS < deadline )); do
+        sleep 0.2
+    done
+    if kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1; then
+        forced=1
+        kill -TERM "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
+        sleep 1
+        kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1 \
+            && kill -KILL "${CPU_SAMPLER_PID}" >/dev/null 2>&1 || true
+    fi
+    wait "${CPU_SAMPLER_PID}" || wait_result=$?
+    [[ "${wait_result}" == 0 && "${forced}" == 0 ]] || sampler_result=1
     CPU_SAMPLER_PID=''
     CPU_STOP_FILE=''
     return "${sampler_result}"
+}
+
+stop_k6() {
+    local attempt
+    [[ -n "${K6_PID}" ]] || return 0
+    if kill -0 "${K6_PID}" >/dev/null 2>&1; then
+        kill -INT "${K6_PID}" >/dev/null 2>&1 || true
+        for ((attempt = 0; attempt < 50; attempt++)); do
+            kill -0 "${K6_PID}" >/dev/null 2>&1 || break
+            sleep 0.1
+        done
+    fi
+    if kill -0 "${K6_PID}" >/dev/null 2>&1; then
+        kill -TERM "${K6_PID}" >/dev/null 2>&1 || true
+        for ((attempt = 0; attempt < 50; attempt++)); do
+            kill -0 "${K6_PID}" >/dev/null 2>&1 || break
+            sleep 0.1
+        done
+    fi
+    if kill -0 "${K6_PID}" >/dev/null 2>&1; then
+        kill -KILL "${K6_PID}" >/dev/null 2>&1 || true
+    fi
+    wait "${K6_PID}" >/dev/null 2>&1 || true
+    K6_PID=''
 }
 
 summarize_cpu() {
     local source_file="$1" target_file="$2" window_seconds="$3" interval_seconds="$4"
     awk -F, -v window="${window_seconds}" -v interval="${interval_seconds}" '
         NR == 1 { next }
-        NF >= 6 {
+        NF >= 10 {
             samples++
             elapsed = $2
-            host_sum += $4; php_sum += $5; mysql_sum += $6
-            if (samples == 1 || $4 > host_max) host_max = $4
-            if (samples == 1 || $5 > php_max) php_max = $5
-            if (samples == 1 || $6 > mysql_max) mysql_max = $6
+            cpu_count = $4
+            host_sum += $5; php_sum += $6; mysql_sum += $7; load_sum += $8
+            if (samples == 1 || $5 > host_max) host_max = $5
+            if (samples == 1 || $6 > php_max) php_max = $6
+            if (samples == 1 || $7 > mysql_max) mysql_max = $7
+            if (samples == 1 || $8 > load_max) load_max = $8
+            if (samples == 1 || $9 < mem_min) mem_min = $9
+            if (samples == 1) swap_start = $10
+            if (samples == 1 || $10 > swap_max) swap_max = $10
         }
         END {
             if (samples == 0 || elapsed < window) exit 2
             expected = int((window + interval - 1) / interval)
-            printf "{\"samples\":%d,\"expected_samples\":%d,\"configured_window_seconds\":%d,\"actual_elapsed_seconds\":%d,\"sample_interval_seconds\":%d,\"host_busy_avg_pct\":%.3f,\"host_busy_max_pct\":%.3f,\"php_fpm_cpu_avg_pct\":%.3f,\"php_fpm_cpu_max_pct\":%.3f,\"mysql_cpu_avg_pct\":%.3f,\"mysql_cpu_max_pct\":%.3f}\n", samples, expected, window, elapsed, interval, host_sum/samples, host_max, php_sum/samples, php_max, mysql_sum/samples, mysql_max
+            printf "{\"samples\":%d,\"expected_samples\":%d,\"configured_window_seconds\":%d,\"actual_elapsed_seconds\":%d,\"sample_interval_seconds\":%d,\"cpu_count\":%d,\"host_busy_avg_pct\":%.3f,\"host_busy_max_pct\":%.3f,\"php_fpm_cpu_avg_pct\":%.3f,\"php_fpm_cpu_max_pct\":%.3f,\"mysql_cpu_avg_pct\":%.3f,\"mysql_cpu_max_pct\":%.3f,\"load1_avg\":%.3f,\"load1_max\":%.3f,\"mem_available_min_mb\":%.3f,\"swap_used_start_mb\":%.3f,\"swap_used_max_mb\":%.3f,\"swap_growth_max_mb\":%.3f}\n", samples, expected, window, elapsed, interval, cpu_count, host_sum/samples, host_max, php_sum/samples, php_max, mysql_sum/samples, mysql_max, load_sum/samples, load_max, mem_min, swap_start, swap_max, swap_max-swap_start
         }
     ' "${source_file}" > "${target_file}"
     "${JQ_BIN}" -e . "${target_file}" >/dev/null
@@ -718,7 +908,7 @@ normalize_k6_summary() {
         --arg phase "${phase}" \
         --argjson run "${run}" \
         --argjson k6_exit "${k6_exit}" \
-        --argjson expected_iterations "$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS + 1))" \
+        --argjson expected_iterations "${EXPECTED_ITERATIONS}" \
         --slurpfile manifest "${MANIFEST_FILE}" '
         .metrics as $metrics
         | {
@@ -761,33 +951,75 @@ normalize_k6_summary() {
 }
 
 run_one_benchmark() {
-    local phase="$1" run="$2" raw_file cpu_summary normalized_file console_file k6_exit=0 sampler_exit=0
+    local phase="$1" run="$2" raw_file cpu_summary normalized_file console_file abort_reason
+    local k6_exit=0 sampler_exit=0 sampler_ended_during_load=0 start_result=0
+    local sampler_lines current_lines sampler_last_progress sampler_now sampler_stale_limit
     raw_file="${OUTPUT_DIR}/runs/${phase}-${run}-k6-summary.json"
     cpu_summary="${OUTPUT_DIR}/runs/${phase}-${run}-cpu-summary.json"
     normalized_file="${OUTPUT_DIR}/runs/${phase}-${run}.json"
     console_file="${OUTPUT_DIR}/runs/${phase}-${run}-k6.log"
 
-    log "${phase} run ${run}/${REPEATS}: hot=${HOT_VUS}VU/${HOT_DURATION_SECONDS}s, risky=1VU/1 iteration"
-    start_cpu_sampler "${phase}" "${run}" || return 2
+    log "${phase} run ${run}/${REPEATS}: hot=${HOT_VUS}VU, rate=${HOT_ARRIVAL_RATE}/${HOT_TIME_UNIT_SECONDS}s, duration=${HOT_DURATION_SECONDS}s, risky=1VU/1 iteration"
+    start_cpu_sampler "${phase}" "${run}" || start_result=$?
+    [[ "${start_result}" == 0 ]] || {
+        [[ "${start_result}" != 3 ]] || log "${phase} run ${run}: capacity guard aborted before k6 startup"
+        return "$((start_result == 3 ? 3 : 2))"
+    }
     set +e
-    BASE_URL="${BASE_URL}" \
-    BOARD_SLUG="${BOARD_SLUG}" \
-    POST_ID="${POST_ID}" \
-    PRODUCT_ID="${PRODUCT_ID}" \
-    BOARD_SEARCH="${BOARD_SEARCH}" \
-    GLOBAL_SEARCH="${GLOBAL_SEARCH}" \
-    SHOP_SEARCH="${SHOP_SEARCH}" \
-    DEEP_PAGE="${DEEP_PAGE}" \
-    HOT_VUS="${HOT_VUS}" \
-    HOT_ARRIVAL_RATE="${HOT_ARRIVAL_RATE}" \
-    HOT_DURATION="${HOT_DURATION_SECONDS}s" \
-    RISKY_START="$((HOT_DURATION_SECONDS + 11))s" \
-    REQUEST_TIMEOUT="${REQUEST_TIMEOUT_SECONDS}s" \
-        "${K6_BIN}" run --quiet --summary-export "${raw_file}" "${K6_SCRIPT}" \
-        >"${console_file}" 2>&1
-    k6_exit=$?
+    (
+        export BASE_URL BOARD_SLUG POST_ID PRODUCT_ID BOARD_SEARCH GLOBAL_SEARCH SHOP_SEARCH DEEP_PAGE HOT_VUS HOT_ARRIVAL_RATE
+        export HOT_TIME_UNIT="${HOT_TIME_UNIT_SECONDS}s"
+        export HOT_DURATION="${HOT_DURATION_SECONDS}s"
+        export RISKY_START="$((HOT_DURATION_SECONDS + 11))s"
+        export REQUEST_TIMEOUT="${REQUEST_TIMEOUT_SECONDS}s"
+        exec "${K6_BIN}" run --quiet --summary-export "${raw_file}" "${K6_SCRIPT}"
+    ) >"${console_file}" 2>&1 &
+    K6_PID=$!
+    sampler_lines="$(wc -l < "${CPU_SAMPLE_FILE}")"
+    sampler_last_progress="$(date +%s)"
+    sampler_stale_limit=$((CPU_INTERVAL_SECONDS * 3))
+    (( sampler_stale_limit >= 5 )) || sampler_stale_limit=5
+    while kill -0 "${K6_PID}" >/dev/null 2>&1; do
+        sleep 0.2
+        kill -0 "${K6_PID}" >/dev/null 2>&1 || break
+        if ! kill -0 "${CPU_SAMPLER_PID}" >/dev/null 2>&1; then
+            wait "${CPU_SAMPLER_PID}" || sampler_exit=$?
+            CPU_SAMPLER_PID=''
+            CPU_STOP_FILE=''
+            sampler_ended_during_load=1
+            k6_exit=130
+            stop_k6
+            break
+        fi
+        current_lines="$(wc -l < "${CPU_SAMPLE_FILE}")"
+        sampler_now="$(date +%s)"
+        if (( current_lines > sampler_lines )); then
+            sampler_lines="${current_lines}"
+            sampler_last_progress="${sampler_now}"
+        elif (( sampler_now - sampler_last_progress >= sampler_stale_limit )); then
+            log "${phase} run ${run}: CPU/resource sampler heartbeat stalled for ${sampler_stale_limit}s"
+            sampler_exit=87
+            sampler_ended_during_load=1
+            stop_k6
+            stop_cpu_sampler >/dev/null 2>&1 || true
+            break
+        fi
+    done
+    if [[ -n "${K6_PID}" ]]; then
+        wait "${K6_PID}" || k6_exit=$?
+        K6_PID=''
+    fi
+    if [[ -n "${CPU_SAMPLER_PID}" ]]; then
+        wait_cpu_sampler || sampler_exit=$?
+    fi
     set -e
-    wait_cpu_sampler || sampler_exit=$?
+
+    if [[ "${sampler_exit}" != 0 || "${sampler_ended_during_load}" == 1 ]]; then
+        abort_reason="$(awk -F, 'NR > 1 && $11 != "" { reason=$11 } END { print reason }' "${CPU_SAMPLE_FILE}" 2>/dev/null || true)"
+        [[ -n "${abort_reason}" ]] || abort_reason="sampler-exit-${sampler_exit}"
+        log "${phase} run ${run}: capacity/monitor guard aborted load (${abort_reason})"
+        return 3
+    fi
 
     [[ -s "${raw_file}" ]] || {
         log "${phase} run ${run}: k6 did not produce a summary (exit=${k6_exit})"
@@ -802,8 +1034,6 @@ run_one_benchmark() {
         || return 2
     RUN_FILES+=("${normalized_file}")
     wait_for_database_idle || return 2
-    [[ "${sampler_exit}" == 0 ]] || return 2
-
     if ! "${JQ_BIN}" -e '
         (.dropped_iterations // 0) == 0 and .iterations == .expected_iterations
     ' "${normalized_file}" >/dev/null; then
@@ -830,12 +1060,27 @@ run_phase() {
     for ((run = 1; run <= REPEATS; run++)); do
         result=0
         run_one_benchmark "${phase}" "${run}" || result=$?
-        if [[ "${result}" == 2 ]]; then
-            return 2
+        if [[ "${result}" == 2 || "${result}" == 3 ]]; then
+            return "${result}"
         fi
-        [[ "${result}" == 0 ]] || phase_status=1
+        if [[ "${result}" != 0 ]]; then
+            phase_status=1
+            log "${phase} run ${run} failed; refusing further ${phase} repeats"
+            return "${result}"
+        fi
     done
     return "${phase_status}"
+}
+
+run_guarded_phase() {
+    local phase="$1" result=0
+    wait_for_database_idle || return 2
+    install_mysql_guard
+    run_phase "${phase}" || result=$?
+    if ! restore_mysql_guard; then
+        fail "MySQL SELECT timeout could not be restored immediately after ${phase}; transition refused"
+    fi
+    return "${result}"
 }
 
 generate_reports() {
@@ -867,7 +1112,9 @@ generate_reports() {
         --argjson repeats "${REPEATS}" \
         --argjson hot_vus "${HOT_VUS}" \
         --argjson hot_arrival_rate "${HOT_ARRIVAL_RATE}" \
+        --argjson hot_time_unit "${HOT_TIME_UNIT_SECONDS}" \
         --argjson hot_duration "${HOT_DURATION_SECONDS}" \
+        --argjson expected_hot_iterations "${EXPECTED_HOT_ITERATIONS}" \
         --argjson measurement_window "${MEASUREMENT_WINDOW_SECONDS}" \
         --argjson cpu_interval "${CPU_INTERVAL_SECONDS}" \
         --argjson deep_page "${DEEP_PAGE}" \
@@ -936,9 +1183,11 @@ generate_reports() {
                 optimized_commit: $optimized_commit,
                 repeats: $repeats,
                 hot_vus: $hot_vus,
-                hot_arrival_rate_per_second: $hot_arrival_rate,
+                hot_arrival_rate: $hot_arrival_rate,
+                hot_arrival_rate_per_second: ($hot_arrival_rate / $hot_time_unit),
+                hot_time_unit_seconds: $hot_time_unit,
                 hot_duration_seconds: $hot_duration,
-                expected_hot_iterations_per_run: ($hot_arrival_rate * $hot_duration),
+                expected_hot_iterations_per_run: $expected_hot_iterations,
                 risky_vus: 1,
                 risky_iterations_per_run: 1,
                 deep_page: $deep_page,
@@ -1015,8 +1264,8 @@ generate_reports() {
         printf -- '- 기준: `%s`\n' "${BASELINE_REF}"
         printf -- '- 튜닝: `%s`\n' "${OPTIMIZED_COMMIT}"
         printf -- '- 반복: 상태별 %s회, 일반 경로 %s VU / %s초\n' "${REPEATS}" "${HOT_VUS}" "${HOT_DURATION_SECONDS}"
-        printf -- '- 요청 스케줄: 일반 경로 매트릭스 초당 %s회 고정, 상태별 예정 %s회\n' \
-            "${HOT_ARRIVAL_RATE}" "$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS))"
+        printf -- '- 요청 스케줄: 일반 경로 매트릭스 %s초당 %s회 고정, 상태별 예정 %s회\n' \
+            "${HOT_TIME_UNIT_SECONDS}" "${HOT_ARRIVAL_RATE}" "${EXPECTED_HOT_ITERATIONS}"
         printf -- '- CPU 측정창: 매 실행 %s초 고정, %s초 간격, 프로세스 값은 전체 호스트 CPU 용량 기준\n' \
             "${MEASUREMENT_WINDOW_SECONDS}" "${CPU_INTERVAL_SECONDS}"
         printf -- '- 안전: 깊은 페이지·게시판 검색·전역 검색은 1 VU 단건, SELECT 최대 %sms\n\n' "${STATEMENT_TIMEOUT_MS}"
@@ -1120,25 +1369,26 @@ assert_final_live_health() {
 }
 
 cleanup() {
-    local original_status=$? cleanup_status=0 pre_restore_healthy=1
+    local original_status=$? cleanup_status=0 cap_restored=1
     [[ "${CLEANUP_RUNNING}" == 0 ]] || return
     CLEANUP_RUNNING=1
     trap - EXIT INT TERM
     set +e
-    stop_cpu_sampler
-    if [[ "${AB_MUTATION_STARTED}" == 1 ]] && ! ensure_final_on; then
-        log 'tuning ON with strict/live health was not confirmed while the temporary SELECT cap was active'
-        pre_restore_healthy=0
+    stop_k6
+    if ! stop_cpu_sampler; then
+        log 'FINAL FAILURE: CPU sampler could not be stopped cleanly'
+        cleanup_status=1
     fi
     if ! restore_mysql_guard; then
         log 'FINAL FAILURE: MySQL SELECT timeout could not be restored'
         cleanup_status=1
+        cap_restored=0
     fi
     if [[ "${AB_MUTATION_STARTED}" == 1 ]]; then
-        if [[ "${pre_restore_healthy}" == 0 ]]; then
-            log 'retrying tuning ON recovery after restoring the MySQL SELECT cap'
-        fi
-        if ! ensure_final_on; then
+        if [[ "${cap_restored}" != 1 ]]; then
+            log 'FINAL FAILURE: tuning ON recovery was refused while SELECT-cap restoration is unconfirmed'
+            cleanup_status=1
+        elif ! ensure_final_on; then
             log 'FINAL FAILURE: tuning ON strict/live health could not be recovered after guard restoration'
             cleanup_status=1
         fi
@@ -1158,11 +1408,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 log "reports: ${OUTPUT_DIR}"
-"${SSH_BIN}" "${REMOTE_HOST}" true >/dev/null
+"${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" true >/dev/null
 acquire_ab_lock
 "${CURL_BIN}" --fail --silent --show-error --max-time "${REQUEST_TIMEOUT_SECONDS}" \
     -o /dev/null "${BASE_URL}/"
-install_mysql_guard
 wait_for_database_idle
 
 AB_MUTATION_STARTED=1
@@ -1174,26 +1423,30 @@ validate_search_targets
 write_route_manifest
 
 baseline_result=0
-run_phase baseline || baseline_result=$?
-[[ "${baseline_result}" == 0 ]] || MAIN_STATUS=1
+run_guarded_phase baseline || baseline_result=$?
 
 wait_for_database_idle || fail 'database remained busy after baseline runs; arbitrary query kill is prohibited'
 run_toggle on
 confirm_state optimized || fail 'ON transition did not reach a strict optimized state'
 assert_xdebug_disabled
 
-optimized_result=0
-run_phase optimized || optimized_result=$?
-[[ "${optimized_result}" == 0 ]] || MAIN_STATUS=1
-wait_for_database_idle || fail 'database remained busy after optimized runs'
-confirm_state optimized || fail 'optimized state drifted during benchmark'
+if [[ "${baseline_result}" != 0 ]]; then
+    MAIN_STATUS=1
+    log 'baseline phase failed; optimized load skipped and comparison report refused'
+else
+    optimized_result=0
+    run_guarded_phase optimized || optimized_result=$?
+    [[ "${optimized_result}" == 0 ]] || MAIN_STATUS=1
+    wait_for_database_idle || fail 'database remained busy after optimized runs'
+    confirm_state optimized || fail 'optimized state drifted during benchmark'
 
-generate_reports || MAIN_STATUS=1
-if [[ -f "${REPORT_MD}" ]]; then
-    log "Markdown: ${REPORT_MD}"
-    log "JSON: ${REPORT_JSON}"
-    log "CSV: ${REPORT_CSV}"
-    log "CPU CSV: ${CPU_REPORT_CSV}"
+    generate_reports || MAIN_STATUS=1
+    if [[ -f "${REPORT_MD}" ]]; then
+        log "Markdown: ${REPORT_MD}"
+        log "JSON: ${REPORT_JSON}"
+        log "CSV: ${REPORT_CSV}"
+        log "CPU CSV: ${CPU_REPORT_CSV}"
+    fi
 fi
 
 exit "${MAIN_STATUS}"

@@ -135,11 +135,21 @@ case "${action}" in
         ;;
     cpu-sample)
         window="${args[action_index + 3]}"
-        token="${args[action_index + 5]}"
+        token="${args[action_index + 13]}"
         require_owner "${token}"
-        printf 'sample,elapsed_seconds,timestamp,host_busy_pct,php_fpm_host_capacity_pct,mysql_host_capacity_pct\n'
-        printf '1,1,2026-07-16T10:00:01+09:00,50.000,70.000,20.000\n'
-        printf '2,%s,2026-07-16T10:01:20+09:00,60.000,80.000,30.000\n' "${window}"
+        printf 'sample,elapsed_seconds,timestamp,cpu_count,host_busy_pct,php_fpm_host_capacity_pct,mysql_host_capacity_pct,load1,mem_available_mb,swap_used_mb,abort_reason\n'
+        if [[ "${FAKE_CPU_FAIL_FAST:-0}" == 1 ]]; then
+            printf '1,1,2026-07-16T10:00:01+09:00,2,95.000,70.000,20.000,3.0,350,64,host_busy_consecutive\n'
+            exit 86
+        fi
+        if [[ "${FAKE_CPU_STALL:-0}" == 1 ]]; then
+            printf '1,1,2026-07-16T10:00:01+09:00,2,50.000,70.000,20.000,0.5,1024,0,\n'
+            while :; do
+                :
+            done
+        fi
+        printf '1,1,2026-07-16T10:00:01+09:00,2,50.000,70.000,20.000,0.5,1024,0,\n'
+        printf '2,%s,2026-07-16T10:01:20+09:00,2,60.000,80.000,30.000,1.0,900,0,\n' "${window}"
         ;;
     cpu-stop)
         token="${args[action_index + 2]}"
@@ -210,6 +220,13 @@ while [[ \$# -gt 0 ]]; do
     shift
 done
 [[ -n "\${summary}" ]]
+printf '%s\n' "\${summary}" >> "\${FAKE_K6_LOG}"
+if [[ "\${FAKE_K6_HOLD:-0}" == 1 ]]; then
+    trap 'touch "\${FAKE_K6_SIGNAL_FILE}"; exit 130' INT TERM
+    while :; do
+        :
+    done
+fi
 if [[ "\${FAKE_K6_SKIP_BASELINE:-0}" == 1 && "\${summary}" == *baseline-1* ]]; then
     exit 2
 fi
@@ -219,7 +236,8 @@ case "\${summary}" in
 esac
 dropped="\${FAKE_K6_DROPPED:-0}"
 hot_duration="\${HOT_DURATION%s}"
-iterations=\$((HOT_ARRIVAL_RATE * hot_duration + 1 - dropped))
+hot_time_unit="\${HOT_TIME_UNIT%s}"
+iterations=\$(((HOT_ARRIVAL_RATE * hot_duration + hot_time_unit - 1) / hot_time_unit + 1 - dropped))
 invalid="\${FAKE_K6_INVALID_ROUTE:-}"
 "${REAL_JQ}" -n \
     --argjson duration "\${duration}" \
@@ -263,13 +281,15 @@ run_harness() {
     local output_dir="$1" state_file="$2" toggle_log="$3" ssh_log="$4"
     local guard_state="${state_file}.guard" lock_file="${state_file}.remote-lock"
     local event_log="${state_file}.events" root_count="${state_file}.root-count"
+    local k6_log="${state_file}.k6" k6_signal="${state_file}.k6-signal"
     shift 4
     printf 'optimized\n' > "${state_file}"
     printf 'inactive\n' > "${guard_state}"
     : > "${toggle_log}"
     : > "${ssh_log}"
     : > "${event_log}"
-    rm -f -- "${root_count}"
+    : > "${k6_log}"
+    rm -f -- "${root_count}" "${k6_signal}"
     FAKE_STATE_FILE="${state_file}" \
     FAKE_TOGGLE_LOG="${toggle_log}" \
     FAKE_SSH_LOG="${ssh_log}" \
@@ -277,6 +297,8 @@ run_harness() {
     FAKE_REMOTE_LOCK_FILE="${lock_file}" \
     FAKE_GUARD_STATE_FILE="${guard_state}" \
     FAKE_ROOT_COUNT_FILE="${root_count}" \
+    FAKE_K6_LOG="${k6_log}" \
+    FAKE_K6_SIGNAL_FILE="${k6_signal}" \
     G7_AB_TOGGLE_SCRIPT="${FAKE_BIN}/toggle" \
     G7_AB_SSH_BIN="${FAKE_BIN}/ssh" \
     G7_AB_CURL_BIN="${FAKE_BIN}/curl" \
@@ -286,6 +308,7 @@ run_harness() {
         --repeats 1 \
         --hot-vus 1 \
         --hot-rate 1 \
+        --hot-time-unit 5 \
         --hot-duration 5 \
         --measurement-window 80 \
         --idle-timeout 15 \
@@ -313,7 +336,10 @@ assert_released "${SUCCESS_STATE}"
 "${REAL_JQ}" -e '
     .metadata.complete == true
     and .metadata.final_state == "optimized"
-    and .metadata.hot_arrival_rate_per_second == 1
+    and .metadata.hot_vus == 1
+    and .metadata.hot_arrival_rate_per_second == 0.2
+    and .metadata.hot_time_unit_seconds == 5
+    and .metadata.expected_hot_iterations_per_run == 1
     and .metadata.cpu_measurement_window_seconds == 80
     and .metadata.process_cpu_basis == "percentage of total host CPU capacity"
     and (.routes | length == 24)
@@ -331,6 +357,14 @@ grep -q -- '--board-slug freebd' "${SUCCESS_TOGGLE_LOG}" || fail 'A/B board slug
 grep -q 'ab-lock-acquire.*g7-performance-toggle.lock.d' "${SUCCESS_SSH_LOG}" || fail 'global lock was not acquired'
 grep -q 'ab-lock-release.*g7-performance-toggle.lock.d' "${SUCCESS_SSH_LOG}" || fail 'global lock was not owner-released'
 grep -q 'mysql-guard-restore' "${SUCCESS_SSH_LOG}" || fail 'MySQL timeout was not restored'
+grep -q -- '-o ConnectTimeout=10' "${SUCCESS_SSH_LOG}" || fail 'SSH ConnectTimeout option was not injected'
+off_line="$(grep -n 'toggle off ' "${SUCCESS_STATE}.events" | head -1 | cut -d: -f1)"
+first_guard_line="$(grep -n 'ssh mysql-guard-install' "${SUCCESS_STATE}.events" | head -1 | cut -d: -f1)"
+first_restore_line="$(grep -n 'ssh mysql-guard-restore' "${SUCCESS_STATE}.events" | head -1 | cut -d: -f1)"
+first_on_line="$(grep -n 'toggle on ' "${SUCCESS_STATE}.events" | head -1 | cut -d: -f1)"
+[[ "${off_line}" -lt "${first_guard_line}" && "${first_guard_line}" -lt "${first_restore_line}" \
+    && "${first_restore_line}" -lt "${first_on_line}" ]] \
+    || fail 'SELECT cap overlapped the OFF/ON transition'
 
 FAILURE_DIR="${WORK_DIR}/failure"
 FAILURE_STATE="${WORK_DIR}/failure-state"
@@ -358,9 +392,10 @@ FAKE_GUARD_MALFORMED=1 run_harness \
 preflight_exit=$?
 set -e
 [[ "${preflight_exit}" != 0 ]] || fail 'malformed guard response unexpectedly succeeded'
-[[ "$(<"${PREFLIGHT_STATE}")" == optimized ]] || fail 'pre-mutation failure changed state'
+[[ "$(<"${PREFLIGHT_STATE}")" == optimized ]] || fail 'phase-guard failure did not restore optimized state'
 assert_released "${PREFLIGHT_STATE}"
-! grep -Eq '^(on|off) ' "${PREFLIGHT_TOGGLE_LOG}" || fail 'pre-mutation failure invoked a tuning mutation'
+grep -q '^off ' "${PREFLIGHT_TOGGLE_LOG}" || fail 'phase guard was unexpectedly installed before OFF'
+grep -q '^on ' "${PREFLIGHT_TOGGLE_LOG}" || fail 'phase-guard failure did not perform final ON recovery'
 grep -q 'mysql-guard-restore' "${PREFLIGHT_SSH_LOG}" || fail 'durable MySQL guard snapshot was not restored'
 
 INCOMPLETE_DIR="${WORK_DIR}/incomplete"
@@ -370,13 +405,16 @@ INCOMPLETE_SSH_LOG="${WORK_DIR}/incomplete-ssh.log"
 set +e
 FAKE_K6_SKIP_BASELINE=1 run_harness \
     "${INCOMPLETE_DIR}" "${INCOMPLETE_STATE}" "${INCOMPLETE_TOGGLE_LOG}" "${INCOMPLETE_SSH_LOG}" \
-    >/dev/null 2>&1
+    --repeats 3 >/dev/null 2>&1
 incomplete_exit=$?
 set -e
 [[ "${incomplete_exit}" != 0 ]] || fail 'incomplete phase unexpectedly succeeded'
 [[ "$(<"${INCOMPLETE_STATE}")" == optimized ]] || fail 'incomplete phase did not finish optimized'
 assert_released "${INCOMPLETE_STATE}"
 [[ ! -e "${INCOMPLETE_DIR}/comparison.json" ]] || fail 'incomplete phase produced a misleading comparison report'
+[[ "$(wc -l < "${INCOMPLETE_STATE}.k6" | tr -d ' ')" == 1 ]] \
+    || fail 'baseline failure did not stop additional repeats'
+! grep -q 'optimized-' "${INCOMPLETE_STATE}.k6" || fail 'optimized load ran after baseline failure'
 
 STALE_DIR="${WORK_DIR}/stale"
 STALE_STATE="${WORK_DIR}/stale-state"
@@ -402,12 +440,9 @@ FAKE_ON_FAIL_WHILE_GUARD=1 run_harness \
     >/dev/null 2>&1
 cap_exit=$?
 set -e
-[[ "${cap_exit}" != 0 ]] || fail 'cap-blocked main transition unexpectedly completed the benchmark'
-[[ "$(<"${CAP_STATE}")" == optimized ]] || fail 'ON was not retried after cap restoration'
+[[ "${cap_exit}" == 0 ]] || fail 'a tuning transition overlapped the temporary SELECT cap'
+[[ "$(<"${CAP_STATE}")" == optimized ]] || fail 'cap-scoped benchmark did not finish optimized'
 assert_released "${CAP_STATE}"
-restore_line="$(grep -n 'ssh mysql-guard-restore' "${CAP_STATE}.events" | tail -1 | cut -d: -f1)"
-last_on_line="$(grep -n 'toggle on ' "${CAP_STATE}.events" | tail -1 | cut -d: -f1)"
-[[ "${restore_line}" -lt "${last_on_line}" ]] || fail 'final ON retry did not occur after cap restoration'
 
 DROPPED_DIR="${WORK_DIR}/dropped"
 DROPPED_STATE="${WORK_DIR}/dropped-state"
@@ -421,10 +456,8 @@ dropped_exit=$?
 set -e
 [[ "${dropped_exit}" != 0 ]] || fail 'dropped fixed-arrival iterations were accepted'
 assert_released "${DROPPED_STATE}"
-"${REAL_JQ}" -e '
-    ([.cpu[].schedule_valid] | all(. == false))
-    and ([.routes[].baseline.p95_ms, .routes[].optimized.p95_ms, .routes[].p95_change_pct] | all(. == null))
-' "${DROPPED_DIR}/comparison.json" >/dev/null || fail 'dropped iterations were interpreted as valid timings'
+[[ ! -e "${DROPPED_DIR}/comparison.json" ]] || fail 'baseline schedule failure produced a comparison report'
+! grep -q 'optimized-' "${DROPPED_STATE}.k6" || fail 'optimized load ran after baseline schedule failure'
 
 INVALID_DIR="${WORK_DIR}/invalid"
 INVALID_STATE="${WORK_DIR}/invalid-state"
@@ -438,14 +471,42 @@ invalid_exit=$?
 set -e
 [[ "${invalid_exit}" != 0 ]] || fail 'semantic route failure was accepted'
 assert_released "${INVALID_STATE}"
-"${REAL_JQ}" -e '
-    .routes[] | select(.key == "board_list_p2")
-    | .baseline.valid == false
-      and .optimized.valid == false
-      and .baseline.p95_ms == null
-      and .optimized.p95_ms == null
-      and .p95_change_pct == null
-' "${INVALID_DIR}/comparison.json" >/dev/null || fail 'invalid semantic durations were reported as timings'
+[[ ! -e "${INVALID_DIR}/comparison.json" ]] || fail 'baseline semantic failure produced a comparison report'
+! grep -q 'optimized-' "${INVALID_STATE}.k6" || fail 'optimized load ran after baseline semantic failure'
+
+FAIL_FAST_DIR="${WORK_DIR}/fail-fast"
+FAIL_FAST_STATE="${WORK_DIR}/fail-fast-state"
+FAIL_FAST_TOGGLE_LOG="${WORK_DIR}/fail-fast-toggle.log"
+FAIL_FAST_SSH_LOG="${WORK_DIR}/fail-fast-ssh.log"
+set +e
+FAKE_CPU_FAIL_FAST=1 FAKE_K6_HOLD=1 run_harness \
+    "${FAIL_FAST_DIR}" "${FAIL_FAST_STATE}" "${FAIL_FAST_TOGGLE_LOG}" "${FAIL_FAST_SSH_LOG}" \
+    >/dev/null 2>&1
+fail_fast_exit=$?
+set -e
+[[ "${fail_fast_exit}" != 0 ]] || fail 'capacity fail-fast unexpectedly succeeded'
+[[ "$(<"${FAIL_FAST_STATE}")" == optimized ]] || fail 'capacity fail-fast did not perform final ON'
+assert_released "${FAIL_FAST_STATE}"
+[[ -e "${FAIL_FAST_STATE}.k6-signal" ]] || fail 'capacity fail-fast did not interrupt background k6'
+[[ ! -e "${FAIL_FAST_DIR}/comparison.json" ]] || fail 'capacity fail-fast produced a comparison report'
+! grep -q 'optimized-' "${FAIL_FAST_STATE}.k6" || fail 'optimized load ran after capacity fail-fast'
+
+STALL_DIR="${WORK_DIR}/sampler-stall"
+STALL_STATE="${WORK_DIR}/sampler-stall-state"
+STALL_TOGGLE_LOG="${WORK_DIR}/sampler-stall-toggle.log"
+STALL_SSH_LOG="${WORK_DIR}/sampler-stall-ssh.log"
+set +e
+FAKE_CPU_STALL=1 FAKE_K6_HOLD=1 run_harness \
+    "${STALL_DIR}" "${STALL_STATE}" "${STALL_TOGGLE_LOG}" "${STALL_SSH_LOG}" \
+    >/dev/null 2>&1
+stall_exit=$?
+set -e
+[[ "${stall_exit}" != 0 ]] || fail 'stalled CPU sampler unexpectedly succeeded'
+[[ "$(<"${STALL_STATE}")" == optimized ]] || fail 'sampler stall did not perform final ON'
+assert_released "${STALL_STATE}"
+[[ -e "${STALL_STATE}.k6-signal" ]] || fail 'sampler stall did not interrupt background k6'
+[[ ! -e "${STALL_DIR}/comparison.json" ]] || fail 'sampler stall produced a comparison report'
+! grep -q 'optimized-' "${STALL_STATE}.k6" || fail 'optimized load ran after sampler stall'
 
 LIVE_RETRY_DIR="${WORK_DIR}/live-retry"
 LIVE_RETRY_STATE="${WORK_DIR}/live-retry-state"

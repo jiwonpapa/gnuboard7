@@ -24,6 +24,9 @@ OPTIMIZED_REF="${G7_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
 SMOKE_BOARD_SLUG="${G7_PERF_BOARD_SLUG:-freebd}"
 DRAIN_TIMEOUT="${G7_PERF_DRAIN_TIMEOUT:-930}"
+SSH_CONNECT_TIMEOUT_SECONDS="${G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
+SSH_SERVER_ALIVE_INTERVAL_SECONDS="${G7_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-15}"
+SSH_SERVER_ALIVE_COUNT_MAX="${G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-3}"
 SSH_BIN="${G7_PERF_SSH_BIN:-ssh}"
 SCP_BIN="${G7_PERF_SCP_BIN:-scp}"
 BOARD_SCRIPT="${G7_PERF_BOARD_SCRIPT:-${SCRIPT_DIR}/board-performance-toggle.sh}"
@@ -72,6 +75,12 @@ Options:
   --board-slug SLUG Public board used by transition smoke. Default: freebd.
   --drain-timeout SEC
                     Maximum worker drain time. Default: 930.
+  --ssh-connect-timeout SEC
+                    SSH connection timeout. Default: 10.
+  --ssh-alive-interval SEC
+                    SSH keepalive interval. Default: 15.
+  --ssh-alive-count N
+                    Missed keepalives before disconnect. Default: 3.
   -h, --help        Show this help.
 
 Examples:
@@ -103,6 +112,9 @@ while [[ $# -gt 0 ]]; do
         --base-url) shift; BASE_URL="${1:-}" ;;
         --board-slug) shift; SMOKE_BOARD_SLUG="${1:-}" ;;
         --drain-timeout) shift; DRAIN_TIMEOUT="${1:-}" ;;
+        --ssh-connect-timeout) shift; SSH_CONNECT_TIMEOUT_SECONDS="${1:-}" ;;
+        --ssh-alive-interval) shift; SSH_SERVER_ALIVE_INTERVAL_SECONDS="${1:-}" ;;
+        --ssh-alive-count) shift; SSH_SERVER_ALIVE_COUNT_MAX="${1:-}" ;;
         --parent-lock-token) shift; PARENT_LOCK_TOKEN="${1:-}" ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
@@ -129,6 +141,16 @@ esac
     || fail 'restore-original drops indexes and requires --yes'
 [[ "${DRAIN_TIMEOUT}" =~ ^[0-9]+$ && "${DRAIN_TIMEOUT}" -ge 30 && "${DRAIN_TIMEOUT}" -le 3600 ]] \
     || fail '--drain-timeout must be between 30 and 3600 seconds'
+[[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ \
+    && "${SSH_CONNECT_TIMEOUT_SECONDS}" -ge 1 && "${SSH_CONNECT_TIMEOUT_SECONDS}" -le 60 ]] \
+    || fail '--ssh-connect-timeout must be between 1 and 60 seconds'
+[[ "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" =~ ^[0-9]+$ \
+    && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -ge 5 \
+    && "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}" -le 300 ]] \
+    || fail '--ssh-alive-interval must be between 5 and 300 seconds'
+[[ "${SSH_SERVER_ALIVE_COUNT_MAX}" =~ ^[0-9]+$ \
+    && "${SSH_SERVER_ALIVE_COUNT_MAX}" -ge 1 && "${SSH_SERVER_ALIVE_COUNT_MAX}" -le 10 ]] \
+    || fail '--ssh-alive-count must be between 1 and 10'
 [[ "${SMOKE_BOARD_SLUG}" =~ ^[A-Za-z0-9_-]+$ ]] \
     || fail '--board-slug contains unsupported characters'
 [[ -z "${PARENT_LOCK_TOKEN}" || "${PARENT_LOCK_TOKEN}" =~ ^g7-[A-Za-z0-9_-]+$ ]] \
@@ -138,6 +160,12 @@ esac
 for command in "${SSH_BIN}" "${SCP_BIN}" git tar shasum; do
     command -v "${command}" >/dev/null 2>&1 || fail "required command not found: ${command}"
 done
+SSH_OPTIONS=(
+    -o BatchMode=yes
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
+    -o "ServerAliveInterval=${SSH_SERVER_ALIVE_INTERVAL_SECONDS}"
+    -o "ServerAliveCountMax=${SSH_SERVER_ALIVE_COUNT_MAX}"
+)
 [[ -x "${BOARD_SCRIPT}" ]] || fail "board harness is not executable: ${BOARD_SCRIPT}"
 [[ -x "${ECOMMERCE_SCRIPT}" ]] || fail "ecommerce harness is not executable: ${ECOMMERCE_SCRIPT}"
 
@@ -176,7 +204,7 @@ release_remote_lock() {
         LOCK_ACQUIRED=0
         return 0
     fi
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" <<'REMOTE' >/dev/null
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" <<'REMOTE' >/dev/null
 set -euo pipefail
 token="$1"
 lock_dir=/var/lock/g7-performance-toggle.lock.d
@@ -192,7 +220,7 @@ emergency_rebuild() {
     [[ "${MUTATION_STARTED}" == 1 && "${FINALIZED}" == 0 ]] || return 0
     if [[ "${SOURCE_MUTATION_STARTED}" == 0 && "${PRESERVE_FAIL_CLOSED}" == 0 ]]; then
         log 'transition stopped before source/schema mutation; restoring only the captured runtime state'
-        if ! "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+        if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
             "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${LOCK_TOKEN}" <<'REMOTE' >/dev/null
 set -Eeuo pipefail
 app_root="$1"; app_user="$2"; php_bin="$3"; token="$4"
@@ -299,7 +327,7 @@ REMOTE
         fi
     else
         log 'transition failed after mutation; keeping the application in maintenance mode'
-        if ! "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+        if ! "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
             "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${LOCK_TOKEN}" <<'REMOTE' >/dev/null
 set -Eeuo pipefail
 app_root="$1"; app_user="$2"; php_bin="$3"; token="$4"
@@ -344,7 +372,7 @@ cleanup() {
     trap - EXIT INT TERM
     set +e
     emergency_rebuild || result=1
-    "${SSH_BIN}" "${REMOTE_HOST}" rm -f -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" rm -f -- \
         "${REMOTE_COMMON_ARCHIVE}" "${REMOTE_BOARD_ARCHIVE}" \
         "${REMOTE_ECOMMERCE_ARCHIVE}" >/dev/null 2>&1 || true
     release_remote_lock || result=1
@@ -356,7 +384,7 @@ trap cleanup EXIT INT TERM
 acquire_remote_lock() {
     if [[ -n "${PARENT_LOCK_TOKEN}" ]]; then
         LOCK_TOKEN="${PARENT_LOCK_TOKEN}"
-        "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" <<'REMOTE'
+        "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" <<'REMOTE'
 set -euo pipefail
 token="$1"
 lock_dir=/var/lock/g7-performance-toggle.lock.d
@@ -373,7 +401,7 @@ REMOTE
         LOCK_ACQUIRED=1
         return
     fi
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" "${ACTION}" "${SCOPE}" <<'REMOTE'
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- "${LOCK_TOKEN}" "${ACTION}" "${SCOPE}" <<'REMOTE'
 set -euo pipefail
 token="$1"; action="$2"; scope="$3"
 lock_dir=/var/lock/g7-performance-toggle.lock.d
@@ -441,12 +469,12 @@ upload_common_archive() {
     REMOTE_COMMON_ARCHIVE="/tmp/g7-common-performance-${variant}-$$.tar.gz"
     REMOTE_COMMON_VARIANT="${variant}"
     log "uploading ${variant} common source snapshot"
-    "${SCP_BIN}" -q "${archive}" "${REMOTE_HOST}:${REMOTE_COMMON_ARCHIVE}"
+    "${SCP_BIN}" "${SSH_OPTIONS[@]}" -q "${archive}" "${REMOTE_HOST}:${REMOTE_COMMON_ARCHIVE}"
 }
 
 run_common() {
     local action="$1"
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${action}" "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" \
         "${REMOTE_COMMON_ARCHIVE}" "${LOCK_TOKEN}" <<'REMOTE'
 set -euo pipefail
@@ -609,6 +637,9 @@ legacy_options() {
         --baseline "${BASELINE_REF}"
         --optimized-ref "${OPTIMIZED_REF}"
         --base-url "${BASE_URL}"
+        --ssh-connect-timeout "${SSH_CONNECT_TIMEOUT_SECONDS}"
+        --ssh-alive-interval "${SSH_SERVER_ALIVE_INTERVAL_SECONDS}"
+        --ssh-alive-count "${SSH_SERVER_ALIVE_COUNT_MAX}"
         --defer-runtime
         --lock-token "${LOCK_TOKEN}"
         --no-smoke
@@ -645,7 +676,7 @@ prepare_component_archives() {
         REMOTE_BOARD_ARCHIVE="/tmp/g7-board-performance-prepared-${LOCK_TOKEN}.tar.gz"
         REMOTE_BOARD_VARIANT=optimized
         [[ "${ACTION}" != restore-original ]] || REMOTE_BOARD_VARIANT=baseline
-        "${SCP_BIN}" -q "${board_archive}" "${REMOTE_HOST}:${REMOTE_BOARD_ARCHIVE}"
+        "${SCP_BIN}" "${SSH_OPTIONS[@]}" -q "${board_archive}" "${REMOTE_HOST}:${REMOTE_BOARD_ARCHIVE}"
     fi
 
     legacy_options
@@ -657,12 +688,12 @@ prepare_component_archives() {
         REMOTE_ECOMMERCE_VARIANT=optimized
         [[ "${ACTION}" != off && "${ACTION}" != restore-original ]] \
             || REMOTE_ECOMMERCE_VARIANT=baseline
-        "${SCP_BIN}" -q "${ecommerce_archive}" "${REMOTE_HOST}:${REMOTE_ECOMMERCE_ARCHIVE}"
+        "${SCP_BIN}" "${SSH_OPTIONS[@]}" -q "${ecommerce_archive}" "${REMOTE_HOST}:${REMOTE_ECOMMERCE_ARCHIVE}"
     fi
 }
 
 verify_remote_archives() {
-    "${SSH_BIN}" "${REMOTE_HOST}" bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" bash -s -- \
         "${REMOTE_COMMON_ARCHIVE}" "${REMOTE_COMMON_VARIANT}" \
         "${REMOTE_BOARD_ARCHIVE}" "${REMOTE_BOARD_VARIANT}" \
         "${REMOTE_ECOMMERCE_ARCHIVE}" "${REMOTE_ECOMMERCE_VARIANT}" <<'REMOTE'
@@ -689,7 +720,7 @@ REMOTE
 }
 
 preflight_transition_snapshot() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${LOCK_TOKEN}" "${RECOVER_FAIL_CLOSED}" <<'REMOTE'
 set -euo pipefail
 app_root="$1"; token="$2"; recover="$3"
@@ -737,7 +768,7 @@ REMOTE
 }
 
 quiesce_runtime() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${LOCK_TOKEN}" \
         "${DRAIN_TIMEOUT}" "${REMOTE_DB_NAME}" "${REMOTE_DB_PREFIX}" \
         "${RECOVER_FAIL_CLOSED}" <<'REMOTE'
@@ -958,7 +989,7 @@ REMOTE
 }
 
 prepare_restore() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${LOCK_TOKEN}" \
         "${DO_COMMON}" "${DO_BOARD}" "${DO_ECOMMERCE}" <<'REMOTE'
 set -euo pipefail
@@ -988,7 +1019,7 @@ REMOTE
 
 remove_shared_config_for_full_restore() {
     [[ "${SCOPE}" == all ]] || return 0
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- "${REMOTE_ROOT}" "${LOCK_TOKEN}" <<'REMOTE'
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- "${REMOTE_ROOT}" "${LOCK_TOKEN}" <<'REMOTE'
 set -euo pipefail
 app_root="$1"; token="$2"; lock_dir=/var/lock/g7-performance-toggle.lock.d
 [[ "$(<"${lock_dir}/owner")" == "${token}" ]]
@@ -997,7 +1028,7 @@ REMOTE
 }
 
 finalize_runtime() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${LOCK_TOKEN}" \
         "${ACTION}" "${SCOPE}" <<'REMOTE'
 set -euo pipefail
@@ -1033,7 +1064,7 @@ REMOTE
 
 release_maintenance_and_smoke() {
     local smoke="$1"
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${REMOTE_PHP_BIN}" "${LOCK_TOKEN}" \
         "${ACTION}" "${SCOPE}" "${BASE_URL}" "${smoke}" \
         "${DO_COMMON}" "${DO_BOARD}" "${DO_ECOMMERCE}" \
@@ -1125,7 +1156,7 @@ REMOTE
 }
 
 complete_transition() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${REMOTE_APP_USER}" "${LOCK_TOKEN}" \
         "${ACTION}" "${SCOPE}" <<'REMOTE'
 set -euo pipefail
@@ -1159,7 +1190,7 @@ REMOTE
 }
 
 remove_transition_snapshot() {
-    "${SSH_BIN}" "${REMOTE_HOST}" sudo bash -s -- \
+    "${SSH_BIN}" "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" sudo bash -s -- \
         "${REMOTE_ROOT}" "${LOCK_TOKEN}" <<'REMOTE'
 set -euo pipefail
 app_root="$1"; token="$2"

@@ -10,8 +10,9 @@ const boardSearch = __ENV.BOARD_SEARCH || '887161';
 const globalSearch = __ENV.GLOBAL_SEARCH || boardSearch;
 const shopSearch = __ENV.SHOP_SEARCH || '러닝화';
 const deepPage = Number.parseInt(__ENV.DEEP_PAGE || '59999', 10);
-const hotVus = Number.parseInt(__ENV.HOT_VUS || '10', 10);
+const hotVus = Number.parseInt(__ENV.HOT_VUS || '1', 10);
 const hotArrivalRate = Number.parseInt(__ENV.HOT_ARRIVAL_RATE || '1', 10);
+const hotTimeUnit = __ENV.HOT_TIME_UNIT || '5s';
 const hotDuration = __ENV.HOT_DURATION || '30s';
 const riskyStart = __ENV.RISKY_START || '41s';
 
@@ -112,7 +113,7 @@ export const options = {
       executor: 'constant-arrival-rate',
       exec: 'runHotRoutes',
       rate: hotArrivalRate,
-      timeUnit: '1s',
+      timeUnit: hotTimeUnit,
       duration: hotDuration,
       preAllocatedVUs: hotVus,
       maxVUs: hotVus,
