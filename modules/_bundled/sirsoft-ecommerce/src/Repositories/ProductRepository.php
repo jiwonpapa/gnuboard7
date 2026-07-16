@@ -610,10 +610,11 @@ class ProductRepository implements ProductRepositoryInterface
     public function searchByKeyword(string $keyword, string $orderBy = 'created_at', string $direction = 'desc', ?int $categoryId = null, int $offset = 0, int $limit = 10): array
     {
         $page = (int) floor($offset / $limit) + 1;
+        $optimized = $this->usesOptimizedDatabaseSearch();
 
         $query = $this->model->newQuery();
 
-        if ($this->usesOptimizedDatabaseSearch()) {
+        if ($optimized) {
             // DB 내부 ID UNION을 outer paginator에 연결해 PHP로 전체 ID를 전송하지 않는다.
             $this->applyOptimizedKeywordConstraint(
                 $query,
@@ -628,12 +629,36 @@ class ProductRepository implements ProductRepositoryInterface
             $query->whereIn('id', $matchedIds ?: [0]);
         }
 
-        $paginator = $query
+        $query
             ->where('display_status', ProductDisplayStatus::VISIBLE->value)
+            ->when($categoryId !== null, fn ($q) => $q->whereHas('categories', fn ($c) => $c->where('ecommerce_categories.id', $categoryId)));
+
+        if ($optimized) {
+            // 통합검색이 같은 FULLTEXT/UNION을 COUNT와 목록으로 두 번 실행하지 않도록
+            // 현재 페이지 행과 정확한 total을 window 함수 한 번으로 함께 가져온다.
+            $items = (clone $query)
+                ->select('ecommerce_products.*')
+                ->selectRaw('COUNT(*) OVER() AS _g7_search_total')
+                ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
+                ->withCount('visibleReviews as review_count')
+                ->withAvg('visibleReviews as rating_avg', 'rating')
+                ->orderBy($orderBy, $direction)
+                ->forPage($page, $limit)
+                ->get();
+
+            $total = $items->isNotEmpty()
+                ? (int) $items->first()->getAttribute('_g7_search_total')
+                : ($page === 1 ? 0 : (clone $query)->count());
+
+            $items->each(fn (Product $product) => $product->offsetUnset('_g7_search_total'));
+
+            return ['total' => $total, 'items' => $items];
+        }
+
+        $paginator = $query
             ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
             ->withCount('visibleReviews as review_count')
             ->withAvg('visibleReviews as rating_avg', 'rating')
-            ->when($categoryId !== null, fn ($q) => $q->whereHas('categories', fn ($c) => $c->where('ecommerce_categories.id', $categoryId)))
             ->orderBy($orderBy, $direction)
             ->paginate($limit, ['*'], 'page', $page);
 

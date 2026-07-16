@@ -10,6 +10,7 @@ use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Board\Models\Board;
@@ -661,9 +662,30 @@ class PostSampleSeeder extends Seeder
             }
         }
 
+        $this->syncAuthorTermsForBoard($board->id);
         $this->command->info("  - {$board->slug}: 게시글 {$postCount}개, 답변글 {$replyPostCount}개, 댓글 {$commentCount}개 생성");
 
         return ['posts' => $postCount, 'replies' => $replyPostCount, 'comments' => $commentCount];
+    }
+
+    /**
+     * Repository를 우회하는 샘플 일괄 입력의 작성자 검색 사전을 보강합니다.
+     */
+    private function syncAuthorTermsForBoard(int $boardId): void
+    {
+        if (! Schema::hasTable('board_post_author_terms')) {
+            return;
+        }
+
+        DB::table('board_post_author_terms')->insertOrIgnoreUsing(
+            ['board_id', 'author_name'],
+            DB::table('board_posts')
+                ->select(['board_id', 'author_name'])
+                ->where('board_id', $boardId)
+                ->whereNotNull('author_name')
+                ->where('author_name', '<>', '')
+                ->distinct()
+        );
     }
 
     /**

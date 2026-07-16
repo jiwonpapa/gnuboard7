@@ -30,6 +30,9 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
  */
 class PostService
 {
+    /** Repository가 검색 total을 전달할 때만 쓰는 내부 모델 속성 */
+    private const INTERNAL_TOTAL_ATTRIBUTE = '__g7_normal_posts_total';
+
     /**
      * PostService 생성자
      *
@@ -114,10 +117,45 @@ class PostService
      * @param  array  $filters  필터 조건
      * @param  bool  $withTrashed  삭제된 게시글 포함 여부
      * @param  string  $context  컨텍스트 (admin 또는 user)
+     * @param  Paginator|null  $posts  목록 쿼리가 이미 계산한 검색 total을 소비할 페이지네이터
      * @return int 일반 게시글 수
      */
-    public function getCachedNormalPostCount(string $slug, int $boardId, array $filters = [], bool $withTrashed = false, string $context = 'admin'): int
-    {
+    public function getCachedNormalPostCount(
+        string $slug,
+        int $boardId,
+        array $filters = [],
+        bool $withTrashed = false,
+        string $context = 'admin',
+        ?Paginator $posts = null
+    ): int {
+        if (
+            $posts !== null
+            && config('benchmark.board_list_variant', 'optimized') === 'optimized'
+            && ! empty($filters['search'])
+        ) {
+            $embeddedTotal = null;
+            foreach ($posts->items() as $post) {
+                if (! $post instanceof Post) {
+                    continue;
+                }
+
+                $value = $post->getAttribute(self::INTERNAL_TOTAL_ATTRIBUTE);
+                if ($embeddedTotal === null && $value !== null) {
+                    $embeddedTotal = (int) $value;
+                }
+                $post->offsetUnset(self::INTERNAL_TOTAL_ATTRIBUTE);
+            }
+
+            if ($embeddedTotal !== null) {
+                return $embeddedTotal;
+            }
+
+            // 첫 검색 페이지가 비어 있으면 total=0이 확정됩니다.
+            if ($posts->currentPage() === 1 && $posts->items() === []) {
+                return 0;
+            }
+        }
+
         // 필터가 적용된 목록과 삭제글 포함 목록은 조건별 단기 캐시 사용
         $hasActiveFilters = ! empty($filters['search'])
             || (isset($filters['category']) && $filters['category'] !== '' && $filters['category'] !== null)

@@ -28,6 +28,9 @@ COMMON_PATHS=(
     "modules/_bundled/sirsoft-board/module.json"
     "modules/_bundled/sirsoft-board/package-lock.json"
     "modules/_bundled/sirsoft-board/package.json"
+    "modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php"
+    "modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php"
+    "modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php"
     "modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php"
     "modules/_bundled/sirsoft-board/src/Services/PostService.php"
 )
@@ -35,6 +38,7 @@ COMMON_PATHS=(
 OPTIMIZED_ONLY_PATHS=(
     "config/benchmark.php"
     "modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php"
+    "modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php"
 )
 
 usage() {
@@ -277,13 +281,17 @@ ORCHESTRATION_TOKEN="${11}"
 
 ENV_KEY="G7_BOARD_PERFORMANCE_VARIANT"
 POSTS_TABLE="${DB_PREFIX}board_posts"
+AUTHOR_TERMS_TABLE="${DB_PREFIX}board_post_author_terms"
 MODULES_TABLE="${DB_PREFIX}modules"
 MIGRATIONS_TABLE="${DB_PREFIX}migrations"
-MIGRATION_NAME="2026_07_15_000001_add_high_volume_list_indexes"
+LIST_MIGRATION_NAME="2026_07_15_000001_add_high_volume_list_indexes"
+AUTHOR_TERMS_MIGRATION_NAME="2026_07_16_000001_create_board_post_author_terms_table"
 INDEX_ID="idx_board_posts_list_id"
 INDEX_VIEWS="idx_board_posts_list_views"
-MIGRATION_PATH="modules/_bundled/sirsoft-board/database/migrations/${MIGRATION_NAME}.php"
-ACTIVE_MIGRATION_PATH="modules/sirsoft-board/database/migrations/${MIGRATION_NAME}.php"
+LIST_MIGRATION_PATH="modules/_bundled/sirsoft-board/database/migrations/${LIST_MIGRATION_NAME}.php"
+ACTIVE_LIST_MIGRATION_PATH="modules/sirsoft-board/database/migrations/${LIST_MIGRATION_NAME}.php"
+AUTHOR_TERMS_MIGRATION_PATH="modules/_bundled/sirsoft-board/database/migrations/${AUTHOR_TERMS_MIGRATION_NAME}.php"
+ACTIVE_AUTHOR_TERMS_MIGRATION_PATH="modules/sirsoft-board/database/migrations/${AUTHOR_TERMS_MIGRATION_NAME}.php"
 STATE_DIR="${APP_ROOT}/storage/app/benchmark"
 STATE_FILE="${STATE_DIR}/board-performance-variant.env"
 SOURCE_MANIFEST="${STATE_DIR}/board-performance-source.sha256"
@@ -323,22 +331,74 @@ mysql_scalar() {
     mysql --batch --skip-column-names -e "$1"
 }
 
+mysql_ddl() {
+    mysql "${DB_NAME}" -e \
+        "SET SESSION lock_wait_timeout=15; SET SESSION innodb_lock_wait_timeout=15; $1"
+}
+
+table_index_exists() {
+    local table_name="$1" index_name="$2"
+    mysql_scalar "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}' AND INDEX_NAME='${index_name}'"
+}
+
+table_index_visibility() {
+    local table_name="$1" index_name="$2"
+    mysql_scalar "SELECT COALESCE(MIN(IS_VISIBLE), 'MISSING') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}' AND INDEX_NAME='${index_name}'"
+}
+
 index_exists() {
-    local index_name="$1"
-    mysql_scalar "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND INDEX_NAME='${index_name}'"
+    table_index_exists "${POSTS_TABLE}" "$1"
 }
 
 index_visibility() {
-    local index_name="$1"
-    mysql_scalar "SELECT COALESCE(MIN(IS_VISIBLE), 'MISSING') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND INDEX_NAME='${index_name}'"
+    table_index_visibility "${POSTS_TABLE}" "$1"
+}
+
+table_exists() {
+    local table_name="$1"
+    mysql_scalar "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${table_name}'"
+}
+
+author_terms_structure() {
+    local column_shape primary_columns source_collation terms_collation engine
+    if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "0" ]]; then
+        printf 'missing'
+        return
+    fi
+
+    engine="$(mysql_scalar "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}'")"
+    column_shape="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND ((COLUMN_NAME='board_id' AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO') OR (COLUMN_NAME='author_name' AND DATA_TYPE='varchar' AND CHARACTER_MAXIMUM_LENGTH=50 AND IS_NULLABLE='NO'))")"
+    primary_columns="$(mysql_scalar "SELECT COALESCE(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), '') FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND INDEX_NAME='PRIMARY'")"
+    source_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
+    terms_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${AUTHOR_TERMS_TABLE}' AND COLUMN_NAME='author_name'")"
+
+    if [[ "${engine}" == "InnoDB" && "${column_shape}" == "2" \
+        && "${primary_columns}" == "board_id,author_name" \
+        && -n "${source_collation}" && "${terms_collation}" == "${source_collation}" ]]; then
+        printf 'verified'
+    else
+        printf 'drifted'
+    fi
+}
+
+author_terms_status() {
+    local structure missing
+    structure="$(author_terms_structure)"
+    if [[ "${structure}" != "verified" ]]; then
+        printf '%s|unknown' "${structure}"
+        return
+    fi
+
+    missing="$(mysql_scalar "SELECT EXISTS(SELECT 1 FROM ${DB_NAME}.${POSTS_TABLE} AS p LEFT JOIN ${DB_NAME}.${AUTHOR_TERMS_TABLE} AS t ON t.board_id=p.board_id AND t.author_name=p.author_name WHERE p.author_name IS NOT NULL AND p.author_name <> '' AND t.board_id IS NULL LIMIT 1)")"
+    printf '%s|%s' "${structure}" "${missing}"
 }
 
 ensure_no_long_queries() {
     local count
-    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB='${DB_NAME}' AND COMMAND <> 'Sleep' AND ID <> CONNECTION_ID() AND TIME >= 5")"
+    count="$(mysql_scalar "SELECT COUNT(*) FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.DB='${DB_NAME}' AND p.ID <> CONNECTION_ID() AND ((p.COMMAND <> 'Sleep' AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL)")"
     if [[ "${count}" != "0" ]]; then
-        mysql --table -e "SELECT ID,USER,COMMAND,TIME,STATE,LEFT(INFO,180) AS INFO FROM information_schema.PROCESSLIST WHERE DB='${DB_NAME}' AND COMMAND <> 'Sleep' AND ID <> CONNECTION_ID() AND TIME >= 5 ORDER BY TIME DESC"
-        printf 'long-running DB work detected; toggle aborted before DDL\n' >&2
+        mysql --table -e "SELECT p.ID,p.USER,p.COMMAND,p.TIME,p.STATE,t.trx_started,LEFT(p.INFO,180) AS INFO FROM information_schema.PROCESSLIST AS p LEFT JOIN information_schema.INNODB_TRX AS t ON t.trx_mysql_thread_id=p.ID WHERE p.DB='${DB_NAME}' AND p.ID <> CONNECTION_ID() AND ((p.COMMAND <> 'Sleep' AND p.TIME >= 5) OR t.trx_mysql_thread_id IS NOT NULL) ORDER BY p.TIME DESC"
+        printf 'long-running query or open transaction detected; toggle aborted before DDL\n' >&2
         exit 1
     fi
 }
@@ -408,9 +468,13 @@ modules/_bundled/sirsoft-board/composer.json
 modules/_bundled/sirsoft-board/module.json
 modules/_bundled/sirsoft-board/package-lock.json
 modules/_bundled/sirsoft-board/package.json
+modules/_bundled/sirsoft-board/database/seeders/Sample/PostSampleSeeder.php
+modules/_bundled/sirsoft-board/src/Http/Controllers/Admin/PostController.php
+modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php
 modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php
 modules/_bundled/sirsoft-board/src/Services/PostService.php
 modules/_bundled/sirsoft-board/database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
+modules/_bundled/sirsoft-board/database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
 PATHS
 
     while read -r path; do
@@ -422,9 +486,13 @@ composer.json
 module.json
 package-lock.json
 package.json
+database/seeders/Sample/PostSampleSeeder.php
+src/Http/Controllers/Admin/PostController.php
+src/Http/Controllers/User/PostController.php
 src/Repositories/PostRepository.php
 src/Services/PostService.php
 database/migrations/2026_07_15_000001_add_high_volume_list_indexes.php
+database/migrations/2026_07_16_000001_create_board_post_author_terms_table.php
 PATHS
 
     if [[ ${#existing_paths[@]} -gt 0 ]]; then
@@ -469,8 +537,10 @@ apply_source_archive() {
     done < "${manifest}"
 
     if [[ "${variant}" == "baseline" ]]; then
-        rm -f "${APP_ROOT}/${MIGRATION_PATH}"
-        rm -f "${APP_ROOT}/${ACTIVE_MIGRATION_PATH}"
+        rm -f "${APP_ROOT}/${LIST_MIGRATION_PATH}"
+        rm -f "${APP_ROOT}/${ACTIVE_LIST_MIGRATION_PATH}"
+        rm -f "${APP_ROOT}/${AUTHOR_TERMS_MIGRATION_PATH}"
+        rm -f "${APP_ROOT}/${ACTIVE_AUTHOR_TERMS_MIGRATION_PATH}"
     fi
 
     mkdir -p "${STATE_DIR}"
@@ -483,7 +553,7 @@ apply_source_archive() {
 }
 
 ensure_indexes_visible() {
-    local id_exists views_exists
+    local id_exists views_exists author_charset author_collation author_status
     local -a add_clauses visibility_clauses
     ensure_no_long_queries
     id_exists="$(index_exists "${INDEX_ID}")"
@@ -500,8 +570,34 @@ ensure_indexes_visible() {
         local joined
         joined="$(IFS=', '; printf '%s' "${add_clauses[*]}")"
         log "creating missing indexes; this may take time"
-        mysql "${DB_NAME}" -e "ALTER TABLE ${POSTS_TABLE} ${joined}"
+        mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${joined}"
     fi
+
+    ensure_no_long_queries
+    if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "0" ]]; then
+        author_charset="$(mysql_scalar "SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
+        author_collation="$(mysql_scalar "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${POSTS_TABLE}' AND COLUMN_NAME='author_name'")"
+        [[ "${author_charset}" =~ ^[A-Za-z0-9_]+$ ]] \
+            || { printf 'invalid board author charset\n' >&2; exit 1; }
+        [[ "${author_collation}" =~ ^[A-Za-z0-9_]+$ ]] \
+            || { printf 'invalid board author collation\n' >&2; exit 1; }
+        log "creating compact board author search dictionary"
+        mysql_ddl \
+            "CREATE TABLE ${AUTHOR_TERMS_TABLE} (board_id BIGINT UNSIGNED NOT NULL, author_name VARCHAR(50) NOT NULL, PRIMARY KEY (board_id, author_name)) ENGINE=InnoDB DEFAULT CHARACTER SET ${author_charset} COLLATE ${author_collation}"
+    fi
+    [[ "$(author_terms_structure)" == "verified" ]] \
+        || { printf 'board author search dictionary schema drifted\n' >&2; exit 1; }
+    author_status="$(author_terms_status)"
+    if [[ "${author_status}" != "verified|0" ]]; then
+        log "synchronizing board author search dictionary"
+        mysql "${DB_NAME}" -e \
+            "INSERT IGNORE INTO ${AUTHOR_TERMS_TABLE} (board_id, author_name) SELECT DISTINCT board_id, author_name FROM ${POSTS_TABLE} WHERE author_name IS NOT NULL AND author_name <> ''"
+        author_status="$(author_terms_status)"
+    else
+        log "board author search dictionary already current"
+    fi
+    [[ "${author_status}" == "verified|0" ]] \
+        || { printf 'board author search dictionary is incomplete\n' >&2; exit 1; }
 
     visibility_clauses=()
     [[ "$(index_visibility "${INDEX_ID}")" == "NO" ]] && visibility_clauses+=("ALTER INDEX ${INDEX_ID} VISIBLE")
@@ -509,14 +605,27 @@ ensure_indexes_visible() {
     if [[ ${#visibility_clauses[@]} -gt 0 ]]; then
         local visibility_joined
         visibility_joined="$(IFS=', '; printf '%s' "${visibility_clauses[*]}")"
-        mysql "${DB_NAME}" -e "ALTER TABLE ${POSTS_TABLE} ${visibility_joined}"
+        mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${visibility_joined}"
     fi
 
-    if [[ "$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${MIGRATIONS_TABLE} WHERE migration='${MIGRATION_NAME}'")" == "0" ]]; then
-        local next_batch
-        next_batch="$(mysql_scalar "SELECT COALESCE(MAX(batch), 0) + 1 FROM ${DB_NAME}.${MIGRATIONS_TABLE}")"
-        mysql "${DB_NAME}" -e "INSERT INTO ${MIGRATIONS_TABLE} (migration, batch) VALUES ('${MIGRATION_NAME}', ${next_batch})"
-    fi
+    ensure_migration_records
+}
+
+ensure_migration_records() {
+    local list_exists author_exists next_batch joined
+    local -a values=()
+    list_exists="$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${MIGRATIONS_TABLE} WHERE migration='${LIST_MIGRATION_NAME}'")"
+    author_exists="$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${MIGRATIONS_TABLE} WHERE migration='${AUTHOR_TERMS_MIGRATION_NAME}'")"
+    [[ "${list_exists}" == "0" || "${author_exists}" == "0" ]] || return 0
+
+    next_batch="$(mysql_scalar "SELECT COALESCE(MAX(batch), 0) + 1 FROM ${DB_NAME}.${MIGRATIONS_TABLE}")"
+    [[ "${list_exists}" != "0" ]] \
+        || values+=("('${LIST_MIGRATION_NAME}', ${next_batch})")
+    [[ "${author_exists}" != "0" ]] \
+        || values+=("('${AUTHOR_TERMS_MIGRATION_NAME}', ${next_batch})")
+    joined="$(IFS=', '; printf '%s' "${values[*]}")"
+    mysql "${DB_NAME}" -e \
+        "INSERT INTO ${MIGRATIONS_TABLE} (migration, batch) VALUES ${joined}"
 }
 
 hide_indexes() {
@@ -528,7 +637,7 @@ hide_indexes() {
     if [[ ${#clauses[@]} -gt 0 ]]; then
         local joined
         joined="$(IFS=', '; printf '%s' "${clauses[*]}")"
-        mysql "${DB_NAME}" -e "ALTER TABLE ${POSTS_TABLE} ${joined}"
+        mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${joined}"
     fi
 }
 
@@ -541,9 +650,13 @@ drop_indexes_and_migration() {
     if [[ ${#clauses[@]} -gt 0 ]]; then
         local joined
         joined="$(IFS=', '; printf '%s' "${clauses[*]}")"
-        mysql "${DB_NAME}" -e "ALTER TABLE ${POSTS_TABLE} ${joined}"
+        mysql_ddl "ALTER TABLE ${POSTS_TABLE} ${joined}"
     fi
-    mysql "${DB_NAME}" -e "DELETE FROM ${MIGRATIONS_TABLE} WHERE migration='${MIGRATION_NAME}'"
+    if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" != "0" ]]; then
+        mysql_ddl "DROP TABLE ${AUTHOR_TERMS_TABLE}"
+    fi
+    mysql "${DB_NAME}" -e \
+        "DELETE FROM ${MIGRATIONS_TABLE} WHERE migration IN ('${LIST_MIGRATION_NAME}', '${AUTHOR_TERMS_MIGRATION_NAME}')"
 }
 
 source_integrity() {
@@ -589,14 +702,20 @@ effective_variant() {
 }
 
 schema_variant() {
-    local id_visibility views_visibility
+    local author_status="${1:-}" id_visibility views_visibility author_structure author_missing
     id_visibility="$(index_visibility "${INDEX_ID}")"
     views_visibility="$(index_visibility "${INDEX_VIEWS}")"
-    if [[ "${id_visibility}" == "MISSING" && "${views_visibility}" == "MISSING" ]]; then
+    [[ -n "${author_status}" ]] || author_status="$(author_terms_status)"
+    author_structure="${author_status%%|*}"
+    author_missing="${author_status#*|}"
+    if [[ "${id_visibility}" == "MISSING" && "${views_visibility}" == "MISSING" \
+        && "${author_structure}" == "missing" ]]; then
         printf 'original'
-    elif [[ "${id_visibility}" == "YES" && "${views_visibility}" == "YES" ]]; then
+    elif [[ "${id_visibility}" == "YES" && "${views_visibility}" == "YES" \
+        && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
         printf 'optimized'
-    elif [[ "${id_visibility}" == "NO" && "${views_visibility}" == "NO" ]]; then
+    elif [[ "${id_visibility}" == "NO" && "${views_visibility}" == "NO" \
+        && "${author_structure}" == "verified" && "${author_missing}" == "0" ]]; then
         printf 'baseline-invisible'
     else
         printf 'mixed'
@@ -628,6 +747,7 @@ smoke() {
 
 show_status() {
     local module_row module_db_version module_source_version module_version_sync active_sync path
+    local author_status author_structure author_missing schema
     module_row="$(mysql_scalar "SELECT CONCAT(identifier, ' ', version, ' ', status) FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
     module_db_version="$(mysql_scalar "SELECT version FROM ${DB_NAME}.${MODULES_TABLE} WHERE identifier='sirsoft-board'")"
     module_source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -638,17 +758,34 @@ show_status() {
     active_sync="verified"
     for path in \
         CHANGELOG.md composer.json module.json package-lock.json package.json \
+        database/seeders/Sample/PostSampleSeeder.php \
+        src/Http/Controllers/Admin/PostController.php \
+        src/Http/Controllers/User/PostController.php \
         src/Repositories/PostRepository.php src/Services/PostService.php; do
         cmp -s "${APP_ROOT}/modules/_bundled/sirsoft-board/${path}" \
             "${APP_ROOT}/modules/sirsoft-board/${path}" || active_sync="drifted"
     done
 
+    author_status="$(author_terms_status)"
+    author_structure="${author_status%%|*}"
+    author_missing="${author_status#*|}"
+    schema="$(schema_variant "${author_status}")"
+
     printf 'source=%s\n' "$(source_variant)"
     printf 'source_integrity=%s\n' "$(source_integrity)"
     printf 'runtime=%s\n' "$(effective_variant)"
-    printf 'schema=%s\n' "$(schema_variant)"
+    printf 'schema=%s\n' "${schema}"
     printf 'index.%s=%s\n' "${INDEX_ID}" "$(index_visibility "${INDEX_ID}")"
     printf 'index.%s=%s\n' "${INDEX_VIEWS}" "$(index_visibility "${INDEX_VIEWS}")"
+    if [[ "$(table_exists "${AUTHOR_TERMS_TABLE}")" == "1" ]]; then
+        printf 'table.board_post_author_terms=present\n'
+        printf 'author_terms.schema=%s\n' "${author_structure}"
+        printf 'author_terms.missing=%s\n' "${author_missing}"
+        printf 'author_terms.rows=%s\n' \
+            "$(mysql_scalar "SELECT COUNT(*) FROM ${DB_NAME}.${AUTHOR_TERMS_TABLE}")"
+    else
+        printf 'table.board_post_author_terms=missing\n'
+    fi
     printf 'active_module_sync=%s\n' "${active_sync}"
     printf 'module_version_sync=%s\n' "${module_version_sync}"
     printf 'module=%s\n' "${module_row}"

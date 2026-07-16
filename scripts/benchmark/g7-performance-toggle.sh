@@ -167,6 +167,13 @@ sudo -u "${app_user}" "${php_bin}" artisan config:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan route:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan view:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan hooks:cache >/dev/null
+artisan_commands="$(sudo -u "${app_user}" "${php_bin}" artisan list --raw)"
+if grep -q '^queue:restart[[:space:]]' <<<"${artisan_commands}"; then
+    sudo -u "${app_user}" "${php_bin}" artisan queue:restart >/dev/null
+fi
+if grep -q '^reverb:restart[[:space:]]' <<<"${artisan_commands}"; then
+    sudo -u "${app_user}" "${php_bin}" artisan reverb:restart >/dev/null
+fi
 systemctl reload php8.5-fpm
 REMOTE
 }
@@ -505,6 +512,13 @@ sudo -u "${app_user}" "${php_bin}" artisan config:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan route:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan view:cache >/dev/null
 sudo -u "${app_user}" "${php_bin}" artisan hooks:cache >/dev/null
+artisan_commands="$(sudo -u "${app_user}" "${php_bin}" artisan list --raw)"
+if grep -q '^queue:restart[[:space:]]' <<<"${artisan_commands}"; then
+    sudo -u "${app_user}" "${php_bin}" artisan queue:restart >/dev/null
+fi
+if grep -q '^reverb:restart[[:space:]]' <<<"${artisan_commands}"; then
+    sudo -u "${app_user}" "${php_bin}" artisan reverb:restart >/dev/null
+fi
 systemctl reload php8.5-fpm
 
 state_dir="${app_root}/storage/app/benchmark"

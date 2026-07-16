@@ -4,6 +4,12 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [Unreleased]
+
+### Changed
+
+- 게시판 검색의 전체 건수와 현재 페이지를 한 번에 조회하고, 작성자 부분검색은 게시판별 고유 작성자 사전을 사용하도록 개선했습니다.
+
 ## [1.1.1] - 2026-07-15
 
 ### Added

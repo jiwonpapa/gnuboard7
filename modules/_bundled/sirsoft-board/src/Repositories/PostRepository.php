@@ -9,9 +9,11 @@ use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Modules\Sirsoft\Board\Enums\PostStatus;
 use Modules\Sirsoft\Board\Enums\TriggerType;
 use Modules\Sirsoft\Board\Models\Attachment;
@@ -31,6 +33,12 @@ class PostRepository implements PostRepositoryInterface
 {
     use ChecksBoardPermission;
     use FormatsBoardDate;
+
+    /** 검색 window total을 Controller까지 전달하는 내부 모델 속성 */
+    private const INTERNAL_TOTAL_ATTRIBUTE = '__g7_normal_posts_total';
+
+    /** 작성자 검색 사전 존재 여부를 요청 안에서 재사용합니다. */
+    private ?bool $authorTermsAvailable = null;
 
     /** 첫 페이지에 함께 노출할 공지글 최대 수 */
     private const MAX_NOTICE_POSTS = 10;
@@ -211,9 +219,28 @@ class PostRepository implements PostRepositoryInterface
             });
         }
 
-        $authorNameIds = (clone $query)
-            ->select('board_posts.id as matched_post_id')
-            ->where('author_name', 'like', "%{$likeKeyword}%");
+        if ($this->hasAuthorTermsTable()) {
+            // 게시글 전체가 아니라 게시판별 고유 작성자명만 부분검색하고,
+            // 매칭된 이름을 기존 (board_id, author_name) 인덱스로 equality join한다.
+            // 컬럼을 별칭 처리해 원본 쿼리의 board_id 조건과 모호해지지 않게 한다.
+            $matchingAuthorTerms = DB::table('board_post_author_terms')
+                ->select([
+                    'board_id as matched_board_id',
+                    'author_name as matched_author_name',
+                ])
+                ->where('author_name', 'like', "%{$likeKeyword}%");
+            $authorNameIds = (clone $query)
+                ->select('board_posts.id as matched_post_id')
+                ->joinSub($matchingAuthorTerms, 'board_search_author_terms', function ($join) {
+                    $join->on('board_search_author_terms.matched_board_id', '=', 'board_posts.board_id')
+                        ->on('board_search_author_terms.matched_author_name', '=', 'board_posts.author_name');
+                });
+        } else {
+            // 마이그레이션 전·정확 복구 상태에서는 기존 의미를 보존합니다.
+            $authorNameIds = (clone $query)
+                ->select('board_posts.id as matched_post_id')
+                ->where('author_name', 'like', "%{$likeKeyword}%");
+        }
 
         // 회원을 먼저 선별한 뒤 board_posts.user_id 인덱스로 연결해
         // 대량 게시글 각 행의 상관 EXISTS 반복을 피한다.
@@ -231,15 +258,15 @@ class PostRepository implements PostRepositoryInterface
         ]);
         $tablePrefix = DB::getTablePrefix();
         $matchingUsersAlias = $tablePrefix.'board_search_users';
-        $eligiblePostsAlias = $tablePrefix.'board_search_user_posts';
+        $eligiblePostsTable = $tablePrefix.'board_posts';
 
         // MySQL JOIN_ORDER 힌트로 작은 users 매칭 집합이 드라이브하게 한다.
         // 힌트를 지원하지 않는 DBMS에서는 주석으로 무시되어 일반 JOIN으로 동작한다.
         $userIds = DB::query()
             ->fromSub($matchingUserIds, 'board_search_users')
             ->selectRaw(
-                "/*+ JOIN_ORDER({$matchingUsersAlias}, {$eligiblePostsAlias}) */ "
-                ."{$eligiblePostsAlias}.matched_post_id"
+                "/*+ JOIN_ORDER({$matchingUsersAlias}, {$eligiblePostsTable}) */ "
+                ."{$tablePrefix}board_search_user_posts.matched_post_id"
             )
             ->joinSub(
                 query: $eligibleUserPosts,
@@ -267,6 +294,44 @@ class PostRepository implements PostRepositoryInterface
     }
 
     /**
+     * 작성자 검색 사전 테이블이 준비됐는지 확인합니다.
+     */
+    private function hasAuthorTermsTable(): bool
+    {
+        return $this->authorTermsAvailable ??= Schema::hasTable('board_post_author_terms');
+    }
+
+    /**
+     * 새 작성자명을 단조 증가형 검색 사전에 보강합니다.
+     */
+    private function rememberAuthorTerm(Post $post): void
+    {
+        if (
+            ! $this->hasAuthorTermsTable()
+            || empty($post->board_id)
+            || empty($post->author_name)
+        ) {
+            return;
+        }
+
+        try {
+            DB::table('board_post_author_terms')->insertOrIgnore([
+                'board_id' => $post->board_id,
+                'author_name' => $post->author_name,
+            ]);
+        } catch (QueryException $exception) {
+            $missingTable = $exception->getCode() === '42S02'
+                || str_contains(strtolower($exception->getMessage()), 'no such table');
+            if (! $missingTable) {
+                throw $exception;
+            }
+
+            // 정확 복구 중 테이블이 먼저 제거된 짧은 전환 경합만 허용합니다.
+            $this->authorTermsAvailable = false;
+        }
+    }
+
+    /**
      * 게시글을 생성합니다.
      *
      * @param  string  $slug  게시판 슬러그
@@ -275,7 +340,10 @@ class PostRepository implements PostRepositoryInterface
      */
     public function create(string $slug, array $data): Post
     {
-        return Post::create($data);
+        $post = Post::create($data);
+        $this->rememberAuthorTerm($post);
+
+        return $post;
     }
 
     /**
@@ -319,6 +387,7 @@ class PostRepository implements PostRepositoryInterface
     {
         $post = $this->findOrFail($slug, $id);
         $post->update($data);
+        $this->rememberAuthorTerm($post);
 
         return $post->fresh();
     }
@@ -935,13 +1004,26 @@ class PostRepository implements PostRepositoryInterface
         $parentQuery->orderBy($orderBy, $orderDirection)->orderBy('id', $orderDirection);
 
         // 페이지네이션 여부에 따라 분기
+        $embeddedTotal = null;
         if ($perPage !== null) {
             if ($optimized) {
                 // 깊은 페이지에서 LONGTEXT와 관계 컬럼까지 정렬하지 않도록 ID만 먼저 페이지네이션한다.
                 // 실제 목록 행은 선택된 ID(최대 perPage건)에 한해 별도 조회한다.
-                $paginator = $parentQuery->simplePaginate($perPage, ['id'], 'page', $currentPage);
+                $idColumns = ['id'];
+                $hasSearch = ! empty($filters['search']);
+                if ($hasSearch) {
+                    $idColumns[] = DB::raw('COUNT(*) OVER() AS '.self::INTERNAL_TOTAL_ATTRIBUTE);
+                }
+
+                $paginator = $parentQuery->simplePaginate($perPage, $idColumns, 'page', $currentPage);
+                $pageIndex = $paginator->getCollection();
+                if ($hasSearch) {
+                    $embeddedTotal = $pageIndex->isNotEmpty()
+                        ? (int) $pageIndex->first()->getAttribute(self::INTERNAL_TOTAL_ATTRIBUTE)
+                        : ($currentPage === 1 ? 0 : null);
+                }
                 $parents = $this->hydrateListPostsByIds(
-                    $paginator->getCollection()->pluck('id')->all(),
+                    $pageIndex->pluck('id')->all(),
                     $boardId,
                     $columns,
                     $withTrashed,
@@ -1043,6 +1125,12 @@ class PostRepository implements PostRepositoryInterface
 
         // 5단계: 공지글을 맨 앞에 추가
         $finalItems = $notices->merge($mergedItems);
+
+        // 검색 total은 첫 쿼리의 window 결과를 첫 응답 모델에 숨김 속성으로 전달한다.
+        // 페이지 1의 검색 결과가 0건이어도 공지가 있으면 공지 모델에 0을 전달할 수 있다.
+        if ($embeddedTotal !== null && $finalItems->isNotEmpty()) {
+            $finalItems->first()->setAttribute(self::INTERNAL_TOTAL_ATTRIBUTE, $embeddedTotal);
+        }
 
         // 페이지네이션 사용 시 paginator에 최종 컬렉션 설정
         if ($paginator !== null) {
@@ -1408,6 +1496,23 @@ class PostRepository implements PostRepositoryInterface
     public function searchByKeyword(string $slug, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array
     {
         $query = $this->buildPublicSearchQuery($slug, $keyword);
+
+        if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
+            $items = (clone $query)
+                ->select('board_posts.*')
+                ->selectRaw('COUNT(*) OVER() AS '.self::INTERNAL_TOTAL_ATTRIBUTE)
+                ->with('user')
+                ->orderBy($orderBy, $direction)
+                ->limit($limit)
+                ->get();
+            $total = $this->extractWindowTotal($items);
+
+            return [
+                'total' => $total,
+                'items' => $items,
+            ];
+        }
+
         $total = $query->count();
 
         $items = $query->with('user')
@@ -1447,6 +1552,29 @@ class PostRepository implements PostRepositoryInterface
     public function searchAcrossBoards(array $boardIds, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $perPage = 10, int $page = 1): array
     {
         $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword);
+
+        if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
+            $items = (clone $query)
+                ->select('board_posts.*')
+                ->selectRaw('COUNT(*) OVER() AS '.self::INTERNAL_TOTAL_ATTRIBUTE)
+                ->with('user', 'board')
+                ->orderBy($orderBy, $direction)
+                ->forPage($page, $perPage)
+                ->get();
+            $total = $this->extractWindowTotal($items);
+
+            // OFFSET이 전체 결과 뒤를 가리킬 때만 total 확인용 COUNT를 보충한다.
+            // 첫 페이지 0건은 전체 0건이 확정되므로 추가 쿼리가 필요 없다.
+            if ($items->isEmpty() && $page > 1) {
+                $total = (clone $query)->count();
+            }
+
+            return [
+                'total' => $total,
+                'items' => $items,
+            ];
+        }
+
         $total = $query->count();
 
         $items = (clone $query)
@@ -1459,6 +1587,24 @@ class PostRepository implements PostRepositoryInterface
             'total' => $total,
             'items' => $items,
         ];
+    }
+
+    /**
+     * Window count 값을 읽은 뒤 검색 결과 모델의 내부 속성을 제거합니다.
+     *
+     * @param  Collection<int, Post>  $items
+     */
+    private function extractWindowTotal(Collection $items): int
+    {
+        $total = $items->isEmpty()
+            ? 0
+            : (int) $items->first()->getAttribute(self::INTERNAL_TOTAL_ATTRIBUTE);
+
+        foreach ($items as $item) {
+            $item->offsetUnset(self::INTERNAL_TOTAL_ATTRIBUTE);
+        }
+
+        return $total;
     }
 
     /**

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Modules\Sirsoft\Board\Enums\PostStatus;
 use Modules\Sirsoft\Board\Exceptions\BoardNotFoundException;
 use Modules\Sirsoft\Board\Exceptions\PostNotFoundException;
 use Modules\Sirsoft\Board\Http\Requests\BlindPostRequest;
@@ -75,8 +76,15 @@ class PostController extends AdminBaseController
             // 게시글 목록 조회 (simplePaginate — COUNT 쿼리 제거)
             $posts = $this->postService->getPosts($slug, $listParams['filters'], $listParams['perPage'], withTrashed: $canViewDeleted, board: $board);
 
-            // 일반 게시글 총 건수는 캐시에서 조회 (simplePaginate는 total 미제공)
-            $totalNormalPosts = $this->postService->getCachedNormalPostCount($slug, $board->id, $listParams['filters'], $canViewDeleted, 'admin');
+            // 검색 목록 쿼리가 함께 계산한 total을 우선 사용하고 깊은 빈 페이지만 COUNT합니다.
+            $totalNormalPosts = $this->postService->getCachedNormalPostCount(
+                $slug,
+                $board->id,
+                $listParams['filters'],
+                $canViewDeleted,
+                'admin',
+                $posts
+            );
 
             // PostCollection 구성
             $collection = new PostCollection($posts);
@@ -487,7 +495,7 @@ class PostController extends AdminBaseController
             // 관리자 라우트에서는 항상 사용자 권한 정보 포함
             $request->merge(['include_user_abilities' => true]);
 
-            $boardResource = new \Modules\Sirsoft\Board\Http\Resources\BoardResource($board);
+            $boardResource = new BoardResource($board);
             $boardData = $boardResource->toArray($request);
 
             // 게시글 폼에서는 게시판 이름을 로컬라이즈된 문자열로 반환
@@ -523,10 +531,10 @@ class PostController extends AdminBaseController
                 $parentPost = $this->postService->getPost($slug, $parentId);
 
                 // 블라인드 또는 삭제된 게시글에는 답글 작성 불가
-                if ($parentPost->status === \Modules\Sirsoft\Board\Enums\PostStatus::Blinded) {
+                if ($parentPost->status === PostStatus::Blinded) {
                     return $this->error('sirsoft-board::validation.post.parent_id.blinded', 403);
                 }
-                if ($parentPost->status === \Modules\Sirsoft\Board\Enums\PostStatus::Deleted) {
+                if ($parentPost->status === PostStatus::Deleted) {
                     return $this->error('sirsoft-board::validation.post.parent_id.deleted', 403);
                 }
 

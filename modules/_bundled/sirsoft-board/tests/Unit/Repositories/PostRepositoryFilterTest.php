@@ -6,6 +6,7 @@ namespace Modules\Sirsoft\Board\Tests\Unit\Repositories;
 require_once __DIR__.'/../../ModuleTestCase.php';
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Modules\Sirsoft\Board\Repositories\PostRepository;
 use Modules\Sirsoft\Board\Tests\BoardTestCase;
 
@@ -187,6 +188,11 @@ class PostRepositoryFilterTest extends BoardTestCase
             'author_name' => 'needlexyzauthor',
         ]);
         $this->createTestPost(['author_name' => '다른작성자']);
+        $this->assertTrue(Schema::hasTable('board_post_author_terms'));
+        DB::table('board_post_author_terms')->insertOrIgnore([
+            ['board_id' => $this->board->id, 'author_name' => 'needlexyzauthor'],
+            ['board_id' => $this->board->id, 'author_name' => '다른작성자'],
+        ]);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -205,8 +211,10 @@ class PostRepositoryFilterTest extends BoardTestCase
 
         $this->assertNotNull($searchSql, 'optimized all 검색은 ID UNION derived table 경로를 사용해야 합니다.');
         $this->assertStringContainsString('board_posts', $searchSql);
+        $this->assertStringContainsString('board_post_author_terms', $searchSql);
         $this->assertStringContainsString('users', $searchSql);
         $this->assertStringContainsString('JOIN_ORDER', $searchSql);
+        $this->assertStringContainsString('board_search_users', $searchSql);
         $this->assertStringNotContainsString('straight join', strtolower($searchSql));
     }
 

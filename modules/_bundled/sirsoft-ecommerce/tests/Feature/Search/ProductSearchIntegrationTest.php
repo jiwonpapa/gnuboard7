@@ -2,8 +2,13 @@
 
 namespace Modules\Sirsoft\Ecommerce\Tests\Feature\Search;
 
+use App\Extension\HookListenerRegistrar;
+use App\Extension\HookManager;
+use App\Extension\ModuleManager;
+use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Ecommerce\Enums\ProductDisplayStatus;
 use Modules\Sirsoft\Ecommerce\Models\Product;
+use Modules\Sirsoft\Ecommerce\Repositories\ProductRepository;
 use Modules\Sirsoft\Ecommerce\Tests\ModuleTestCase;
 
 /**
@@ -46,7 +51,7 @@ class ProductSearchIntegrationTest extends ModuleTestCase
     {
         parent::setUp();
 
-        $module = app(\App\Extension\ModuleManager::class)->getModule('sirsoft-ecommerce');
+        $module = app(ModuleManager::class)->getModule('sirsoft-ecommerce');
         if ($module === null) {
             return;
         }
@@ -57,7 +62,7 @@ class ProductSearchIntegrationTest extends ModuleTestCase
         //   filter 큐에 중복 추가되어 searchProducts 가 한 요청에서 2회 실행되어 두 번째
         //   호출이 첫 번째 결과를 빈 결과로 덮어쓰는 문제 발생.
         // - registrar dedup 캐시도 함께 비워 register() 가 실제 동작하도록 한다.
-        \App\Extension\HookListenerRegistrar::clear();
+        HookListenerRegistrar::clear();
 
         foreach ($module->getHookListeners() as $listenerClass) {
             if (! class_exists($listenerClass)) {
@@ -66,10 +71,10 @@ class ProductSearchIntegrationTest extends ModuleTestCase
             try {
                 $subscribed = $listenerClass::getSubscribedHooks();
                 foreach (array_keys($subscribed) as $hookName) {
-                    \App\Extension\HookManager::clearFilter($hookName);
-                    \App\Extension\HookManager::clearAction($hookName);
+                    HookManager::clearFilter($hookName);
+                    HookManager::clearAction($hookName);
                 }
-                \App\Extension\HookListenerRegistrar::register($listenerClass, 'sirsoft-ecommerce');
+                HookListenerRegistrar::register($listenerClass, 'sirsoft-ecommerce');
             } catch (\Throwable $e) {
                 // skip individual listener failures
             }
@@ -88,7 +93,7 @@ class ProductSearchIntegrationTest extends ModuleTestCase
      */
     protected function flushProductFulltextIndex(): void
     {
-        \Illuminate\Support\Facades\DB::statement('ALTER TABLE g7_ecommerce_products ENGINE=InnoDB');
+        DB::statement('ALTER TABLE g7_ecommerce_products ENGINE=InnoDB');
     }
 
     /**
@@ -156,6 +161,71 @@ class ProductSearchIntegrationTest extends ModuleTestCase
         $response->assertStatus(200);
         $data = $response->json('data');
         $this->assertArrayHasKey('products_count', $data);
+    }
+
+    /**
+     * optimized 통합검색은 상품 total과 현재 페이지를 같은 쿼리에서 계산합니다.
+     */
+    public function test_optimized_all_tab_uses_single_window_search_query(): void
+    {
+        config()->set('benchmark.ecommerce_variant', 'optimized');
+        Product::factory()->count(3)->create([
+            'name' => ['ko' => '단일 검색 상품', 'en' => 'singlepasssearchxyz Product'],
+            'display_status' => ProductDisplayStatus::VISIBLE,
+        ]);
+        $this->flushProductFulltextIndex();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $response = $this->getJson('/api/search?q=singlepasssearchxyz&type=all');
+
+        $productSearchQueries = collect(DB::getQueryLog())
+            ->pluck('query')
+            ->filter(fn (string $sql) => str_contains(strtolower($sql), 'product_search_matches'))
+            ->values();
+        DB::disableQueryLog();
+
+        $response->assertOk();
+        $this->assertSame(3, $response->json('data.products_count'));
+        $this->assertStringNotContainsString('_g7_search_total', $response->getContent());
+        $this->assertCount(1, $productSearchQueries);
+        $this->assertStringContainsString('count(*) over()', strtolower($productSearchQueries->first()));
+    }
+
+    /**
+     * optimized 상품 검색의 깊은 빈 페이지는 total 확인용 COUNT만 보충합니다.
+     */
+    public function test_optimized_product_search_deep_empty_page_uses_count_fallback(): void
+    {
+        config()->set('benchmark.ecommerce_variant', 'optimized');
+        Product::factory()->count(3)->create([
+            'name' => ['ko' => '깊은 검색 상품', 'en' => 'deepsearchxyz Product'],
+            'display_status' => ProductDisplayStatus::VISIBLE,
+        ]);
+        $this->flushProductFulltextIndex();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $result = app(ProductRepository::class)->searchByKeyword(
+            'deepsearchxyz',
+            offset: 990,
+            limit: 10
+        );
+
+        $productSearchQueries = collect(DB::getQueryLog())
+            ->pluck('query')
+            ->filter(fn (string $sql) => str_contains(strtolower($sql), 'product_search_matches'))
+            ->values();
+        DB::disableQueryLog();
+
+        $this->assertSame(3, $result['total']);
+        $this->assertCount(0, $result['items']);
+        $this->assertCount(2, $productSearchQueries);
+        $this->assertTrue($productSearchQueries->contains(
+            fn (string $sql) => str_contains(strtolower($sql), 'count(*) as aggregate')
+        ));
     }
 
     /**
@@ -326,5 +396,4 @@ class ProductSearchIntegrationTest extends ModuleTestCase
         $ids = collect($data['products'] ?? [])->pluck('id')->toArray();
         $this->assertContains($product->id, $ids);
     }
-
 }

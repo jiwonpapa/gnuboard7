@@ -22,7 +22,8 @@ scripts/benchmark/board-performance-toggle.sh on
 - 번들·활성 `sirsoft-board` 동기화
 - `G7_BOARD_PERFORMANCE_VARIANT=optimized`
 - 신규 인덱스가 없으면 생성, invisible이면 visible 전환
-- module DB 버전 1.1.1 반영
+- 작성자 검색 사전이 없으면 생성하고 누락된 고유 작성자 보강
+- optimized ref의 module 버전을 DB에 반영
 - Laravel production 캐시 재생성과 PHP-FPM reload
 - 게시판 첫 페이지 HTTP smoke
 - 최종 상태 출력
@@ -40,7 +41,7 @@ scripts/benchmark/board-performance-toggle.sh off
 - 공지·답글 상한 없는 원본 로직
 - 답글이 없어도 답글 확인 SQL을 실행하는 원본 로직
 - 필터 COUNT 단기 캐시 미사용
-- 신규 인덱스 두 개는 `INVISIBLE`
+- 목록 인덱스 두 개는 `INVISIBLE`; 작은 작성자 검색 사전은 보존하되 baseline 코드에서는 사용하지 않음
 
 이 모드는 빠른 읽기 성능 A/B 비교용이다. invisible index도 INSERT/UPDATE 시 유지되므로 **쓰기 비용과 디스크까지 원본과 같지는 않다**.
 
@@ -57,6 +58,7 @@ scripts/benchmark/board-performance-toggle.sh status
 - `runtime`: 실제 선택된 `optimized` 또는 `baseline`
 - `schema`: 신규 인덱스 visible, invisible, 제거 상태
 - 신규 인덱스별 visibility
+- 작성자 검색 사전의 컬럼·복합 PK·collation·누락 작성자 검증 결과
 - 번들 모듈과 활성 모듈 소스 일치 여부
 - `sirsoft-board` DB 버전과 활성 상태
 - PHP-FPM 상태
@@ -73,12 +75,14 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 - 공식 Git tag `7.0.4`에서 성능 패치 대상 파일 복원
 - 공유 `config/benchmark.php`는 보존하고 게시판 환경값만 제거
 - 신규 migration 파일 제거
-- 신규 인덱스 두 개 실제 삭제
+- 신규 인덱스 두 개와 작성자 검색 사전 테이블 실제 삭제
 - migration 기록 삭제
 - module DB 버전 1.0.2 복원
 - 성능 variant 환경값 제거
 
 이 상태에서 다시 `on`을 실행하면 optimized 소스와 인덱스를 재생성한다. 180만 행 테이블의 인덱스 재생성은 시간이 걸리고 metadata lock을 유발할 수 있으므로 반복 비교에는 `off`를 사용한다.
+
+`restore-original`은 고정된 7.0.4 격리 벤치마크 환경 전용이다. 이후 모듈 기능과 함께 운영 중인 서버의 튜닝 해제에는 소스 계약을 보존하는 `off`만 사용한다.
 
 ## 상태 표
 
@@ -91,7 +95,8 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 ## 안전장치
 
 - 공통·게시판·쇼핑몰 전환이 겹치지 않도록 원격 전역 lock을 사용한다.
-- 5초 이상 실행 중인 DB 작업이 있으면 DDL 전에 중단한다.
+- 5초 이상 실행 중인 DB 작업이나 sleep 상태의 열린 트랜잭션이 있으면 DDL 전에 중단한다.
+- DDL metadata lock 대기는 15초로 제한해 무기한 멈춤을 방지한다.
 - 자동으로 장기 쿼리를 죽이지 않는다.
 - 소스 전환 전 백업을 생성하고 최근 10개만 유지한다.
 - 번들 모듈과 활성 모듈을 함께 교체한다.
@@ -111,6 +116,8 @@ scripts/benchmark/board-performance-toggle.sh restore-original --yes
 
 기본 대상은 `g7devops` SSH alias와 `/home/g7devops/public_html`이다.
 
+인덱스 visible/invisible 전환을 사용하는 운영 하네스는 MySQL 8.0+ 전용이다. MariaDB 지원 설치에서는 애플리케이션 코드는 사용할 수 있지만 이 하네스로 A/B 전환하지 않는다.
+
 ```bash
 G7_BOARD_PERF_HOST=g7devops \
 G7_BOARD_PERF_ROOT=/home/g7devops/public_html \
@@ -129,8 +136,12 @@ scripts/benchmark/board-performance-toggle.sh status
 
 - optimized: ID-only 선조회, 공지 10건, 답글 SQL 생략, 필터 COUNT 재사용
 - optimized 검색: 제목·본문 FULLTEXT, 작성자, 회원 결과를 DB 내부 ID UNION으로 분리
+- 작성자 부분검색: 게시판별 고유 작성자 사전만 LIKE로 검사한 뒤 기존 `(board_id, author_name)` 인덱스로 게시글 연결
+- 목록·전역검색: `COUNT(*) OVER()`로 total과 현재 페이지를 한 번에 조회해 같은 FULLTEXT 반복 실행 제거
 - baseline: 넓은 OFFSET, 단일 OR 검색, 공지 전체, 답글 확인 SQL, 반복 COUNT 쿼리
-- 결과: 75 tests, 143 assertions 통과
+- 기존 목록 분기 회귀 묶음: 75 tests, 143 assertions 통과(2026-07-15)
+- 현재 하네스 mock: PASS, DB 비의존 성능 회귀: 19 tests, 51 assertions 통과
+- 신규 window count·작성자 사전·상품 FULLTEXT 통합 테스트는 MySQL 전용이며 로컬 MySQL 미구동 환경에서는 실행하지 않는다.
 
 권한·활성 모듈·언어팩과 훅 등록 로그는 게시판 축에서 분리되어 통합 하네스의 `common` 축으로 전환한다.
 
@@ -144,3 +155,5 @@ scripts/benchmark/board-performance-toggle.sh status
 | 원본 복구 후 `on` | optimized-capable | optimized | 신규 인덱스 재생성 | 1.1.1 | 성공 |
 
 동일 `freebd` 1,000페이지 요청은 `off`에서 11.594초, `on`에서 0.579초로 측정돼 실제 서버에서도 실행 분기가 바뀌는 것을 확인했다. 최종 서버 상태는 `on`이다.
+
+`board_post_author_terms(board_id, author_name)`는 `(board_id, author_name)` 복합 PK를 가진 단조 증가형 검색 사전이다. ON 전환 시 기존 게시글의 고유 작성자를 `INSERT IGNORE ... SELECT DISTINCT`로 보강하고, 신규 작성자·작성자 변경도 Repository가 `INSERT IGNORE`로 동기화한다. 삭제된 작성자 항목이 남아도 실제 게시글과 equality join하므로 잘못된 결과는 반환하지 않는다.

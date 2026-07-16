@@ -97,8 +97,15 @@ class PostController extends PublicBaseController
                 $post->setRelation('board', $board);
             }
 
-            // 일반 게시글 총 건수는 캐시에서 조회 (simplePaginate는 total 미제공)
-            $totalNormalPosts = $this->postService->getCachedNormalPostCount($slug, $board->id, $listParams['filters'], $withTrashed, 'user');
+            // 검색 목록 쿼리가 함께 계산한 total을 우선 사용하고 깊은 빈 페이지만 COUNT합니다.
+            $totalNormalPosts = $this->postService->getCachedNormalPostCount(
+                $slug,
+                $board->id,
+                $listParams['filters'],
+                $withTrashed,
+                'user',
+                $posts
+            );
 
             // PostCollection 구성
             $collection = new PostCollection($posts);
