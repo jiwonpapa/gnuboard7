@@ -71,6 +71,11 @@ class PostRepositorySearchWindowCountTest extends BoardTestCase
 
         $this->assertCount(3, $rows);
         $this->assertCount(2, $queries);
+        $this->assertStringContainsString('idx_board_posts_list_id', $queries->first());
+        $this->assertTrue(
+            str_contains($queries->first(), 'force index')
+            || str_contains($queries->first(), 'indexed by')
+        );
         $this->assertStringContainsString('order by "board_posts"."id" desc limit 100', $queries->first());
         $this->assertStringContainsString('"board_posts"."id" in (', $queries->last());
         $this->assertStringContainsString('"board_posts"."title" like ?', $queries->last());

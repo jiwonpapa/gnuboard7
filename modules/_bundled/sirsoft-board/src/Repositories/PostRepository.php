@@ -57,6 +57,9 @@ class PostRepository implements PostRepositoryInterface
     /** 메모리 상한을 넘긴 FULLTEXT 키워드의 재시도 억제 시간 */
     private const BROAD_FULLTEXT_CACHE_TTL_SECONDS = 600;
 
+    /** 게시판별 최신 ID 제한 조회에 사용하는 covering index */
+    private const LIST_ID_INDEX = 'idx_board_posts_list_id';
+
     /**
      * PostRepository 생성자
      */
@@ -422,6 +425,7 @@ class PostRepository implements PostRepositoryInterface
     {
         $recentIds = (clone $baseQuery)
             ->reorder()
+            ->forceIndex(self::LIST_ID_INDEX)
             ->orderBy('board_posts.id', 'desc')
             ->limit($this->searchFallbackScanCap())
             ->pluck('board_posts.id')
