@@ -193,13 +193,18 @@ esac
     || fail '--cpu-interval must be between 1 and 10 seconds'
 [[ "${CPU_MAX_SECONDS}" =~ ^[0-9]+$ && "${CPU_MAX_SECONDS}" -ge 60 && "${CPU_MAX_SECONDS}" -le 900 ]] \
     || fail '--cpu-max-seconds must be between 60 and 900 seconds'
+if [[ "${INCLUDE_RISKY}" == 1 ]]; then
+    MINIMUM_MEASUREMENT_WINDOW_SECONDS=$((HOT_DURATION_SECONDS + 75))
+else
+    MINIMUM_MEASUREMENT_WINDOW_SECONDS=$((HOT_DURATION_SECONDS + 5))
+fi
 if [[ -z "${MEASUREMENT_WINDOW_SECONDS}" ]]; then
-    MEASUREMENT_WINDOW_SECONDS=$((HOT_DURATION_SECONDS + 75))
+    MEASUREMENT_WINDOW_SECONDS="${MINIMUM_MEASUREMENT_WINDOW_SECONDS}"
 fi
 [[ "${MEASUREMENT_WINDOW_SECONDS}" =~ ^[0-9]+$ \
-    && "${MEASUREMENT_WINDOW_SECONDS}" -ge $((HOT_DURATION_SECONDS + 75)) \
+    && "${MEASUREMENT_WINDOW_SECONDS}" -ge "${MINIMUM_MEASUREMENT_WINDOW_SECONDS}" \
     && "${MEASUREMENT_WINDOW_SECONDS}" -le 900 ]] \
-    || fail '--measurement-window must be between hot-duration + 75 and 900 seconds'
+    || fail "--measurement-window must be between ${MINIMUM_MEASUREMENT_WINDOW_SECONDS} and 900 seconds"
 [[ "${CPU_MAX_SECONDS}" -ge "${MEASUREMENT_WINDOW_SECONDS}" ]] \
     || fail '--cpu-max-seconds must be at least measurement-window seconds'
 board_requests_per_minute=$(((HOT_ARRIVAL_RATE * 8 * 60 + HOT_TIME_UNIT_SECONDS - 1) / HOT_TIME_UNIT_SECONDS + 2))
