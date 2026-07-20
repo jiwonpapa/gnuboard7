@@ -74,6 +74,34 @@ class PostRepositoryPaginationPerformanceTest extends ModuleTestCase
         $this->assertCount(15, $paginator->getCollection());
     }
 
+    public function test_id_sorted_base_list_forces_board_scoped_covering_index(): void
+    {
+        $this->insertPosts(35);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $this->repository->paginate($this->board->slug, [
+            'page' => 2,
+            'order_by' => 'id',
+            'order_direction' => 'desc',
+        ], 10, board: $this->board);
+
+        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
+        DB::disableQueryLog();
+        $idPageQuery = $queries->first(
+            fn (string $sql) => str_contains($sql, 'offset 10')
+                && preg_match('/select\s+[`"]id[`"]\s+from\s+[`"][^`"]*board_posts[`"]/', $sql) === 1
+        );
+
+        $this->assertNotNull($idPageQuery);
+        $this->assertStringContainsString('idx_board_posts_list_id', $idPageQuery);
+        $this->assertTrue(
+            str_contains($idPageQuery, 'force index')
+            || str_contains($idPageQuery, 'indexed by')
+        );
+    }
+
     public function test_baseline_variant_uses_the_original_wide_offset_and_reply_query(): void
     {
         config()->set('benchmark.board_list_variant', 'baseline');

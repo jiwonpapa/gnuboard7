@@ -1575,6 +1575,19 @@ class PostRepository implements PostRepositoryInterface
             $orderDirection = 'desc'; // 기본값으로 폴백
         }
 
+        // 게시판별 ID 정렬은 MySQL 통계 오차가 크면 PRIMARY 역순 스캔을 선택해
+        // 앞선 게시판을 찾으려고 다른 게시판 수십만 행을 건너뛸 수 있습니다.
+        // 기본 목록 조건에서는 게시판 범위를 먼저 고정하는 전용 인덱스를 강제합니다.
+        if (
+            $optimized
+            && ! $optimizedSearch
+            && ! $withTrashed
+            && $orderBy === 'id'
+            && $this->hasOnlyBaseListFilters($filters)
+        ) {
+            $parentQuery->forceIndex(self::LIST_ID_INDEX);
+        }
+
         // 정렬 적용 (id를 2차 정렬로 추가 — 동일 값 내 순서를 결정론적으로 보장)
         // created_at은 초 단위라 실질적 중복이 드물지만, view_count/title/author_name은 중복이 많음
         $parentQuery->orderBy($orderBy, $orderDirection)->orderBy('id', $orderDirection);
@@ -1980,6 +1993,24 @@ class PostRepository implements PostRepositoryInterface
         });
 
         return $paginator;
+    }
+
+    /**
+     * 게시판·공지·원글·미삭제 기본 조건 외에 선택도가 다른 필터가 없는지 확인합니다.
+     */
+    private function hasOnlyBaseListFilters(array $filters): bool
+    {
+        foreach (['status', 'user_id', 'created_at_from', 'created_at_to'] as $key) {
+            if (! empty($filters[$key])) {
+                return false;
+            }
+        }
+
+        if (isset($filters['category']) && $filters['category'] !== '') {
+            return false;
+        }
+
+        return ! array_key_exists('is_notice', $filters) || $filters['is_notice'] === null;
     }
 
     /**
