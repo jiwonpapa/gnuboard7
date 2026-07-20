@@ -4,6 +4,12 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [Unreleased]
+
+### Changed
+
+- 통합검색에서 Manticore를 선택하면 발행 페이지를 검색 전용 인덱스에서 조회하고, 연결 장애 시 기존 MySQL 검색으로 자동 복귀하도록 개선했습니다.
+
 ## [1.0.1] - 2026-07-08
 
 ### Fixed

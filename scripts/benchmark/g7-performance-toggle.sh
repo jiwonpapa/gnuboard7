@@ -19,7 +19,7 @@ REMOTE_APP_USER="${G7_PERF_APP_USER:-g7devops}"
 REMOTE_PHP_BIN="${G7_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_PERF_DB_PREFIX:-g7_}"
-BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.4}"
+BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
 SMOKE_BOARD_SLUG="${G7_PERF_BOARD_SLUG:-freebd}"
@@ -35,13 +35,17 @@ DISABLE_REMOTE_LOCK="${G7_PERF_DISABLE_REMOTE_LOCK:-0}"
 PARENT_LOCK_TOKEN="${G7_PERF_PARENT_LOCK_TOKEN:-}"
 
 COMMON_PATHS=(
+    "config/scout.php"
     "app/Extension/HookListenerRegistrar.php"
     "app/Http/Middleware/PermissionMiddleware.php"
     "app/Providers/ModuleRouteServiceProvider.php"
     "app/Services/LanguagePack/LanguagePackRegistry.php"
+    "modules/_bundled/sirsoft-page/src/Listeners/SearchPagesListener.php"
+    "modules/_bundled/sirsoft-page/src/Repositories/PageRepository.php"
 )
 COMMON_OPTIMIZED_ONLY_PATHS=(
     "config/benchmark.php"
+    "app/Search/ManticoreIntegratedSearch.php"
 )
 
 usage() {
@@ -68,7 +72,7 @@ Options:
   --php-bin BIN     Remote PHP binary. Default: php.
   --db NAME         Remote database name. Default: g7devops.
   --db-prefix NAME  Remote table prefix. Default: g7_.
-  --baseline REF    Exact official source ref. Default: 7.0.4.
+  --baseline REF    Exact official source ref. Default: 7.0.5.
   --optimized-ref REF
                     Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    Base URL used by smoke requests.
@@ -521,10 +525,14 @@ backup_source() {
     mkdir -p "${dir}"
     for path in \
         config/benchmark.php \
+        config/scout.php \
         app/Extension/HookListenerRegistrar.php \
         app/Http/Middleware/PermissionMiddleware.php \
         app/Providers/ModuleRouteServiceProvider.php \
-        app/Services/LanguagePack/LanguagePackRegistry.php; do
+        app/Services/LanguagePack/LanguagePackRegistry.php \
+        app/Search/ManticoreIntegratedSearch.php \
+        modules/_bundled/sirsoft-page/src/Listeners/SearchPagesListener.php \
+        modules/_bundled/sirsoft-page/src/Repositories/PageRepository.php; do
         [[ ! -e "${APP_ROOT}/${path}" ]] || paths+=("${path}")
     done
     if [[ ${#paths[@]} -gt 0 ]]; then
@@ -536,7 +544,7 @@ backup_source() {
 }
 
 apply_archive() {
-    local expected="$1" stage manifest checksum path source mode
+    local expected="$1" stage manifest checksum path source mode relative active
     [[ -f "${SOURCE_ARCHIVE}" ]] || { printf 'common source archive missing\n' >&2; exit 1; }
     stage="$(mktemp -d)"
     trap 'rm -rf "${stage}"' RETURN
@@ -553,7 +561,18 @@ apply_archive() {
         source="${stage}/${path}"
         mode="$(stat -c '%a' "${source}")"
         install -D -o "${APP_USER}" -g www-data -m "${mode}" "${source}" "${APP_ROOT}/${path}"
+        case "${path}" in
+            modules/_bundled/sirsoft-page/*)
+                relative="${path#modules/_bundled/sirsoft-page/}"
+                active="${APP_ROOT}/modules/sirsoft-page/${relative}"
+                [[ ! -d "${APP_ROOT}/modules/sirsoft-page" ]] \
+                    || install -D -o "${APP_USER}" -g www-data -m "${mode}" "${source}" "${active}"
+                ;;
+        esac
     done < "${manifest}"
+    if [[ "${expected}" == baseline ]]; then
+        rm -f "${APP_ROOT}/app/Search/ManticoreIntegratedSearch.php"
+    fi
     mkdir -p "${STATE_DIR}"
     install -o "${APP_USER}" -g www-data -m 664 "${manifest}" "${SOURCE_MANIFEST}"
     (cd "${APP_ROOT}" && sha256sum -c "${SOURCE_MANIFEST}" >/dev/null)
@@ -568,7 +587,7 @@ source_variant() {
         && grep -q 'benchmark.common_variant' "${APP_ROOT}/app/Services/LanguagePack/LanguagePackRegistry.php"; then
         printf 'optimized-capable'
     else
-        printf 'official-7.0.4'
+        printf 'official-7.0.5'
     fi
 }
 
@@ -1231,7 +1250,7 @@ component_state() {
         common)
             if [[ "${source}" == optimized-capable && "${runtime}" == optimized ]]; then
                 printf 'optimized'
-            elif [[ "${runtime}" == baseline && ( "${source}" == optimized-capable || "${source}" == official-7.0.4 ) ]]; then
+            elif [[ "${runtime}" == baseline && ( "${source}" == optimized-capable || "${source}" == official-7.0.5 ) ]]; then
                 printf 'baseline'
             else
                 printf 'mixed'
@@ -1294,7 +1313,7 @@ component_state() {
                 printf 'optimized'
             elif [[ "${runtime}" == baseline \
                 && ( "${schema}" == baseline-invisible || "${schema}" == original ) \
-                && ( "${source}" == optimized-capable || "${source}" == official-7.0.4 ) ]]; then
+                && ( "${source}" == optimized-capable || "${source}" == official-7.0.5 ) ]]; then
                 printf 'baseline'
             else
                 printf 'mixed'

@@ -4,6 +4,7 @@ namespace Modules\Sirsoft\Ecommerce\Repositories;
 
 use App\Helpers\PermissionHelper;
 use App\Search\Engines\DatabaseFulltextEngine;
+use App\Search\ManticoreIntegratedSearch;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -21,7 +22,8 @@ use Modules\Sirsoft\Ecommerce\Repositories\Contracts\ProductRepositoryInterface;
 class ProductRepository implements ProductRepositoryInterface
 {
     public function __construct(
-        protected Product $model
+        protected Product $model,
+        private readonly ManticoreIntegratedSearch $manticoreSearch,
     ) {}
 
     /**
@@ -609,8 +611,24 @@ class ProductRepository implements ProductRepositoryInterface
      */
     public function searchByKeyword(string $keyword, string $orderBy = 'created_at', string $direction = 'desc', ?int $categoryId = null, int $offset = 0, int $limit = 10): array
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $result = $this->manticoreSearch->searchProducts(
+                $keyword,
+                $orderBy,
+                $direction,
+                $categoryId,
+                $offset,
+                $limit,
+            );
+
+            if ($result !== null) {
+                return $this->manticoreProductResult($result);
+            }
+        }
+
         $page = (int) floor($offset / $limit) + 1;
         $optimized = $this->usesOptimizedDatabaseSearch();
+        $databaseOrderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
 
         $query = $this->model->newQuery();
 
@@ -642,7 +660,7 @@ class ProductRepository implements ProductRepositoryInterface
                 ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
                 ->withCount('visibleReviews as review_count')
                 ->withAvg('visibleReviews as rating_avg', 'rating')
-                ->orderBy($orderBy, $direction)
+                ->orderBy($databaseOrderBy, $direction)
                 ->forPage($page, $limit)
                 ->get();
 
@@ -659,7 +677,7 @@ class ProductRepository implements ProductRepositoryInterface
             ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
             ->withCount('visibleReviews as review_count')
             ->withAvg('visibleReviews as rating_avg', 'rating')
-            ->orderBy($orderBy, $direction)
+            ->orderBy($databaseOrderBy, $direction)
             ->paginate($limit, ['*'], 'page', $page);
 
         return ['total' => $paginator->total(), 'items' => $paginator->getCollection()];
@@ -698,6 +716,14 @@ class ProductRepository implements ProductRepositoryInterface
      */
     public function countByKeyword(string $keyword, ?int $categoryId = null): int
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $total = $this->manticoreSearch->countProducts($keyword, $categoryId);
+
+            if ($total !== null) {
+                return $total;
+            }
+        }
+
         $query = $this->model->newQuery();
 
         if ($this->usesOptimizedDatabaseSearch()) {
@@ -718,6 +744,34 @@ class ProductRepository implements ProductRepositoryInterface
             ->where('display_status', ProductDisplayStatus::VISIBLE->value)
             ->when($categoryId !== null, fn ($q) => $q->whereHas('categories', fn ($c) => $c->where('ecommerce_categories.id', $categoryId)))
             ->count();
+    }
+
+    /**
+     * Manticore가 반환한 현재 페이지 ID만 상품 모델로 복원하고 검색 순서를 유지합니다.
+     *
+     * @param  array{total: int, ids: array<int, int>}  $result
+     * @return array{total: int, items: Collection}
+     */
+    private function manticoreProductResult(array $result): array
+    {
+        $ids = $result['ids'];
+        $items = $ids === []
+            ? $this->model->newCollection()
+            : $this->model->newQuery()
+                ->with(['images', 'primaryCategory', 'brand', 'activeLabelAssignments.label'])
+                ->withCount('visibleReviews as review_count')
+                ->withAvg('visibleReviews as rating_avg', 'rating')
+                ->whereIn('id', $ids)
+                ->get();
+
+        if ($ids !== []) {
+            $order = array_flip($ids);
+            $items = $items->sortBy(
+                static fn (Product $product): int => $order[$product->id] ?? PHP_INT_MAX
+            )->values();
+        }
+
+        return ['total' => $result['total'], 'items' => $items];
     }
 
     /**

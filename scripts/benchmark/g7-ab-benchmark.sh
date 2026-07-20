@@ -20,7 +20,7 @@ REMOTE_APP_USER="${G7_PERF_APP_USER:-g7devops}"
 REMOTE_PHP_BIN="${G7_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_PERF_DB_PREFIX:-g7_}"
-BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.4}"
+BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
 DRAIN_TIMEOUT="${G7_PERF_DRAIN_TIMEOUT:-930}"
@@ -104,7 +104,7 @@ Deployment options:
   --db NAME                Remote database name.
   --db-prefix PREFIX       Remote database prefix.
   --base-url URL           Public origin.
-  --baseline REF           Official baseline ref. Default: 7.0.4.
+  --baseline REF           Official baseline ref. Default: 7.0.5.
   --optimized-ref REF      Reviewed optimized ref; resolved to a commit SHA.
   --drain-timeout SEC      Runtime drain timeout. Default: 930.
   --ssh-connect-timeout SEC

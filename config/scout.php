@@ -20,6 +20,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Public integrated search backend
+    |--------------------------------------------------------------------------
+    |
+    | mysql keeps the built-in FULLTEXT implementation. manticore routes only
+    | the public integrated-search post/product/page lookups to the local
+    | Manticore daemon. General board and admin searches stay on MySQL.
+    |
+    */
+
+    'integrated' => [
+        'driver' => env('G7_INTEGRATED_SEARCH_DRIVER', 'mysql'),
+        'manticore' => [
+            'host' => env('MANTICORE_HOST', '127.0.0.1'),
+            'port' => (int) env('MANTICORE_PORT', 9306),
+            'connect_timeout' => (int) env('MANTICORE_CONNECT_TIMEOUT', 1),
+            'query_timeout_ms' => (int) env('MANTICORE_QUERY_TIMEOUT_MS', 2000),
+            'max_result_window' => (int) env('MANTICORE_MAX_RESULT_WINDOW', 10000),
+            'tables' => [
+                'posts' => env('MANTICORE_POSTS_TABLE', 'g7_posts'),
+                'products' => env('MANTICORE_PRODUCTS_TABLE', 'g7_products'),
+                'pages' => env('MANTICORE_PAGES_TABLE', 'g7_pages'),
+            ],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Index Prefix
     |--------------------------------------------------------------------------
     */

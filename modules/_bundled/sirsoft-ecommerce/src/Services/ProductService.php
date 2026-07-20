@@ -1789,6 +1789,7 @@ class ProductService
             'oldest' => ['created_at', 'asc'],
             'price_asc' => ['selling_price', 'asc'],
             'price_desc' => ['selling_price', 'desc'],
+            'relevance' => ['relevance', 'desc'],
             default => ['created_at', 'desc'],
         };
     }

@@ -14,7 +14,7 @@ REMOTE_APP_USER="${G7_BOARD_PERF_APP_USER:-g7devops}"
 REMOTE_PHP_BIN="${G7_BOARD_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_BOARD_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_BOARD_PERF_DB_PREFIX:-g7_}"
-BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.4}"
+BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.5}"
 BENCHMARK_BASELINE_REF="${G7_BOARD_PERF_BENCHMARK_BASELINE_REF:-e64381ddb5ba02caed60933427fbb86ef72ef94e}"
 OPTIMIZED_REF="${G7_BOARD_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://www.g7devops.com}"
@@ -77,11 +77,11 @@ Usage: scripts/benchmark/board-performance-toggle.sh ACTION [options]
 Actions:
   on                Deploy the optimized source, enable the optimized branch,
                     and create/show the benchmark indexes.
-  off               Select the original G7 7.0.4 runtime branches and make the
+  off               Select the original G7 7.0.5 runtime branches and make the
                     benchmark indexes invisible. This is the fast A/B toggle.
   status            Report source integrity, effective branch, indexes, module,
                     PHP-FPM, and the last harness state.
-  restore-original  Restore official 7.0.4 files and remove benchmark indexes
+  restore-original  Restore official 7.0.5 files and remove benchmark indexes
                     and the migration row. Requires --yes.
 
 Options:
@@ -93,7 +93,7 @@ Options:
   --php-bin BIN     Remote PHP binary. Default: php
   --db NAME         Remote database name. Default: g7devops
   --db-prefix NAME  Remote table prefix. Default: g7_
-  --baseline REF    Git ref for exact source restore. Default: 7.0.4
+  --baseline REF    Git ref for exact source restore. Default: 7.0.5
   --benchmark-baseline-ref REF
                     Pre-tuning sirsoft-benchmark Git ref used by exact restore.
   --optimized-ref REF
@@ -1238,7 +1238,7 @@ source_variant() {
         "${APP_ROOT}/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php"; then
         printf 'optimized-capable'
     else
-        printf 'official-7.0.4'
+        printf 'official-7.0.5'
     fi
 }
 

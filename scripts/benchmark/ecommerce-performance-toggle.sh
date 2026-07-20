@@ -13,7 +13,7 @@ REMOTE_APP_USER="${G7_ECOMMERCE_PERF_APP_USER:-g7devops}"
 REMOTE_PHP_BIN="${G7_ECOMMERCE_PERF_PHP_BIN:-php}"
 REMOTE_DB_NAME="${G7_ECOMMERCE_PERF_DB_NAME:-g7devops}"
 REMOTE_DB_PREFIX="${G7_ECOMMERCE_PERF_DB_PREFIX:-g7_}"
-BASELINE_REF="${G7_ECOMMERCE_PERF_BASELINE_REF:-7.0.4}"
+BASELINE_REF="${G7_ECOMMERCE_PERF_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_ECOMMERCE_PERF_OPTIMIZED_REF:-HEAD}"
 BASE_URL="${G7_ECOMMERCE_PERF_BASE_URL:-https://www.g7devops.com}"
 SSH_CONNECT_TIMEOUT_SECONDS="${G7_ECOMMERCE_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-${G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-10}}"
@@ -63,7 +63,7 @@ Actions:
   on                Deploy optimized-capable source, enable it, and show/create indexes.
   off               Deploy official source and make benchmark indexes invisible.
   status            Show source, runtime branch, index, active-module, and PHP-FPM state.
-  restore-original  Restore official 7.0.4 ecommerce files and drop benchmark indexes.
+  restore-original  Restore official 7.0.5 ecommerce files and drop benchmark indexes.
 
 Options:
   --yes             Required for restore-original.
@@ -74,7 +74,7 @@ Options:
   --php-bin BIN     Remote PHP binary. Default: php
   --db NAME         Remote database name. Default: g7devops
   --db-prefix NAME  Remote table prefix. Default: g7_
-  --baseline REF    Exact source restore ref. Default: 7.0.4
+  --baseline REF    Exact source restore ref. Default: 7.0.5
   --optimized-ref REF
                     Reviewed optimized Git ref. Default: HEAD.
   --base-url URL    Storefront base URL.
@@ -662,7 +662,7 @@ source_variant() {
     if grep -q "benchmark.ecommerce_variant" "${APP_ROOT}/modules/_bundled/sirsoft-ecommerce/src/Repositories/ProductRepository.php"; then
         printf 'optimized-capable'
     else
-        printf 'official-7.0.4'
+        printf 'official-7.0.5'
     fi
 }
 

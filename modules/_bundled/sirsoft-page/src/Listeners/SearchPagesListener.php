@@ -49,7 +49,6 @@ class SearchPagesListener implements HookListenerInterface
      * 훅 이벤트를 처리합니다.
      *
      * @param  mixed  ...$args  훅에서 전달된 인수들
-     * @return void
      */
     public function handle(...$args): void
     {
@@ -175,7 +174,8 @@ class SearchPagesListener implements HookListenerInterface
     {
         return match ($sort) {
             'oldest' => ['created_at', 'asc'],
-            default  => ['created_at', 'desc'],
+            'relevance' => ['relevance', 'desc'],
+            default => ['created_at', 'desc'],
         };
     }
 

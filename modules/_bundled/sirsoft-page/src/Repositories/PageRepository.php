@@ -5,6 +5,7 @@ namespace Modules\Sirsoft\Page\Repositories;
 use App\Helpers\PermissionHelper;
 use App\Repositories\Concerns\HasMultipleSearchFilters;
 use App\Search\Engines\DatabaseFulltextEngine;
+use App\Search\ManticoreIntegratedSearch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -20,6 +21,10 @@ use Modules\Sirsoft\Page\Repositories\Contracts\PageRepositoryInterface;
 class PageRepository implements PageRepositoryInterface
 {
     use HasMultipleSearchFilters;
+
+    public function __construct(
+        private readonly ManticoreIntegratedSearch $manticoreSearch,
+    ) {}
 
     /**
      * 페이지 목록을 페이지네이션하여 조회합니다.
@@ -150,8 +155,34 @@ class PageRepository implements PageRepositoryInterface
      */
     public function searchByKeyword(string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $result = $this->manticoreSearch->searchPages(
+                $keyword,
+                $orderBy,
+                $direction,
+                $limit,
+            );
+
+            if ($result !== null) {
+                $ids = $result['ids'];
+                $items = $ids === []
+                    ? (new Page)->newCollection()
+                    : Page::query()->whereIn('id', $ids)->get();
+
+                if ($ids !== []) {
+                    $order = array_flip($ids);
+                    $items = $items->sortBy(
+                        static fn (Page $page): int => $order[$page->id] ?? PHP_INT_MAX
+                    )->values();
+                }
+
+                return ['total' => $result['total'], 'items' => $items];
+            }
+        }
+
+        $databaseOrderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
         $results = $this->buildKeywordQuery($keyword)
-            ->orderBy($orderBy, $direction)
+            ->orderBy($databaseOrderBy, $direction)
             ->paginate($limit);
 
         return [
@@ -168,6 +199,14 @@ class PageRepository implements PageRepositoryInterface
      */
     public function countByKeyword(string $keyword): int
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $total = $this->manticoreSearch->countPages($keyword);
+
+            if ($total !== null) {
+                return $total;
+            }
+        }
+
         return $this->buildKeywordQuery($keyword)->count();
     }
 

@@ -25,7 +25,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | optimized: ID-only deferred join, bounded notice/reply expansion, and
-    | request-level query reuse. baseline: the original G7 7.0.4 code paths.
+    | request-level query reuse. baseline: the original G7 7.0.5 code paths.
     |
     */
     'board_list_variant' => in_array($boardListVariant, ['baseline', 'optimized'], true)

@@ -6,6 +6,7 @@ use App\Contracts\Extension\CacheInterface;
 use App\Enums\PermissionType;
 use App\Helpers\PermissionHelper;
 use App\Search\Engines\DatabaseFulltextEngine;
+use App\Search\ManticoreIntegratedSearch;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
@@ -63,7 +64,10 @@ class PostRepository implements PostRepositoryInterface
     /**
      * PostRepository 생성자
      */
-    public function __construct(private readonly CacheInterface $cache) {}
+    public function __construct(
+        private readonly CacheInterface $cache,
+        private readonly ManticoreIntegratedSearch $manticoreSearch,
+    ) {}
 
     /**
      * 게시판의 게시글 목록을 페이지네이션하여 조회합니다.
@@ -2091,6 +2095,21 @@ class PostRepository implements PostRepositoryInterface
      */
     public function searchByKeyword(string $slug, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $boardId = (int) Board::query()->where('slug', $slug)->value('id');
+            $result = $this->manticoreSearch->searchPosts(
+                $boardId > 0 ? [$boardId] : [],
+                $keyword,
+                $orderBy,
+                $direction,
+                $limit,
+            );
+
+            if ($result !== null) {
+                return $this->manticorePostResult($result, ['user']);
+            }
+        }
+
         return $this->withSearchConcurrencyGuard(
             fn () => $this->searchByKeywordWithoutGuard($slug, $keyword, $orderBy, $direction, $limit)
         );
@@ -2139,6 +2158,15 @@ class PostRepository implements PostRepositoryInterface
      */
     public function countByKeyword(string $slug, string $keyword): int
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $boardId = (int) Board::query()->where('slug', $slug)->value('id');
+            $total = $this->manticoreSearch->countPosts($boardId > 0 ? [$boardId] : [], $keyword);
+
+            if ($total !== null) {
+                return $total;
+            }
+        }
+
         return $this->withSearchConcurrencyGuard(
             fn () => $this->countByKeywordWithoutGuard($slug, $keyword)
         );
@@ -2168,6 +2196,21 @@ class PostRepository implements PostRepositoryInterface
      */
     public function searchAcrossBoards(array $boardIds, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $perPage = 10, int $page = 1): array
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $result = $this->manticoreSearch->searchPosts(
+                $boardIds,
+                $keyword,
+                $orderBy,
+                $direction,
+                $perPage,
+                $page,
+            );
+
+            if ($result !== null) {
+                return $this->manticorePostResult($result, ['user', 'board']);
+            }
+        }
+
         return $this->withSearchConcurrencyGuard(
             fn () => $this->searchAcrossBoardsWithoutGuard($boardIds, $keyword, $orderBy, $direction, $perPage, $page)
         );
@@ -2217,6 +2260,14 @@ class PostRepository implements PostRepositoryInterface
      */
     public function countAcrossBoards(array $boardIds, string $keyword): int
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $total = $this->manticoreSearch->countPosts($boardIds, $keyword);
+
+            if ($total !== null) {
+                return $total;
+            }
+        }
+
         return $this->withSearchConcurrencyGuard(
             fn () => $this->countAcrossBoardsWithoutGuard($boardIds, $keyword)
         );
@@ -2240,9 +2291,50 @@ class PostRepository implements PostRepositoryInterface
      */
     public function countAcrossBoardsBounded(array $boardIds, string $keyword): array
     {
+        if ($this->manticoreSearch->isEnabled()) {
+            $total = $this->manticoreSearch->countPosts($boardIds, $keyword);
+
+            if ($total !== null) {
+                return [
+                    'total' => $total,
+                    'total_is_exact' => true,
+                    'total_relation' => 'eq',
+                ];
+            }
+        }
+
         return $this->withSearchConcurrencyGuard(
             fn () => $this->countAcrossBoardsBoundedWithoutGuard($boardIds, $keyword)
         );
+    }
+
+    /**
+     * Manticore가 반환한 현재 페이지 ID만 MySQL 모델로 복원하고 검색 순서를 유지합니다.
+     *
+     * @param  array{total: int, ids: array<int, int>}  $result
+     * @param  array<int, string>  $relations
+     * @return array{total: int, total_is_exact: true, total_relation: string, items: Collection}
+     */
+    private function manticorePostResult(array $result, array $relations): array
+    {
+        $ids = $result['ids'];
+        $items = $ids === []
+            ? (new Post)->newCollection()
+            : Post::query()->with($relations)->whereIn('id', $ids)->get();
+
+        if ($ids !== []) {
+            $order = array_flip($ids);
+            $items = $items->sortBy(
+                static fn (Post $post): int => $order[$post->id] ?? PHP_INT_MAX
+            )->values();
+        }
+
+        return [
+            'total' => $result['total'],
+            'total_is_exact' => true,
+            'total_relation' => 'eq',
+            'items' => $items,
+        ];
     }
 
     /** @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool} */
