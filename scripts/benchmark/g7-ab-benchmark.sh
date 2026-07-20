@@ -242,8 +242,10 @@ awk -v value="${LOAD_ABORT_PER_CPU}" 'BEGIN { exit !(value > 0 && value <= 10) }
     || fail 'board slug and shop search term must not be empty'
 
 BASE_URL="${BASE_URL%/}"
-# constant-arrival-rate schedules at t=0 and then at each timeUnit/rate boundary.
-EXPECTED_HOT_ITERATIONS=$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS / HOT_TIME_UNIT_SECONDS + 1))
+# k6 constant-arrival-rate가 실행 구간 안에 예약하는 완료 iteration 수입니다.
+EXPECTED_HOT_ITERATIONS=$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS / HOT_TIME_UNIT_SECONDS))
+[[ "${EXPECTED_HOT_ITERATIONS}" -ge 1 ]] \
+    || fail 'hot duration/rate/time-unit combination schedules no iterations'
 EXPECTED_RISKY_ITERATIONS="${INCLUDE_RISKY}"
 EXPECTED_ITERATIONS=$((EXPECTED_HOT_ITERATIONS + EXPECTED_RISKY_ITERATIONS))
 SSH_OPTIONS=(
@@ -963,16 +965,16 @@ normalize_k6_summary() {
             phase: $phase,
             run: $run,
             k6_exit: $k6_exit,
-            http_failure_rate: ($metrics.http_req_failed.values.rate // null),
-            http_requests: ($metrics.http_reqs.values.count // null),
-            http_requests_per_second: ($metrics.http_reqs.values.rate // null),
-            iterations: ($metrics.iterations.values.count // null),
+            http_failure_rate: (($metrics.http_req_failed.values // $metrics.http_req_failed).rate // null),
+            http_requests: (($metrics.http_reqs.values // $metrics.http_reqs).count // null),
+            http_requests_per_second: (($metrics.http_reqs.values // $metrics.http_reqs).rate // null),
+            iterations: (($metrics.iterations.values // $metrics.iterations).count // null),
             expected_iterations: $expected_iterations,
-            dropped_iterations: ($metrics.dropped_iterations.values.count // 0),
+            dropped_iterations: (($metrics.dropped_iterations.values // $metrics.dropped_iterations // {}).count // 0),
             routes: ($manifest[0] | map(
                 . as $route
-                | ($metrics[$route.duration_metric].values // {}) as $duration
-                | ($metrics[$route.valid_metric].values // {}) as $valid
+                | ($metrics[$route.duration_metric].values // $metrics[$route.duration_metric] // {}) as $duration
+                | ($metrics[$route.valid_metric].values // $metrics[$route.valid_metric] // {}) as $valid
                 | {
                     key: $route.key,
                     label: $route.label,
