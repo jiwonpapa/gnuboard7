@@ -965,7 +965,10 @@ normalize_k6_summary() {
             phase: $phase,
             run: $run,
             k6_exit: $k6_exit,
-            http_failure_rate: (($metrics.http_req_failed.values // $metrics.http_req_failed).rate // null),
+            http_failure_rate: (
+                ($metrics.http_req_failed.values // $metrics.http_req_failed) as $failed
+                | ($failed.rate // $failed.value // null)
+            ),
             http_requests: (($metrics.http_reqs.values // $metrics.http_reqs).count // null),
             http_requests_per_second: (($metrics.http_reqs.values // $metrics.http_reqs).rate // null),
             iterations: (($metrics.iterations.values // $metrics.iterations).count // null),
@@ -986,7 +989,10 @@ normalize_k6_summary() {
                     p95_ms: ($duration["p(95)"] // null),
                     p99_ms: ($duration["p(99)"] // null),
                     max_ms: ($duration.max // null),
-                    error_rate: (if ($valid.rate // null) == null then null else (1 - $valid.rate) end)
+                    error_rate: (
+                        ($valid.rate // $valid.value // null) as $valid_rate
+                        | if $valid_rate == null then null else (1 - $valid_rate) end
+                    )
                 }
             ))
         }
