@@ -242,12 +242,15 @@ awk -v value="${LOAD_ABORT_PER_CPU}" 'BEGIN { exit !(value > 0 && value <= 10) }
     || fail 'board slug and shop search term must not be empty'
 
 BASE_URL="${BASE_URL%/}"
-# k6 constant-arrival-rate가 실행 구간 안에 예약하는 완료 iteration 수입니다.
-EXPECTED_HOT_ITERATIONS=$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS / HOT_TIME_UNIT_SECONDS))
-[[ "${EXPECTED_HOT_ITERATIONS}" -ge 1 ]] \
+# k6 constant-arrival-rate는 종료 경계의 tick을 포함할 수 있어 정상 완료 횟수가
+# floor(rate * duration / timeUnit) 또는 그 값 + 1로 관측됩니다.
+EXPECTED_HOT_ITERATIONS_MIN=$((HOT_ARRIVAL_RATE * HOT_DURATION_SECONDS / HOT_TIME_UNIT_SECONDS))
+EXPECTED_HOT_ITERATIONS_MAX=$((EXPECTED_HOT_ITERATIONS_MIN + 1))
+[[ "${EXPECTED_HOT_ITERATIONS_MIN}" -ge 1 ]] \
     || fail 'hot duration/rate/time-unit combination schedules no iterations'
 EXPECTED_RISKY_ITERATIONS="${INCLUDE_RISKY}"
-EXPECTED_ITERATIONS=$((EXPECTED_HOT_ITERATIONS + EXPECTED_RISKY_ITERATIONS))
+EXPECTED_ITERATIONS_MIN=$((EXPECTED_HOT_ITERATIONS_MIN + EXPECTED_RISKY_ITERATIONS))
+EXPECTED_ITERATIONS_MAX=$((EXPECTED_HOT_ITERATIONS_MAX + EXPECTED_RISKY_ITERATIONS))
 SSH_OPTIONS=(
     -o BatchMode=yes
     -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
@@ -958,7 +961,8 @@ normalize_k6_summary() {
         --arg phase "${phase}" \
         --argjson run "${run}" \
         --argjson k6_exit "${k6_exit}" \
-        --argjson expected_iterations "${EXPECTED_ITERATIONS}" \
+        --argjson expected_iterations_min "${EXPECTED_ITERATIONS_MIN}" \
+        --argjson expected_iterations_max "${EXPECTED_ITERATIONS_MAX}" \
         --slurpfile manifest "${MANIFEST_FILE}" '
         .metrics as $metrics
         | {
@@ -972,7 +976,9 @@ normalize_k6_summary() {
             http_requests: (($metrics.http_reqs.values // $metrics.http_reqs).count // null),
             http_requests_per_second: (($metrics.http_reqs.values // $metrics.http_reqs).rate // null),
             iterations: (($metrics.iterations.values // $metrics.iterations).count // null),
-            expected_iterations: $expected_iterations,
+            expected_iterations: $expected_iterations_min,
+            expected_iterations_min: $expected_iterations_min,
+            expected_iterations_max: $expected_iterations_max,
             dropped_iterations: (($metrics.dropped_iterations.values // $metrics.dropped_iterations // {}).count // 0),
             routes: ($manifest[0] | map(
                 . as $route
@@ -1100,7 +1106,9 @@ run_one_benchmark() {
     RUN_FILES+=("${normalized_file}")
     wait_for_database_idle || return 2
     if ! "${JQ_BIN}" -e '
-        (.dropped_iterations // 0) == 0 and .iterations == .expected_iterations
+        (.dropped_iterations // 0) == 0
+        and .iterations >= .expected_iterations_min
+        and .iterations <= .expected_iterations_max
     ' "${normalized_file}" >/dev/null; then
         log "${phase} run ${run}: fixed arrival schedule was not completed"
         return 1
@@ -1180,7 +1188,8 @@ generate_reports() {
         --argjson hot_arrival_rate "${HOT_ARRIVAL_RATE}" \
         --argjson hot_time_unit "${HOT_TIME_UNIT_SECONDS}" \
         --argjson hot_duration "${HOT_DURATION_SECONDS}" \
-        --argjson expected_hot_iterations "${EXPECTED_HOT_ITERATIONS}" \
+        --argjson expected_hot_iterations_min "${EXPECTED_HOT_ITERATIONS_MIN}" \
+        --argjson expected_hot_iterations_max "${EXPECTED_HOT_ITERATIONS_MAX}" \
         --argjson include_risky "${INCLUDE_RISKY}" \
         --argjson measurement_window "${MEASUREMENT_WINDOW_SECONDS}" \
         --argjson cpu_interval "${CPU_INTERVAL_SECONDS}" \
@@ -1207,7 +1216,8 @@ generate_reports() {
             | (($phase_runs | length) == $repeats)
               and all($phase_runs[];
                 (.dropped_iterations // 0) == 0
-                and .iterations == .expected_iterations
+                and .iterations >= .expected_iterations_min
+                and .iterations <= .expected_iterations_max
               );
         def route_phase($phase; $key):
             [$runs[] | select(.phase == $phase) | .routes[] | select(.key == $key)] as $items
@@ -1255,7 +1265,9 @@ generate_reports() {
                 hot_arrival_rate_per_second: ($hot_arrival_rate / $hot_time_unit),
                 hot_time_unit_seconds: $hot_time_unit,
                 hot_duration_seconds: $hot_duration,
-                expected_hot_iterations_per_run: $expected_hot_iterations,
+                expected_hot_iterations_per_run: $expected_hot_iterations_min,
+                expected_hot_iterations_per_run_min: $expected_hot_iterations_min,
+                expected_hot_iterations_per_run_max: $expected_hot_iterations_max,
                 include_risky: ($include_risky == 1),
                 risky_route: (if $include_risky == 1 then $risky_route else null end),
                 statement_timeout_ms: $statement_timeout,
@@ -1336,8 +1348,9 @@ generate_reports() {
         printf -- '- 기준: `%s`\n' "${BASELINE_REF}"
         printf -- '- 튜닝: `%s`\n' "${OPTIMIZED_COMMIT}"
         printf -- '- 반복: 상태별 %s회, 일반 경로 %s VU / %s초\n' "${REPEATS}" "${HOT_VUS}" "${HOT_DURATION_SECONDS}"
-        printf -- '- 요청 스케줄: 일반 경로 매트릭스 %s초당 %s회 고정, 상태별 예정 %s회\n' \
-            "${HOT_TIME_UNIT_SECONDS}" "${HOT_ARRIVAL_RATE}" "${EXPECTED_HOT_ITERATIONS}"
+        printf -- '- 요청 스케줄: 일반 경로 매트릭스 %s초당 %s회 고정, 상태별 정상 범위 %s~%s회\n' \
+            "${HOT_TIME_UNIT_SECONDS}" "${HOT_ARRIVAL_RATE}" \
+            "${EXPECTED_HOT_ITERATIONS_MIN}" "${EXPECTED_HOT_ITERATIONS_MAX}"
         printf -- '- CPU 측정창: 매 실행 %s초 고정, %s초 간격, 프로세스 값은 전체 호스트 CPU 용량 기준\n' \
             "${MEASUREMENT_WINDOW_SECONDS}" "${CPU_INTERVAL_SECONDS}"
         if [[ "${INCLUDE_RISKY}" == 1 ]]; then

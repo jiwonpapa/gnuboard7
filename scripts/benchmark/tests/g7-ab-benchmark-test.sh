@@ -344,7 +344,9 @@ assert_released "${SUCCESS_STATE}"
     and .metadata.hot_vus == 1
     and .metadata.hot_arrival_rate_per_second == 0.2
     and .metadata.hot_time_unit_seconds == 5
-    and .metadata.expected_hot_iterations_per_run == 2
+    and .metadata.expected_hot_iterations_per_run == 1
+    and .metadata.expected_hot_iterations_per_run_min == 1
+    and .metadata.expected_hot_iterations_per_run_max == 2
     and .metadata.include_risky == false
     and .metadata.route_count == 21
     and (.metadata | has("risky_vus") | not)
