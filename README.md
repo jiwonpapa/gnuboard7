@@ -1,540 +1,206 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/그누보드7-Gnuboard7-000000?style=for-the-badge&labelColor=0066FF&logoColor=white" height="200" alt="그누보드7 (Gnuboard7)">
-</p>
-
-<p align="center">
-  <strong>모던 아키텍처로 다시 태어난 대한민국 대표 오픈소스 CMS</strong><br>
-  A modern, extensible CMS platform built with Laravel + React
-</p>
-
-<p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-7.0.5-blue" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php&logoColor=white" alt="PHP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Laravel-12.x-FF2D20?logo=laravel&logoColor=white" alt="Laravel"></a>
-  <a href="#"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/badge/status-Stable-brightgreen" alt="Status"></a>
-</p>
-
-<p align="center">
-  <a href="https://g7.gnuboard.com"><strong>데모 사이트</strong></a> ·
-  <a href="https://g7.gnuboard.com/admin"><strong>관리자 데모</strong></a>
-</p>
-
----
-
-[소개](#그누보드7-소개) · [주요 기능](#주요-기능) · [기술 스택](#기술-스택) · [아키텍처](#아키텍처) · [빠른 시작](#빠른-시작) · [기본 제공 확장](#기본-제공-확장) · [비즈니스 모델](#비즈니스-모델) · [기존 사용자](#기존-그누보드-사용자) · [문서](#문서) · [기여하기](#기여하기) · [만든 사람들](#만든-사람들) · [커뮤니티](#커뮤니티) · [변경 기록](#변경-기록) · [라이선스](#라이선스)
-
----
-
-## 그누보드7 소개
-
-**그누보드7 (Gnuboard7)** 은 23년간 대한민국에서 가장 널리 사용된 오픈소스 CMS인 그누보드를, 현대적 기술 스택으로 **완전히 새로 설계**한 차세대 웹 플랫폼입니다.
-
-Laravel과 React를 기반으로, 보안부터 아키텍처까지 처음부터 다시 만들었습니다.
-
-- **JSON 레이아웃 엔진**: React를 몰라도 JSON만으로 React 기반 UI를 선언적으로 정의. 모듈/플러그인이 프론트엔드 빌드 없이 JSON만으로 UI를 동적으로 주입/확장. 고도화된 UI가 필요한 경우 커스텀 React 컴포넌트를 개발하여 등록 가능
-- **하나의 플랫폼, 다양한 비즈니스**: 커뮤니티, 쇼핑몰, 구독, 예약 — 비즈니스 모델에 맞게 확장
-- **정교한 권한 관리**: 역할(Role) + 권한(Permission) + 스코프(Scope) 3단계 접근 제어로, 서비스 규모가 커져도 통제력 유지
-- **글로벌 레디**: 다국어(i18n) 네이티브 지원, 로케일 기반 UI, 다중 통화 대응
-- **확장 시스템**: 모듈 + 플러그인 + 템플릿 3중 구조로 코어 수정 없이 기능 확장
-
----
-
-## 주요 기능
-
-현대적인 웹 플랫폼에 필요한 핵심 기능을 갖추었습니다.
-
-| 영역 | 설명 |
-|------|------|
-| **모듈 아키텍처** | 모듈 + 플러그인 + 템플릿 3중 확장 구조. 코어 수정 없이 독립적 모듈(게시판, 커머스 등) 개발이 가능합니다. Hook 기반 기능 주입으로 Service-Repository 패턴의 명확한 계층 분리를 유지합니다 |
-| **언어팩 시스템** | 새 언어를 코어 수정 없이 ZIP 또는 GitHub URL 로 설치할 수 있습니다. 일본어 등 공식 번들 언어팩을 즉시 사용할 수 있고, 운영자가 직접 수정한 라벨은 언어팩이 덮어쓰지 않도록 sub-key 단위로 보존합니다. 모듈/플러그인/템플릿 단위로 별도 적용 가능 |
-| **현지화** | 백엔드부터 프론트엔드까지 일관된 다국어 개발 환경을 제공합니다. 활성 언어팩이 알림 채널 라벨, Provider/Registry 페이로드, 환경설정 카탈로그(결제수단·통화·배송 가능 국가)까지 자동 보강되며, 모듈/플러그인이 자기 도메인 라벨을 자기 영역에서 자기설명하도록 활동 로그·메시지 영역도 분리되어 있습니다 |
-| **해외 결제** | 로컬 비즈니스를 넘어 글로벌 커머스로 도약하기 위한 기반을 제공합니다. 결제 연동은 동일한 Extension Point 패턴으로 붙일 수 있으며, 해외 결제 수단은 별도 플러그인으로 제공됩니다 |
-| **권한 제어** | 역할별 메뉴와 기능, 데이터 범위까지 제어할 수 있습니다. 역할(Role) + 권한(Permission) + 스코프(Scope) 3단계 접근 제어로 조직 구조에 맞는 유연한 접근 관리를 제공합니다 |
-| **본인인증 (IDV)** | 회원가입·비밀번호 재설정·민감 작업 등 모든 본인인증 시점을 라우트/훅 단위 선언형 정책으로 통합 관리합니다. 코어가 메일 프로바이더를 기본 내장하고, 외부 KCP·이니시스·SMS·PortOne·Stripe Identity 등은 동일한 Provider 계약으로 붙일 수 있는 확장점을 제공합니다. 서버가 HTTP 428 응답을 반환하면 프론트엔드 인터셉터가 자동으로 인증 모달을 띄우고 인증 성공 시 원 요청을 재실행합니다 |
-| **보안** | 입력값 자동 검증과 토큰 기반 인증을 제공합니다. 설계부터 보안을 고려한 다층 방어 구조(CSRF/XSS/SQL Injection), 로그인 시도 제한·계정 잠금(HTTP 423) 실제 구현, 설치 완료 후 인스톨러 엔드포인트 자동 차단(HTTP 410) 까지 다층 방어를 구성합니다 |
-| **유연한 화면 구성** | 화면 구조를 정의하면 즉시 반영할 수 있습니다. 프론트엔드 인프라 없이 JSON 선언만으로 웹앱 수준의 동적 화면 구현이 가능합니다 |
-| **레이아웃 편집기** | 위지윅 기반 레이아웃 편집 기능으로 화면 블록을 직접 배치하고 수정 결과를 바로 확인할 수 있습니다 |
-| **검증된 기반** | Laravel + React 기반을 제공합니다. 글로벌 기업이 채택한 기술 스택으로 높은 확장성과 유연한 UI 구현이 가능합니다 |
-| **공통 캐시 시스템** | `CacheInterface` 와 코어/모듈/플러그인 3종 드라이버로 키 접두사(`g7:core:`, `g7:module.{id}:`, `g7:plugin.{id}:`) 를 자동 격리합니다. 태그 기반 자동 무효화와 `g7_core_settings('cache.*_ttl')` 중앙 관리로 하드코딩 없이 운영할 수 있습니다 |
-| **알림 시스템** | 알림 정의(Definition) × 템플릿(Template) × 수신자(Recipients) 3계층 구조로 메일/DB/실시간 브로드캐스트(Reverb) 다채널 독립 발송을 지원합니다. 작성자·역할·특정 사용자·권한 보유자 단위 타겟팅과 훅 기반 발송으로 모듈이 자체 알림을 자유롭게 등록할 수 있습니다 |
-| **SEO** | `jaybizzle/crawler-detect` 기반으로 약 1,000종 봇(검색엔진·SNS unfurl·AI 검색)을 자동 감지하여 봇 요청에는 정적 HTML 을, 일반 사용자에게는 SPA 를 응답합니다. OG/Twitter 카드 메타와 모듈이 선언한 도메인 스키마(Article/Product/Offer/AggregateRating), Sitemap 자동·수동 생성, Generator 메타 태그까지 표준 SEO 표면을 코어에서 제공합니다 |
-| **활동 로그** | 관리자·사용자 활동 이력을 자동으로 기록하고 조회할 수 있습니다. Monolog 기반 구조로 확장이 용이하며, 액션 라벨이 모듈/플러그인 자체 다국어 파일에서 우선 해석되어 도메인별 자기설명이 가능합니다 |
-| **검색** | Laravel Scout 검색 드라이버 확장점을 제공합니다. 기본 엔진은 G7의 MySQL FULLTEXT 구현이며, 외부 검색엔진은 Scout 커스텀 엔진으로 등록해 상품·게시글 등 모듈 검색 경로에 연결할 수 있습니다 |
-
----
-
-## 기술 스택
-
-| 구분 | 기술 |
-|------|------|
-| **백엔드** | PHP 8.2+, Laravel 12.x, MySQL 8.0+, Redis 6.0+ |
-| **프론트엔드** | React 19, Vite, Tailwind CSS 4 (다크 모드 지원) |
-| **인증** | Laravel Sanctum (Bearer 토큰) |
-| **테스트** | PHPUnit 11.x, Vitest |
-| **코드 품질** | Laravel Pint (PSR-12) |
-
----
-
-## 아키텍처
-
-```
-Gnuboard7
-├── Core (Laravel 12)
-│   ├── Controller → FormRequest → Service → Repository → Model
-│   ├── Hook System (Action / Filter)
-│   ├── Permission (Role → Permission → Scope)
-│   ├── Identity Verification (Policy × Purpose × Provider × Message)
-│   ├── Language Pack (가상 보호 행 + ZIP/GitHub 설치 + sub-key 보존)
-│   ├── Notification (Definition × Template × Recipients)
-│   └── SEO (Bot Detection → Static HTML → Cache → Sitemap)
-│
-├── Extensions
-│   ├── Modules    — 게시판, 쇼핑몰, 페이지 ...
-│   ├── Plugins    — 결제, 인증, 마케팅 ...
-│   ├── Templates  — 관리자 UI, 사용자 UI
-│   └── LanguagePacks — 일본어 등 공식/외부 언어팩
-│
-└── Template Engine
-    ├── JSON Layout → React Components
-    └── Dynamic Rendering + Data Binding
-```
-
-### 템플릿 엔진 동작 흐름
-
-그누보드7의 템플릿 엔진은 **JSON으로 UI 구조를 선언**하면, 엔진이 이를 해석하여 React 컴포넌트로 렌더링합니다.
-
-#### 제공 기능
-
-- JSON 선언만으로 React 기반 UI 구성 — React 전문 지식 없이도 화면 개발 가능
-- 모듈/플러그인이 프론트엔드 빌드 없이 JSON만으로 UI를 동적으로 주입/확장
-- 고도화된 UI가 필요한 경우 커스텀 React 컴포넌트를 개발하여 등록 가능
-- UI가 코드가 아닌 데이터(JSON)로 정의되는 구조를 활용한 **위지윅 레이아웃 편집기** — 비개발자도 화면 블록을 직접 배치·편집하고 결과를 바로 확인할 수 있습니다
-
-```mermaid
-flowchart TB
-    subgraph Backend ["🔧 Backend — Laravel"]
-        A["📄 JSON 레이아웃 파일"] --> B["⚙️ LayoutService"]
-        B --> |"상속 해석<br/>extends / partial"| B
-        M["📦 모듈 레이아웃"] -.-> |"layout_extensions<br/>extension_point 주입"| B
-        P["🔌 플러그인 레이아웃"] -.-> |"layout_extensions<br/>extension_point 주입"| B
-        B --> C["🔒 권한 필터링<br/>사용자별 컴포넌트 제거"]
-        C --> D["📨 병합된 JSON 응답<br/>캐싱 · 1시간 TTL"]
-    end
-
-    subgraph Frontend ["⚛️ Frontend — React"]
-        D --> E["📥 LayoutLoader<br/>레이아웃 JSON 수신"]
-        E --> F["💾 상태 초기화<br/>_global · _local · _computed"]
-        E --> G["🌐 데이터 소스 로딩<br/>API 병렬 호출"]
-        F & G --> H["🎨 DynamicRenderer"]
-
-        H --> I{"❓ 조건 평가<br/>if 표현식"}
-        I --> |"✅ true"| J["🗂️ ComponentRegistry<br/>name → React 컴포넌트"]
-        I --> |"❌ false"| K["⏭️ 렌더링 스킵"]
-
-        J --> L["🔗 데이터 바인딩<br/>표현식 → 실제 값"]
-        L --> N["🖱️ 이벤트 바인딩<br/>onClick → ActionDispatcher"]
-        N --> O["✨ React 렌더링"]
-    end
-
-    subgraph Actions ["👆 사용자 인터랙션"]
-        O --> |"클릭 · 입력"| Q["🎯 ActionDispatcher"]
-        Q --> R["🧭 navigate — 페이지 이동"]
-        Q --> S["📡 apiCall — API 호출"]
-        Q --> T["🔄 setState — 상태 변경"]
-        Q --> U["📋 openModal — 모달 열기"]
-        S --> |"onSuccess · onError"| Q
-        T --> |"상태 변경 → 리렌더링"| H
-    end
-
-    style Backend fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a5f
-    style Frontend fill:#d1fae5,stroke:#059669,stroke-width:2px,color:#064e3b
-    style Actions fill:#fce7f3,stroke:#db2777,stroke-width:2px,color:#831843
-
-    style A fill:#2563eb,stroke:#1d4ed8,color:#fff
-    style B fill:#2563eb,stroke:#1d4ed8,color:#fff
-    style M fill:#7c3aed,stroke:#6d28d9,color:#fff
-    style P fill:#7c3aed,stroke:#6d28d9,color:#fff
-    style C fill:#dc2626,stroke:#b91c1c,color:#fff
-    style D fill:#059669,stroke:#047857,color:#fff
-
-    style E fill:#059669,stroke:#047857,color:#fff
-    style F fill:#0891b2,stroke:#0e7490,color:#fff
-    style G fill:#0891b2,stroke:#0e7490,color:#fff
-    style H fill:#d97706,stroke:#b45309,color:#fff
-    style I fill:#d97706,stroke:#b45309,color:#fff
-    style J fill:#2563eb,stroke:#1d4ed8,color:#fff
-    style K fill:#6b7280,stroke:#4b5563,color:#fff
-    style L fill:#7c3aed,stroke:#6d28d9,color:#fff
-    style N fill:#7c3aed,stroke:#6d28d9,color:#fff
-    style O fill:#059669,stroke:#047857,color:#fff
-
-    style Q fill:#e11d48,stroke:#be123c,color:#fff
-    style R fill:#be185d,stroke:#9d174d,color:#fff
-    style S fill:#be185d,stroke:#9d174d,color:#fff
-    style T fill:#be185d,stroke:#9d174d,color:#fff
-    style U fill:#be185d,stroke:#9d174d,color:#fff
-
-    linkStyle default stroke:#374151,stroke-width:2px
-```
-
-**JSON 레이아웃 예시** — 아래 JSON이 실제 React UI로 렌더링됩니다:
-
-```json
-{
-  "data_sources": [
-    { "id": "products", "endpoint": "/api/products", "method": "GET" }
-  ],
-  "layout": {
-    "type": "basic", "name": "Div",
-    "children": [
-      { "type": "basic", "name": "H1", "text": "$t:product_list" },
-      {
-        "type": "basic", "name": "Div",
-        "iteration": { "source": "{{products?.data?.data}}", "item_var": "$item" },
-        "children": [
-          { "type": "basic", "name": "Span", "text": "{{$item.name}}" }
-        ]
-      },
-      {
-        "type": "basic", "name": "Button", "text": "$t:add",
-        "if": "{{products?.data?.abilities?.can_create}}",
-        "actions": [{
-          "event": "onClick",
-          "handler": "navigate",
-          "params": { "path": "/products/create" }
-        }]
-      }
-    ]
-  }
-}
-```
-
-모듈/플러그인을 활성화하면 해당 UI와 컴포넌트가 자동으로 주입됩니다.
-개발자는 JSON만으로 UI를 추가하거나 변경할 수 있어 별도의 프론트엔드 빌드가 필요 없으며, 권한(abilities)에 따라 UI 요소가 자동으로 표시/숨김 처리됩니다.
-
-### 핵심 시스템
-
-플랫폼을 떠받치는 네 가지 시스템이 유기적으로 동작합니다.
-
-#### 1. 확장 시스템 — 3원칙
-
-1. **코어 수정 최소화** — 모든 비즈니스 로직은 모듈/플러그인으로 구현
-2. **동적 로딩** — `composer.json` 하드코딩 없이 디렉토리 스캔으로 자동 발견
-3. **Hook 기반 확장** — 서비스 계층에서 Action/Filter 훅으로 기능 주입
-
-#### 2. 훅 시스템 (Action / Filter)
-
-Laravel 이벤트와 별개로 동작하는 가벼운 훅 시스템입니다. Action 은 부수 작업(로깅, 알림), Filter 는 값 변형 (기본값 주입, 권한 확장)에 사용됩니다.
-
-```php
-// Service 계층에서 훅 발행
-HookManager::doAction('core.user.after_create', $user, $data);
-$data = HookManager::applyFilters('core.user.filter_create_data', $data);
-
-// 모듈 Listener 가 훅 구독 (자동 발견)
-public static function getSubscribedHooks(): array
-{
-    return [
-        'core.user.after_create' => ['method' => 'onUserCreated', 'priority' => 20],
-    ];
-}
-```
-
-모듈/플러그인은 `Listeners/` 디렉토리에 클래스만 두면 `HookListenerRegistrar` 가 자동으로 구독합니다. 큐 직렬화를 통한 비동기 실행도 지원하며, 워커에서도 `Auth::user()`, `request()->ip()`, `App::getLocale()` 같은 컨텍스트가 자동 복원됩니다.
-
-#### 3. 공통 캐시 시스템
-
-`CacheInterface` 를 기반으로 **코어 · 모듈 · 플러그인** 이 키 충돌 없이 각자의 캐시를 관리합니다.
-
-| 드라이버 | 접두사 | 용도 |
-| --- | --- | --- |
-| `CoreCacheDriver` | `g7:core:{key}` | 코어 서비스 (레이아웃, SEO, 알림, 설정 등) |
-| `ModuleCacheDriver` | `g7:module.{identifier}:{key}` | 모듈별 격리 캐시 (게시판 상품 리스트, 쿨다운 등) |
-| `PluginCacheDriver` | `g7:plugin.{identifier}:{key}` | 플러그인별 격리 캐시 |
-
-```php
-// 모듈 서비스는 BaseModuleServiceProvider::$cacheServices 배열에 등록하면
-// 생성자 타입힌트만으로 자동 주입됨 (Storage 패턴과 동일)
-public function __construct(
-    private BoardRepositoryInterface $repository,
-    private CacheInterface $cache, // ← g7:module.sirsoft-board: 접두사 자동 적용
-) {}
-```
-
-- **TTL 중앙 관리** — 모든 캐시 TTL 은 `g7_core_settings('cache.*_ttl')` 를 추종합니다. 하드코딩 금지
-- **자동 무효화** — `CacheInvalidatable` 트레이트를 모델에 적용하면 `saved` / `deleted` 시점에 태그 기반으로 관련 캐시 자동 삭제
-- **라이프사이클 연동** — 모듈 비활성화/삭제 시 `ModuleManager` 가 해당 모듈의 격리 캐시를 일괄 flush
-- **프론트엔드 캐시 버스팅** — `ext.cache_version` 증가가 응답의 `config.json` 을 통해 전파되어 `?v=` 쿼리 파라미터 기반으로 브라우저 캐시까지 무효화
-
-#### 4. 알림 시스템
-
-**Definition × Template × Recipients** 3계층 모델로 멀티 채널 알림을 관리합니다.
-
-```text
-┌─────────────────────┐      ┌───────────────────────┐      ┌─────────────────────┐
-│ NotificationDefini- │ 1..N │ NotificationTemplate  │      │ Recipients (JSON)   │
-│ tion                ├──────┤ (채널별 독립)         ├──────┤ - trigger_user      │
-│ type=order.created  │      │ channel=mail|db|...   │      │ - related_user      │
-│ variables=[...]     │      │ subject, body,        │      │ - role              │
-│                     │      │ click_url             │      │ - specific_users    │
-└─────────────────────┘      └───────────────────────┘      └─────────────────────┘
-```
-
-- **Definition** — 알림 종류(`type`), 지원 채널, 변수 메타데이터 정의
-- **Template** — 채널(`mail` / `database` / `broadcast`)마다 독립된 제목·본문·클릭 URL. 관리자가 다국어로 커스터마이징 가능
-- **Recipients** — 템플릿별로 수신자 규칙을 JSON 으로 정의. 템플릿 단위 독립이므로 "메일은 주문자에게, DB 알림은 역할 보유자에게" 같은 분기 구성 가능
-
-```php
-// 모듈 Service 에서 훅 발행만 하면 발송 파이프라인이 자동 실행
-HookManager::doAction('sirsoft-ecommerce.order.after_confirm', $order);
-
-// ↓ NotificationHookListener → NotificationDispatcher:
-// 1. order.confirmed 정의 조회
-// 2. 활성 템플릿 순회 (mail/database)
-// 3. 템플릿의 recipients JSON 해석 → 수신자 Collection
-// 4. 각 수신자에게 channel 별 발송 (GenericNotification)
-// 5. notification_logs 에 발송 이력 기록
-```
-
-- 코어 기본 알림 3종: `welcome`, `reset_password`, `password_changed`
-- 이커머스 모듈 알림 7종: `order_confirmed`, `order_shipped`, `order_completed`, `order_cancelled`, `new_order_admin`, `inquiry_received`, `inquiry_replied`
-- 실시간 브로드캐스트는 Laravel Reverb (WebSocket) 기반. Reverb 미구성 환경에서는 graceful skip 으로 오류 없이 동작
-- `GenericNotification` 단일 클래스가 모든 알림을 처리 — 신규 알림 타입 추가 시 개별 Notification 클래스 작성 불필요
-
-#### 5. 언어팩 시스템
-
-새 언어를 코어 수정 없이 추가할 수 있는 운영 도구로, 모듈/플러그인/템플릿 관리와 동일한 라이프사이클(설치 → 활성화 → 업데이트 → 제거 + 자동 백업/롤백) 을 제공합니다.
-
-| 영역 | 동작 |
-| --- | --- |
-| 설치 경로 | ZIP 업로드 / GitHub URL / `lang-packs/_bundled` 번들 디렉토리 (코어 업데이트 시 일괄 동기화) |
-| 적용 범위 | 코어, 모듈, 플러그인, 템플릿 별도 적용 — 모듈 언어팩은 해당 코어 언어팩이 활성일 때만 활성화 |
-| 사용자 수정 보존 | 다국어 JSON 컬럼은 sub-key 단위 (`name.ko` / `name.ja`) 로 user override 기록 — 한 언어 라벨만 수정해도 그 언어만 보존, 신규 언어는 자동 동기화 |
-| 활성화 시점 | 활성/비활성 시 영향받는 모듈/플러그인의 entity 시더가 자동 재실행 → 메뉴·권한·역할·매니페스트·알림 라벨 즉시 DB 반영 |
-| 가상 보호 행 | 코어/번들 확장에 내장된 한국어/영어는 별도 설치 없이 항상 활성/보호 상태로 노출 (수정/제거 차단) |
-| 보안 | 언어 번역 외의 PHP 실행 코드 포함 시 설치 차단 |
-
-공식 일본어(ja) 번들 14종(코어 + 주요 모듈/플러그인/템플릿) 이 즉시 사용 가능하며, 인스톨러 4단계에서 모듈/플러그인/템플릿 선택과 종속된 언어팩 카드가 자동 연동되어 함께 설치할 수 있습니다.
-
-> 상세: [docs/extension/language-packs.md](docs/extension/language-packs.md)
-
-#### 6. 본인인증 (Identity Verification)
-
-회원가입·비밀번호 재설정·민감 작업·결제 직전 등 모든 본인인증 시점을 라우트/훅 단위 선언형 정책으로 통합 관리합니다.
-
-```text
-┌────────────────────┐    ┌─────────────────────┐    ┌──────────────────────┐
-│ Policy             │    │ Purpose             │    │ Provider             │
-│ (강제 시점·실패 모드│    │ (인증 목적·허용 채널│    │ (메일·KCP·이니시스   │
-│  ·단계·conditions) │ ◀▶ │  ·source 추적)      │ ◀▶ │  ·SMS·외부 IDV ...)  │
-└────────────────────┘    └─────────────────────┘    └──────────────────────┘
-            │                                                  │
-            └──────────▶ Message Template (정책×목적 매핑) ◀───┘
-                                    │
-                              GenericNotification
-```
-
-- **정책 SSoT** — 정책 enable 토글이 라우트 코드 수정 없이 즉시 적용. 모든 API 라우트가 정책 DB 와 자동 매칭
-- **428 인터셉터** — 서버가 HTTP 428 응답을 반환하면 프론트엔드가 자동으로 인증 모달을 띄우고 인증 성공 시 원 요청을 자동 재실행
-- **선언형 등록** — 모듈/플러그인은 `module.php::getIdentityPolicies()` / `getIdentityPurposes()` / `getIdentityMessages()` 만 선언하면 활성화/업데이트 시 자동 등록되며 운영자 편집값 보존
-- **메시지 템플릿** — 프로바이더와 (목적/정책)별로 다국어 제목/본문을 개별 정의. 정책 → 목적 → 프로바이더 기본값 순서로 fallback
-- **외부 Provider 슬롯** — 플러그인이 KCP·PortOne·토스인증·Stripe Identity 등을 G7 표준 Extension Point 패턴으로 자기 SDK UI 를 주입 가능
-- **이력 관리** — 관리자 화면에서 인증 수단 탭, 통합 검색, 상태/목적/채널/IP 멀티 필터, 보관주기(180일) 일괄 파기 제공
-
-> 상세: [docs/backend/identity-policies.md](docs/backend/identity-policies.md), [docs/backend/identity-providers.md](docs/backend/identity-providers.md), [docs/backend/identity-messages.md](docs/backend/identity-messages.md)
-
----
-
-## 빠른 시작
-
-### 시스템 요구사항
-
-- PHP 8.2+ (필수 확장 30개 포함)
-- MySQL 8.0+ 또는 MariaDB 10.3+ (utf8mb4)
-- Node.js 20+ (빌드 시에만 필요)
-- Composer 2.x
-
-### 설치
+# Gnuboard7 7.0.5 Performance Lab
+
+공식 그누보드7 `7.0.5`를 기준으로 병목을 재현하고, 성능 튜닝·더미데이터·A/B 하네스·검색 대안 시험을 공개하는 비공식 연구 포크입니다.
+
+[![Upstream](https://img.shields.io/badge/upstream-Gnuboard7%207.0.5-2563eb)](https://github.com/gnuboard/g7/tree/7.0.5)
+[![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.5-performance-lab)
+[![Benchmark](https://img.shields.io/badge/benchmark-v0.3.2-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-benchmark)
+[![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/LICENSE)
+
+> [!IMPORTANT]
+> 이 저장소는 `gnuboard/g7`의 공식 배포판이나 공식 지원 채널이 아닙니다. 현재 브랜치는 정식 릴리스가 아니라 성능 연구·검증용 `Experimental / Performance Lab`입니다.
+
+## 저장소 목적
+
+이 저장소는 문서만 모아 둔 보고서 저장소가 아닙니다. 튜닝이 코어·게시판·쇼핑몰·DB 인덱스·벤치마크 도구에 걸쳐 있으므로 공식 원본 소스와 변경 코드를 함께 공개합니다.
+
+- 동일 서버·동일 데이터·동일 부하에서 공식 `7.0.5`와 튜닝 상태 비교
+- 게시판·쇼핑몰·공통 요청 경로의 실제 병목 수정
+- CPU·RSS·가용 메모리·swap을 함께 기록하는 A/B 하네스 제공
+- 성능 ON/OFF와 공식 원본 물리 원복 절차 제공
+- 현실·성장·병리 데이터셋 생성과 대량 초기화 도구 제공
+- 네이티브 MySQL FULLTEXT의 한계와 외부 검색 인덱스 대안성 검증
+- 외부 개발자가 파일·라인·측정값을 재검토할 수 있는 코드 지도 공개
+
+원본 프로젝트 소개·일반 기능·공식 설치 지원은 [gnuboard/g7](https://github.com/gnuboard/g7)을 기준으로 확인해 주십시오.
+
+## 현재 공개 상태
+
+| 항목 | 상태 | 경계 |
+|---|---|---|
+| 전체 G7 7.0.5 기반 소스 | 공개 | 공식 원본과 이 포크의 변경 이력을 함께 제공 |
+| 공통·게시판·쇼핑 성능 튜닝 | VM 검증 | R/G 읽기 부하 중심, 실쓰기·장기 soak는 미완료 |
+| `sirsoft-benchmark` v0.3.2 | 기능 검증 | 격리된 테스트 서버 전용 |
+| 더미데이터 대량 초기화 | 기능 검증 | queue·cursor chunk·재개·중복 실행 방지·진행 UI 포함 |
+| 성능 A/B·자원 하네스 | 공개 | 전용 VM과 사전 스냅샷 필수 |
+| Manticore 연결 | 대안 시험 | Scout를 우회한 읽기 비교이며 정식 검색 드라이버가 아님 |
+| 배포·스테이징 스크립트 | 공개 | 환경별 비밀값과 서버 설정은 저장소에 포함하지 않음 |
+| 태그형 정식 릴리스·ZIP | 미배포 | 안정화 gate 통과 후 별도 릴리스 예정 |
+| 실서비스 인증 | 미완료 | 주문·결제·배송·쓰기·동시 색인 부하 미검증 |
+
+## 구현한 작업
+
+### 공통 요청 경로
+
+- 훅 로그 I/O 축약
+- guest 역할·권한 반복 조회 감소
+- 활성 모듈과 언어팩 중복 조회 제거
+- 요청 범위 캐시와 명시적인 캐시 수명 적용
+
+### 게시판
+
+- 목록 컬럼 축소와 ID-first pagination
+- 현재 페이지 ID만 조회한 뒤 필요한 관계만 hydration
+- 게시판·정렬 조건에 맞는 복합 인덱스 추가
+- 중복 count 제거와 bounded count/fallback
+- 광범위 검색의 동시성 제한과 결과 정확도 메타 제공
+- `total_relation`, `total_is_exact`, `search_truncated` 응답 계약 추가
+
+### 쇼핑몰
+
+- 분산된 홈 데이터를 storefront 응답으로 조립
+- 상품 목록 ID-first 조회와 관계 hydration 축소
+- 카테고리 ancestor 일괄 조회와 tree 캐시
+- 인기상품 correlated subquery를 derived aggregation으로 변경
+- 상품·카테고리·storefront 쿼리용 인덱스 보강
+
+### 더미데이터·초기화
+
+- 게시판·회원·댓글·상품 대량 생성
+- bulk insert와 단계별 진행률 기록
+- 웹 세션에서 대량 삭제를 기다리지 않는 queue 초기화
+- 20,000행 cursor chunk, 중단·재개, 완료 작업 no-op
+- 대상 게시판명·slug·ID·예상/실제 삭제량 표시
+- 5초 순차 polling으로 중복 요청과 화면 깜빡임 방지
+
+### 검색 시험
+
+- 네이티브 MySQL FULLTEXT exact count의 메모리·정확성 사고 재현
+- Manticore에서 count와 현재 페이지 ID만 가져오는 읽기 비교
+- MySQL/Manticore 연결만 전환하는 검색 하네스
+- 외부 인덱스 장애 시 기존 MySQL 경로로 복귀하며, 게시판 검색은 bounded fallback으로 처리
+
+G7은 이미 Laravel Scout custom engine 확장점을 제공합니다. 따라서 이 저장소는 별도 검색 driver/registry 신설을 제안하지 않습니다. 현재 Manticore 코드는 대안성 확인용이며 Scout adapter, 증분 색인, freshness, 장애 전환까지 제품화한 결과가 아닙니다.
+
+## 실측 요약
+
+동일한 4 vCPU·8GB VM에서 각 데이터셋의 동일 스냅샷을 수동 전환해 상태별 1회, 15 RPS·5분으로 비교했습니다.
+
+| 데이터 | 지표 | 공식 7.0.5 | 튜닝 | 변화 |
+|---|---|---:|---:|---:|
+| R | 전체 p95 | 107.900ms | 64.966ms | -39.79% |
+| R | 호스트 CPU | 19.767% | 13.031% | -34.08% |
+| R | MySQL CPU | 5.242% | 1.364% | -73.98% |
+| G | 전체 p95 | 225.161ms | 49.947ms | -77.82% |
+| G | 호스트 CPU | 27.465% | 12.775% | -53.49% |
+| G | MySQL CPU | 12.643% | 1.695% | -86.59% |
+
+네 phase 모두 HTTP 오류·응답 의미 오류·iteration drop·swap은 0이었습니다. G 튜닝 상태의 단일 30 RPS·15분 시험은 27,001 GET, p95 `65.119ms`, 오류·drop·swap 0으로 통과했습니다.
+
+이 수치는 상태별 단일 run의 읽기 중심 관측입니다. 반복 분산, 실행 순서 효과, 30분 steady, 2시간 soak, 주문·결제·재고 쓰기 부하는 아직 검증하지 않았습니다. 4 vCPU·8GB는 현재 시험 규모의 보수적 시작 권장안이지 G7 공식 최소사양이나 용량 인증이 아닙니다.
+
+## 네이티브 검색 판정
+
+대량·광범위 검색에서 공식 MySQL 통합검색은 HTTP 200이어도 게시글을 누락하거나 게시판 검색이 HTTP 500으로 실패했습니다. 별도 관측에서는 게시글 678,866건에 매칭되는 exact count 한 번으로 `mysqld` RSS가 약 903MB 증가했습니다.
+
+Manticore 읽기 시험은 현재 시험 색인 기준으로 R 48,468건을 82.912ms, G 194,062건을 94.247ms 중앙값에 반환했습니다. 이는 외부 검색 인덱스가 대안이 될 가능성을 확인한 결과일 뿐 특정 검색엔진 도입 권고나 운영 완료 증거가 아닙니다.
+
+## 사용 전 필수 주의
+
+> [!CAUTION]
+> `sirsoft-benchmark`, 더미 생성, 초기화, A/B 전환 스크립트는 운영 데이터가 없는 격리 VM에서만 사용하십시오. 운영 DB에서 실행하면 대량 데이터 생성·삭제와 인덱스 변경이 발생할 수 있습니다.
+
+- 기존 검증 VM에 `3379ed93`로 배포한 toggle manifest는 benchmark v0.2.6, 최종 운영 모듈은 v0.3.2라 `status --strict`에 source drift가 남아 있습니다.
+- 해당 기존 VM에서 toggle을 다시 실행하면 benchmark 모듈이 이전 버전으로 돌아갈 수 있으므로 manifest 재고정 전 재실행을 금지합니다. 신규 clone은 별도 스냅샷과 strict 검증을 거쳐야 합니다.
+- `off`는 비교용 논리 기준선이며 완전한 물리 원복이 아닙니다.
+- `restore-original`은 인덱스를 제거하므로 사전 VM/DB 스냅샷과 명시적 검토가 필요합니다.
+- 공식 코어 업데이트는 이 포크의 변경 파일을 덮을 수 있습니다.
+- 전체 Laravel DB test suite는 전용 test DB 부재로 완료되지 않았습니다.
+- 인기상품 집계는 주문 데이터 0건 조건이라 구조만 확인한 `CODE_ONLY`입니다.
+
+## 설치와 확인
+
+현재 공개 브랜치를 확인하려면 다음과 같이 clone합니다.
 
 ```bash
-# 1. 프로젝트 클론
-git clone https://github.com/gnuboard/g7.git
-cd g7
-
-# 2. 환경 설정 파일 복사
-cp .env.example .env
-
-# 3. 브라우저에서 /install 접속 → 설치 마법사 진행
+git clone --branch codex/7.0.5-performance-lab https://github.com/jiwonpapa/gnuboard7.git
+cd gnuboard7
 ```
 
-> 상세 설치 가이드는 [INSTALL.md](INSTALL.md)를 참조하세요.
+일반 설치 절차는 [INSTALL.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/INSTALL.md)를 따릅니다. 실환경 값은 `.env.example`을 복사한 로컬 `.env`에만 기록하고 커밋하지 마십시오.
 
----
+하네스 사용법은 먼저 help와 문서를 확인하십시오.
 
-## 기본 제공 확장
+```bash
+scripts/benchmark/g7-performance-toggle.sh --help
+scripts/benchmark/g7-ab-benchmark.sh --help
+scripts/benchmark/g7-search-backend-toggle.sh --help
+```
 
-### 모듈
+실행 대상 SSH host, app root, DB명, URL은 환경변수 또는 명령행 인자로만 전달해야 합니다. 저장소의 스크립트나 문서에 실제 서버 정보를 하드코딩하지 마십시오.
 
-| 모듈 | 설명 |
-|------|------|
-| **sirsoft-board** | 게시판 — 다중 게시판, 댓글, 파일 첨부 |
-| **sirsoft-ecommerce** | 쇼핑몰 — 상품, 주문, 결제, 배송, 쿠폰, 상품 문의 |
-| **sirsoft-page** | 페이지 — 정적 콘텐츠 관리 |
+## 주요 문서
 
-### 플러그인
+- [성능 튜닝 상세 코드 지도·재현 가이드](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-and-implementation-prompt-2026-07-21.md)
+- [게시판 공개용 성능 튜닝 코드 지도](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-board-post-2026-07-21.md)
+- [VM 성능·검색·서버 사양 초기 조사](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-vm-performance-report-2026-07-21.md)
+- [통합 성능 전환 하네스](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-performance-toggle-harness.md)
+- [게시판 성능 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/board-list-bottleneck-analysis-2026-07-15.md)
+- [쇼핑몰 상품 병목 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/ecommerce-product-bottleneck-analysis-2026-07-15.md)
 
-| 플러그인 | 설명 |
-|---------|------|
-| **sirsoft-pay_kginicis** | KG이니시스 결제 연동 |
-| **sirsoft-pay_nicepayments** | 나이스페이먼츠 결제 연동 (통합결제창) |
-| **sirsoft-pay_nhnkcp** | NHN KCP 결제 연동 (Standard Pay) |
-| **sirsoft-verification_kginicis** | KG이니시스 본인인증 |
-| **sirsoft-daum_postcode** | 다음 우편번호 검색 |
-| **sirsoft-marketing** | 마케팅 도구 |
-| **sirsoft-ckeditor5** | CKEditor 5 에디터 |
-| **sirsoft-gdpr** | 개인정보 보호(GDPR) |
+## 배포 예정과 남은 작업
 
-### 템플릿
+정식 태그·배포 ZIP·독립 업데이트 채널은 아직 제공하지 않습니다. 다음 gate를 완료한 뒤 첫 실험 릴리스를 판단합니다.
 
-| 템플릿 | 설명 |
-|--------|------|
-| **sirsoft-admin_basic** | 관리자 기본 템플릿 |
-| **sirsoft-basic** | 사용자 기본 템플릿 |
+1. 기존 검증 VM의 toggle archive/manifest를 benchmark v0.3.2에 재고정하고 `status --strict` 재검증
+2. 네이티브 MySQL 통합검색의 광범위 exact count 재설계
+3. 주문·결제·배송·재고 데이터 생성기와 실쓰기 부하 추가
+4. ecommerce 인덱스를 benchmark 모듈에서 정식 ecommerce migration으로 이전
+5. 동일 R/G 스냅샷의 30분 steady·2시간 soak·spike/breakpoint 실행
+6. 필요할 때만 Manticore를 기존 Scout custom engine으로 제품화
+7. 공개 배포용 changelog, 버전, 설치·원복 gate 확정
 
-### 번들 언어팩
+G7MediaBooster 등 별도 플러그인·제품은 이 저장소에 합치지 않으며 각 제품 저장소에서 독립 배포합니다.
 
-설치 시 함께 동반 설치할 수 있는 공식 언어팩입니다. 코어 + 주요 모듈/플러그인/템플릿이 일관된 번역으로 즉시 사용 가능합니다.
+## 민감정보와 공개 정책
 
-| 식별자 | 설명 |
-| ------ | ---- |
-| **g7-core-ja** | 코어 일본어 |
-| **g7-module-sirsoft-board-ja** | 게시판 모듈 일본어 |
-| **g7-module-sirsoft-ecommerce-ja** | 이커머스 모듈 일본어 |
-| **g7-module-sirsoft-page-ja** | 페이지 모듈 일본어 |
-| **g7-plugin-sirsoft-ckeditor5-ja** | CKEditor5 플러그인 일본어 |
-| **g7-plugin-sirsoft-daum_postcode-ja** | 다음 우편번호 플러그인 일본어 |
-| **g7-plugin-sirsoft-gdpr-ja** | 개인정보 보호(GDPR) 플러그인 일본어 |
-| **g7-plugin-sirsoft-marketing-ja** | 마케팅 플러그인 일본어 |
-| **g7-plugin-sirsoft-pay_kginicis-ja** | KG이니시스 결제 플러그인 일본어 |
-| **g7-plugin-sirsoft-pay_nicepayments-ja** | 나이스페이먼츠 결제 플러그인 일본어 |
-| **g7-plugin-sirsoft-pay_nhnkcp-ja** | NHN KCP 결제 플러그인 일본어 |
-| **g7-plugin-sirsoft-verification_kginicis-ja** | KG이니시스 본인인증 플러그인 일본어 |
-| **g7-template-sirsoft-admin_basic-ja** | 관리자 기본 템플릿 일본어 |
-| **g7-template-sirsoft-basic-ja** | 사용자 기본 템플릿 일본어 |
+이 저장소는 다음 파일을 배포하지 않습니다.
 
-> 한국어/영어는 코어/번들 확장에 내장되어 있으며 설치 없이 항상 활성 상태로 동작합니다. 새 언어는 ZIP 또는 GitHub URL 로 자유롭게 추가할 수 있습니다.
+- `.env*` 실환경 파일, API 키, 토큰, 서비스 계정 JSON
+- SSH 개인키, 인증서 개인키, keystore
+- DB dump, 로컬 SQLite/DB, 백업 파일
+- benchmark 원시 JSON·CSV·프로세스 로그
+- VM 이미지, 디스크 snapshot, 내부 서버 설정
+- Playwright 인증 상태와 브라우저 실행 산출물
 
-### 학습용 샘플 확장
+`.gitignore`는 아직 추적되지 않은 파일만 보호합니다. 비밀값을 한 번이라도 커밋했다면 ignore 추가로 해결되지 않으므로 즉시 키를 폐기·재발급하고 Git 이력을 별도로 정리해야 합니다.
 
-확장 시스템 학습을 위한 최소 구현 샘플입니다. 관리자 UI 에서 "숨김 포함" 토글로 노출되며 CLI 에서는 항상 보입니다.
+공개 가능한 설정은 `*.example` 파일에 placeholder만 기록하고, 실제 host·계정·DB명·URL은 로컬 환경변수로 주입합니다.
 
-| 식별자 | 종류 | 설명 |
-| ------ | ---- | ---- |
-| **gnuboard7-hello_module** | 모듈 | Memo CRUD + 훅 발행 시연 |
-| **gnuboard7-hello_plugin** | 플러그인 | Action/Filter 훅 구독 시연 |
-| **gnuboard7-hello_admin_template** | Admin 템플릿 | Basic 컴포넌트 최소 셋 |
-| **gnuboard7-hello_user_template** | User 템플릿 | 홈 + Memo 리스트 연동 |
+## 업스트림 관리
 
----
+권장 원격 구성은 다음과 같습니다.
 
-## 비즈니스 모델
+| 원격 | 용도 |
+|---|---|
+| `origin` | `https://github.com/jiwonpapa/gnuboard7.git` |
+| `upstream` | `https://github.com/gnuboard/g7.git` |
 
-그누보드7 하나로 다양한 비즈니스를 운영할 수 있습니다.
+업스트림 태그를 확인할 때는 다음처럼 동기화합니다.
 
-| 모델 | 설명 | 상태 |
-|------|------|------|
-| **커뮤니티** | 게시판, 댓글, 회원 관리 | 정식 |
-| **커머스** | 상품 등록, 주문, 결제, 배송 관리 | 정식 |
+```bash
+git remote add upstream https://github.com/gnuboard/g7.git
+git fetch upstream --tags
+git log --oneline 7.0.5..codex/7.0.5-performance-lab
+```
 
----
+업스트림 변경을 이 포크에 반영할 때는 성능 기준선·toggle manifest·DB migration·A/B 결과가 함께 달라지는지 먼저 검토해야 합니다.
 
-## 기존 그누보드 사용자
+## 라이선스와 저작권
 
-기존 그누보드5에서 그누보드7으로 전환할 수 있도록, 회원·게시글·상품 등 주요 데이터의 **마이그레이션 툴을 제공할 예정**입니다.
+- 원본 그누보드7: [SIRSOFT / gnuboard/g7](https://github.com/gnuboard/g7)
+- 기준 버전: 공식 `7.0.5`
+- 라이선스: [MIT](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/LICENSE)
+- 이 저장소의 추가 변경과 보고서는 공식 G7 릴리스가 아닙니다.
 
----
-
-## 문서
-
-| 문서 | 링크 |
-|------|------|
-| 설치 가이드 | [INSTALL.md](INSTALL.md) |
-| 전체 문서 | [docs/README.md](docs/README.md) |
-| 시스템 요구사항 | [docs/requirements.md](docs/requirements.md) |
-| 백엔드 개발 | [docs/backend/README.md](docs/backend/README.md) |
-| 프론트엔드 개발 | [docs/frontend/README.md](docs/frontend/README.md) |
-| 데이터베이스 | [docs/database-guide.md](docs/database-guide.md) |
-| 확장 시스템 | [docs/extension/README.md](docs/extension/README.md) |
-| 모듈 개발 | [docs/extension/module-basics.md](docs/extension/module-basics.md) |
-| 플러그인 개발 | [docs/extension/plugin-development.md](docs/extension/plugin-development.md) |
-| 템플릿 개발 | [docs/extension/template-basics.md](docs/extension/template-basics.md) |
-| 테스트 | [docs/testing-guide.md](docs/testing-guide.md) |
-| API 레퍼런스 | [docs/backend/api/README.md](docs/backend/api/README.md) |
-| API 문서 작성 규정 | [docs/backend/api-documentation.md](docs/backend/api-documentation.md) |
-
----
-
-## 기여하기
-
-그누보드7은 오픈소스 프로젝트입니다. 모든 형태의 기여를 환영합니다.
-
-- 버그 리포트 및 기능 제안: [GitHub Issues](https://github.com/gnuboard/g7/issues)
-- 코드 스타일: Laravel Pint (PSR-12)
-- 테스트: PHPUnit (백엔드) + Vitest (프론트엔드)
-- AI 협업: AI 에이전트용 개발 규칙 명세(AGENTS.md)와 MCP 디버깅 도구를 내장하고 있어, AI 도구와 자연스럽게 협업할 수 있습니다
-
----
-
-## 만든 사람들
-
-**[SIRSOFT](https://sir.kr)** 에서 개발하고 있습니다.
-
-### Core Team
-
-<p>
-  <a href="https://github.com/HeuJung"><img src="https://github.com/HeuJung.png" width="60" alt="HeuJung"></a>&nbsp;&nbsp;
-  <a href="https://github.com/chym1217"><img src="https://github.com/chym1217.png" width="60" alt="chym1217"></a>&nbsp;&nbsp;
-  <a href="https://github.com/thisgun"><img src="https://github.com/thisgun.png" width="60" alt="thisgun"></a>
-</p>
-
-### Contributors
-
-커뮤니티 기여자 목록은 [GitHub Contributors](https://github.com/gnuboard/g7/graphs/contributors)에서 확인할 수 있습니다.
-
----
-
-## 커뮤니티
-
-| 채널 | 링크 |
-|------|------|
-| GitHub | [github.com/gnuboard/g7](https://github.com/gnuboard/g7) |
-| SIR 커뮤니티 | [sir.kr](https://sir.kr) |
-| 문의 | minsup@sir.kr |
-
----
-
-## 변경 기록
-
-최근 변경된 사항에 대한 자세한 내용은 [CHANGELOG](CHANGELOG.md)를 참고해 주세요.
-
----
-
-## 보안 취약점
-
-보안 취약점을 발견하셨다면 [SIR 문의게시판](https://sir.kr/boards/co_qa)에 비밀글로 제보해 주세요.
-
----
-
-## 라이선스
-
-그누보드7은 [MIT 라이선스](LICENSE)에 따라 배포되는 오픈소스 소프트웨어입니다.
-
-Copyright (c) 2026 SIRSOFT
-
----
-
-<p align="center">
-  Made by <a href="https://sir.kr">SIRSOFT</a>
-</p>
+원본 저작권과 `LICENSE`를 유지하며, 포크 변경에 대한 이슈와 검증은 이 저장소에서 별도로 관리합니다.

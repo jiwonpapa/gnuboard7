@@ -26,7 +26,7 @@ scripts/benchmark/g7-performance-toggle.sh off
 # 실제 상태 확인. mixed/drift이면 종료 코드 2
 scripts/benchmark/g7-performance-toggle.sh status --strict
 
-# 공식 7.0.4 코드와 원본 스키마로 전체 복구
+# 공식 7.0.5 코드와 원본 스키마로 전체 복구
 scripts/benchmark/g7-performance-toggle.sh restore-original --scope all --yes
 ```
 
@@ -107,11 +107,11 @@ overall=optimized
 |---|---|---|---|---|
 | `on` | 검토된 optimized ref | optimized | visible·없으면 생성 | 개선 적용 및 측정 |
 | `off` | 공통·게시판은 검토 ref, 쇼핑몰은 공식 ref | baseline | invisible | 빠른 읽기 비교 |
-| `restore-original` | 공식 `7.0.4` | baseline | 실제 삭제 | 코드·DB 정확 복구 |
+| `restore-original` | 공식 `7.0.5` | baseline | 실제 삭제 | 코드·DB 정확 복구 |
 
 `off`의 invisible 인덱스도 쓰기 비용과 디스크는 유지합니다. 쓰기 비용까지 공식 원본과 비교하려면 `restore-original --yes`가 필요합니다.
 
-`restore-original`은 고정된 7.0.4 격리 벤치마크 전용입니다. 이후 기능이 추가된 운영 모듈의 튜닝 해제는 현재 소스 계약을 유지하는 `off`를 사용합니다.
+`restore-original`은 고정된 7.0.5 격리 벤치마크 전용입니다. 이후 기능이 추가된 운영 모듈의 튜닝 해제는 현재 소스 계약을 유지하는 `off`를 사용합니다.
 
 쇼핑몰은 storefront 라우트와 템플릿처럼 환경값만으로 끌 수 없는 변경이 포함돼 `off`에서 공식 소스를 배포합니다. 공통·게시판은 같은 optimized-capable 소스 안에서 baseline 실행 분기를 선택합니다.
 
@@ -201,9 +201,9 @@ A/B 전체 수명 동안 일반 전환과 같은 원격 lock을 보유하므로 
 ## 환경 오버라이드
 
 ```bash
-G7_PERF_HOST=g7devops \
-G7_PERF_ROOT=/home/g7devops/public_html \
-G7_PERF_DB_NAME=g7devops \
+G7_PERF_HOST=g7-benchmark \
+G7_PERF_ROOT=/var/www/gnuboard7 \
+G7_PERF_DB_NAME=gnuboard7 \
 G7_PERF_DB_PREFIX=g7_ \
 G7_PERF_OPTIMIZED_REF=HEAD \
 G7_PERF_BOARD_SLUG=freebd \

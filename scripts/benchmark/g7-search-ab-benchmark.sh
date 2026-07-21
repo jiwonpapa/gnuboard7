@@ -13,12 +13,12 @@ SSH_BIN="${G7_SEARCH_AB_SSH_BIN:-ssh}"
 CURL_BIN="${G7_SEARCH_AB_CURL_BIN:-curl}"
 JQ_BIN="${G7_SEARCH_AB_JQ_BIN:-jq}"
 
-REMOTE_HOST="${G7_SEARCH_AB_HOST:-192.168.0.141}"
-REMOTE_ROOT="${G7_SEARCH_AB_ROOT:-/home/g7bench/public_html}"
-REMOTE_APP_USER="${G7_SEARCH_AB_APP_USER:-g7bench}"
-REMOTE_DB_NAME="${G7_SEARCH_AB_DB_NAME:-g7bench}"
+REMOTE_HOST="${G7_SEARCH_AB_HOST:-g7-benchmark}"
+REMOTE_ROOT="${G7_SEARCH_AB_ROOT:-/var/www/gnuboard7}"
+REMOTE_APP_USER="${G7_SEARCH_AB_APP_USER:-www-data}"
+REMOTE_DB_NAME="${G7_SEARCH_AB_DB_NAME:-gnuboard7}"
 REMOTE_DB_PREFIX="${G7_SEARCH_AB_DB_PREFIX:-g7_}"
-BASE_URL="${G7_SEARCH_AB_BASE_URL:-https://192.168.0.141}"
+BASE_URL="${G7_SEARCH_AB_BASE_URL:-https://g7-benchmark.test}"
 BASELINE_REF="${G7_SEARCH_AB_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_SEARCH_AB_OPTIMIZED_REF:-HEAD}"
 BOARD_SLUG="${G7_SEARCH_AB_BOARD_SLUG:-freebd}"
@@ -50,7 +50,7 @@ Options:
   --board-search TERM     Board-search term. Default: 운영.
   --shop-search TERM      Shop-search term. Default: 노트북 파우치.
   --board-slug SLUG       Public board. Default: freebd.
-  --host HOST             SSH host/IP. Default: 192.168.0.141.
+  --host HOST             SSH host/IP. Default: g7-benchmark.
   --root PATH             Remote G7 root.
   --app-user USER         Remote application user.
   --db NAME               Remote database name.

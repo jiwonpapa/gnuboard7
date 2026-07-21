@@ -5,11 +5,11 @@ set -euo pipefail
 ACTION="${1:-status}"
 [[ $# -gt 0 ]] && shift
 
-REMOTE_HOST="${G7_SEARCH_HOST:-192.168.0.141}"
-REMOTE_ROOT="${G7_SEARCH_ROOT:-/home/g7bench/public_html}"
-REMOTE_APP_USER="${G7_SEARCH_APP_USER:-g7bench}"
+REMOTE_HOST="${G7_SEARCH_HOST:-g7-benchmark}"
+REMOTE_ROOT="${G7_SEARCH_ROOT:-/var/www/gnuboard7}"
+REMOTE_APP_USER="${G7_SEARCH_APP_USER:-www-data}"
 REMOTE_PHP_BIN="${G7_SEARCH_PHP_BIN:-php}"
-BASE_URL="${G7_SEARCH_BASE_URL:-https://192.168.0.141}"
+BASE_URL="${G7_SEARCH_BASE_URL:-https://g7-benchmark.test}"
 SSH_BIN="${G7_SEARCH_SSH_BIN:-ssh}"
 
 usage() {
@@ -25,11 +25,11 @@ The mysql action changes only the G7 connection setting. It intentionally
 leaves the Manticore package, service, configuration, and indexes installed.
 
 Options:
-  --host HOST       SSH host or IP. Default: 192.168.0.141.
-  --root PATH       Remote G7 root. Default: /home/g7bench/public_html.
-  --app-user USER   Remote application user. Default: g7bench.
+  --host HOST       SSH host or IP. Default: g7-benchmark.
+  --root PATH       Remote G7 root. Default: /var/www/gnuboard7.
+  --app-user USER   Remote application user. Default: www-data.
   --php-bin BIN     Remote PHP binary. Default: php.
-  --base-url URL    HTTP smoke URL. Default: https://192.168.0.141.
+  --base-url URL    HTTP smoke URL. Default: https://g7-benchmark.test.
   -h, --help        Show this help.
 EOF
 }
@@ -57,8 +57,7 @@ esac
 
 SSH_OPTIONS=(
     -o BatchMode=yes
-    -o StrictHostKeyChecking=no
-    -o UserKnownHostsFile=/dev/null
+    -o StrictHostKeyChecking=yes
     -o ConnectTimeout=10
     -o ServerAliveInterval=15
     -o ServerAliveCountMax=3

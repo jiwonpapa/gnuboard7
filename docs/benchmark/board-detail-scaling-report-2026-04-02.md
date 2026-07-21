@@ -77,18 +77,18 @@
 핵심 코드:
 
 - 상세에서 이전/다음글 강제 호출:
-  - [PostController.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php#L159)
+  - [PostController.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/src/Http/Controllers/User/PostController.php#L159)
 - 상세가 전체 리스트를 만드는 시작점:
-  - [PostRepository.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L558)
+  - [PostRepository.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L558)
 - 원글 전체 조회:
-  - [PostRepository.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L739)
+  - [PostRepository.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L739)
 - 전체 원글 ID를 `whereIn(parent_id, ...)`로 연결:
-  - [PostRepository.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L745)
+  - [PostRepository.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L745)
 
 ## 목록이 느린 이유
 
 - 목록도 같은 `buildSortedPostList()`를 사용합니다.
-  - [PostRepository.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L36)
+  - [PostRepository.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/src/Repositories/PostRepository.php#L36)
 - 즉 목록도 원글/답글 트리를 조립하는 비용을 같이 집니다.
 - 인덱스는 `board_id + created_at`, `board_id + status`, `board_id + is_notice` 수준이라,
   실제 목록 조건인 `board_id + is_notice + parent_id is null + deleted_at is null + 정렬키`를 한 번에 받쳐주지 못합니다.
@@ -96,8 +96,8 @@
 
 관련 인덱스 정의:
 
-- [create_board_posts_table.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/database/migrations/2026_04_01_000004_create_board_posts_table.php#L50)
-- [add_indexes_to_board_posts_table.php](/Users/neojins/workspace/gnuboard7/modules/_bundled/sirsoft-board/database/migrations/2026_04_01_000012_add_indexes_to_board_posts_table.php#L20)
+- [create_board_posts_table.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/database/migrations/2026_04_01_000004_create_board_posts_table.php#L50)
+- [add_indexes_to_board_posts_table.php](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-board/database/migrations/2026_04_01_000012_add_indexes_to_board_posts_table.php#L20)
 
 ## 핵심 포인트
 

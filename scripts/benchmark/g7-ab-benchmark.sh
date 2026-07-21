@@ -14,15 +14,15 @@ CURL_BIN="${G7_AB_CURL_BIN:-curl}"
 JQ_BIN="${G7_AB_JQ_BIN:-jq}"
 K6_BIN="${G7_AB_K6_BIN:-k6}"
 
-REMOTE_HOST="${G7_PERF_HOST:-g7devops}"
-REMOTE_ROOT="${G7_PERF_ROOT:-/home/g7devops/public_html}"
-REMOTE_APP_USER="${G7_PERF_APP_USER:-g7devops}"
+REMOTE_HOST="${G7_PERF_HOST:-g7-benchmark}"
+REMOTE_ROOT="${G7_PERF_ROOT:-/var/www/gnuboard7}"
+REMOTE_APP_USER="${G7_PERF_APP_USER:-www-data}"
 REMOTE_PHP_BIN="${G7_PERF_PHP_BIN:-php}"
-REMOTE_DB_NAME="${G7_PERF_DB_NAME:-g7devops}"
+REMOTE_DB_NAME="${G7_PERF_DB_NAME:-gnuboard7}"
 REMOTE_DB_PREFIX="${G7_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_PERF_OPTIMIZED_REF:-HEAD}"
-BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
+BASE_URL="${G7_PERF_BASE_URL:-https://g7-benchmark.test}"
 DRAIN_TIMEOUT="${G7_PERF_DRAIN_TIMEOUT:-930}"
 
 REPEATS="${G7_AB_REPEATS:-3}"
@@ -97,7 +97,7 @@ Benchmark options:
   --output-dir PATH        Report directory.
 
 Deployment options:
-  --host HOST              SSH alias. Default: g7devops.
+  --host HOST              SSH alias. Default: g7-benchmark.
   --root PATH              Remote app root.
   --app-user USER          Remote application user.
   --php-bin BIN            Remote PHP binary.

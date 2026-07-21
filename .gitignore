@@ -1,7 +1,4 @@
-*.log
 .DS_Store
-.env
-.env.backup
 .phpactor.json
 .phpunit.result.cache
 /.fleet
@@ -31,7 +28,18 @@ yarn-error.log*
 dev-debug.log
 # Dependency directories
 node_modules/
-# Environment variables
+
+# ===== 환경변수·로컬 설정 =====
+# 모든 실환경 파일을 차단하고 공개 가능한 example 파일만 허용한다.
+.env*
+!**/.env.example
+!**/.env.*.example
+.envrc
+*.local
+docker-compose.override.yml
+compose.override.yml
+/phpunit.xml
+
 # Editor directories and files
 .idea
 .vscode
@@ -106,27 +114,118 @@ storage/installer/
 boost.json
 cypress/
 cypress.config.js
-.env.testing
 .claude/settings.local.json
 
 # ===== 보안: 민감 파일 방어 패턴 =====
+# 비밀·인증정보 디렉터리
+/.secrets/
+/secrets/
+/credentials/
+/certs/
+/certificates/
+/.aws/
+/.azure/
+/.gcloud/
+/.direnv/
+/.ssh/
+/.kube/
+/.ansible-vault-password
+
+# 개인키·인증서·키 저장소
 *.pem
 *.p12
 *.pfx
 *.jks
 *.key
-!storage/*.key
+*.keystore
+*.kdbx
+*.mobileprovision
+*.ovpn
+*.csr
+*.der
+*.crt
+*.cer
+
+# 패키지·CLI 인증정보
+/.npmrc
+/.netrc
+/.pypirc
+/.docker/config.json
+/auth.json
+
+# 서비스 계정·클라우드 SDK 설정
 credentials.json
+credentials*.json
 service-account.json
+service-account*.json
+firebase-adminsdk*.json
+google-services.json
+GoogleService-Info.plist
 id_rsa
+id_rsa.*
 id_ed25519
+id_ed25519.*
 .htpasswd
+
+# DB 덤프·로컬 DB·백업
 *.sql
+*.sql.gz
+*.dump
+*.backup
+*.bak
 *.sqlite
+*.sqlite3
+*.sqlite-*
 *.db
+*.db-*
+
+# Terraform/인프라 상태에는 비밀값이 포함될 수 있다.
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# VM·디스크 이미지
+*.qcow2
+*.qcow2.*
+*.vmdk
+*.vdi
+*.ova
+*.ovf
+*.iso
+*.img
+*.raw
+*.vhd
+*.vhdx
+*.box
+
+# 브라우저·네트워크 캡처
+*.har
+*.pcap
+*.pcapng
 
 # NHN KCP 결제플러그인 PG 공개키는 예외 처리
 !plugins/_bundled/*/bin/pub.key
+
+# ===== 비공개 런타임·벤치마크 산출물 =====
+*.log
+/logs/
+/storage/logs/
+/storage/app/benchmark/
+/storage/app/backups/
+/storage/app/dumps/
+/benchmark-results/
+/k6-results/
+/k6-summary*.json
+/benchmark/raw/
+/benchmark/reports/
+/docs/benchmark/private/
+/docs/benchmark/raw/
+/artifacts/
+/backups/
+/scripts/benchmark/.env*
+/scripts/benchmark/.state/
+/scripts/benchmark/.work/
+/scripts/benchmark/*-secrets.*
 
 .claude/tmp/
 

@@ -8,16 +8,16 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 ACTION="${1:-status}"
 [[ $# -gt 0 ]] && shift
 
-REMOTE_HOST="${G7_BOARD_PERF_HOST:-g7devops}"
-REMOTE_ROOT="${G7_BOARD_PERF_ROOT:-/home/g7devops/public_html}"
-REMOTE_APP_USER="${G7_BOARD_PERF_APP_USER:-g7devops}"
+REMOTE_HOST="${G7_BOARD_PERF_HOST:-g7-benchmark}"
+REMOTE_ROOT="${G7_BOARD_PERF_ROOT:-/var/www/gnuboard7}"
+REMOTE_APP_USER="${G7_BOARD_PERF_APP_USER:-www-data}"
 REMOTE_PHP_BIN="${G7_BOARD_PERF_PHP_BIN:-php}"
-REMOTE_DB_NAME="${G7_BOARD_PERF_DB_NAME:-g7devops}"
+REMOTE_DB_NAME="${G7_BOARD_PERF_DB_NAME:-gnuboard7}"
 REMOTE_DB_PREFIX="${G7_BOARD_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_BOARD_PERF_BASELINE_REF:-7.0.5}"
 BENCHMARK_BASELINE_REF="${G7_BOARD_PERF_BENCHMARK_BASELINE_REF:-e64381ddb5ba02caed60933427fbb86ef72ef94e}"
 OPTIMIZED_REF="${G7_BOARD_PERF_OPTIMIZED_REF:-HEAD}"
-BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://www.g7devops.com}"
+BASE_URL="${G7_BOARD_PERF_BASE_URL:-https://g7-benchmark.test}"
 SSH_CONNECT_TIMEOUT_SECONDS="${G7_BOARD_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-${G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-10}}"
 SSH_SERVER_ALIVE_INTERVAL_SECONDS="${G7_BOARD_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-${G7_PERF_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-15}}"
 SSH_SERVER_ALIVE_COUNT_MAX="${G7_BOARD_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-${G7_PERF_SSH_SERVER_ALIVE_COUNT_MAX:-3}}"
@@ -87,11 +87,11 @@ Actions:
 Options:
   --yes             Required for restore-original.
   --no-smoke        Skip the first-page HTTP smoke request.
-  --host HOST       SSH alias. Default: g7devops
-  --root PATH       Remote app root. Default: /home/g7devops/public_html
-  --app-user USER   Remote PHP-FPM/app user. Default: g7devops
+  --host HOST       SSH alias. Default: g7-benchmark
+  --root PATH       Remote app root. Default: /var/www/gnuboard7
+  --app-user USER   Remote PHP-FPM/app user. Default: www-data
   --php-bin BIN     Remote PHP binary. Default: php
-  --db NAME         Remote database name. Default: g7devops
+  --db NAME         Remote database name. Default: gnuboard7
   --db-prefix NAME  Remote table prefix. Default: g7_
   --baseline REF    Git ref for exact source restore. Default: 7.0.5
   --benchmark-baseline-ref REF

@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 
-const baseUrl = (__ENV.BASE_URL || 'https://www.g7devops.com').replace(/\/$/, '');
+const baseUrl = (__ENV.BASE_URL || 'https://g7-benchmark.test').replace(/\/$/, '');
 const boardSlug = __ENV.BOARD_SLUG || 'freebd';
 const postId = __ENV.POST_ID || '1';
 const productId = __ENV.PRODUCT_ID || '1';

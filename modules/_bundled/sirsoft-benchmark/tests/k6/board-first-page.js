@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 
-const baseUrl = (__ENV.BASE_URL || 'https://www.g7devops.com').replace(/\/$/, '');
+const baseUrl = (__ENV.BASE_URL || 'https://g7-benchmark.test').replace(/\/$/, '');
 const boardSlug = __ENV.BOARD_SLUG || 'gallery';
 const vus = Number.parseInt(__ENV.VUS || '5', 10);
 const duration = __ENV.DURATION || '30s';

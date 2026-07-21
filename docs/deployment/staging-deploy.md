@@ -14,14 +14,14 @@ G7는 활성 확장 디렉토리(`modules/{identifier}`)를 Git 추적 대상에
 
 관련 근거:
 
-- [module-basics.md](/Users/neojins/workspace/gnuboard7/docs/extension/module-basics.md)
-- [extension-update-system.md](/Users/neojins/workspace/gnuboard7/docs/extension/extension-update-system.md)
-- [module-commands.md](/Users/neojins/workspace/gnuboard7/docs/extension/module-commands.md)
+- [module-basics.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/extension/module-basics.md)
+- [extension-update-system.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/extension/extension-update-system.md)
+- [module-commands.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/extension/module-commands.md)
 
 ## 추가된 파일
 
-- [staging.sh](/Users/neojins/workspace/gnuboard7/scripts/deploy/staging.sh)
-- [staging.rsync-filter](/Users/neojins/workspace/gnuboard7/scripts/deploy/staging.rsync-filter)
+- [staging.sh](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/scripts/deploy/staging.sh)
+- [staging.rsync-filter](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/scripts/deploy/staging.rsync-filter)
 
 ## 동작 순서
 

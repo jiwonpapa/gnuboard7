@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 
-const baseUrl = (__ENV.BASE_URL || 'https://www.g7devops.com').replace(/\/$/, '');
+const baseUrl = (__ENV.BASE_URL || 'https://g7-benchmark.test').replace(/\/$/, '');
 const target = __ENV.TARGET || 'list';
 const page = Number.parseInt(__ENV.PAGE || '1', 10);
 const perPage = Number.parseInt(__ENV.PER_PAGE || '12', 10);

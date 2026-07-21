@@ -121,18 +121,18 @@ scripts/benchmark/g7-performance-toggle.sh restore-original --scope board --yes
 
 백업 위치:
 
-`/home/g7devops/backups/board-performance-harness/`
+`/var/backups/gnuboard7/board-performance-harness/`
 
 ## 환경 오버라이드
 
-기본 대상은 `g7devops` SSH alias와 `/home/g7devops/public_html`이다.
+공개 예시 대상은 `g7-benchmark` SSH alias와 `/var/www/gnuboard7`이다. 실제 host·경로·DB명은 로컬 환경변수로만 주입한다.
 
 인덱스 visible/invisible 전환을 사용하는 운영 하네스는 MySQL 8.0+ 전용이다. MariaDB 지원 설치에서는 애플리케이션 코드는 사용할 수 있지만 이 하네스로 A/B 전환하지 않는다.
 
 ```bash
-G7_BOARD_PERF_HOST=g7devops \
-G7_BOARD_PERF_ROOT=/home/g7devops/public_html \
-G7_BOARD_PERF_DB_NAME=g7devops \
+G7_BOARD_PERF_HOST=g7-benchmark \
+G7_BOARD_PERF_ROOT=/var/www/gnuboard7 \
+G7_BOARD_PERF_DB_NAME=gnuboard7 \
 G7_BOARD_PERF_DB_PREFIX=g7_ \
 scripts/benchmark/g7-performance-toggle.sh status --scope board --strict
 ```

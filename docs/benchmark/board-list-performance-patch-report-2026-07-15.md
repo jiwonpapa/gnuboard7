@@ -155,7 +155,7 @@
 
 ## 배포와 롤백
 
-- 배포 백업: `/home/g7devops/backups/board-performance-before-20260715-120748.tar.gz`
+- 배포 백업: 비공개 운영 경로에 보관(공개 저장소 미포함)
 - 배포 중 클라이언트가 35초에 포기한 기존 deep OFFSET SQL은 DB에서 계속 실행돼 ALTER TABLE metadata lock을 막았다. 해당 벤치마크 SELECT 연결만 종료한 뒤 마이그레이션을 완료했다.
 - 이 metadata lock 구간에 루트 요청 503 세 건이 Nginx access log에 남았다. 대형 테이블 인덱스 배포는 maintenance window에서 stale SELECT 확인 후 실행해야 한다.
 - 코드 롤백은 위 백업 복원 후 확장 캐시를 비우고 PHP-FPM을 reload한다.

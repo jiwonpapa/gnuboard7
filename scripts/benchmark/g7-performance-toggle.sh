@@ -13,15 +13,15 @@ STRICT=0
 ASSUME_YES=0
 RUN_SMOKE=1
 RECOVER_FAIL_CLOSED=0
-REMOTE_HOST="${G7_PERF_HOST:-g7devops}"
-REMOTE_ROOT="${G7_PERF_ROOT:-/home/g7devops/public_html}"
-REMOTE_APP_USER="${G7_PERF_APP_USER:-g7devops}"
+REMOTE_HOST="${G7_PERF_HOST:-g7-benchmark}"
+REMOTE_ROOT="${G7_PERF_ROOT:-/var/www/gnuboard7}"
+REMOTE_APP_USER="${G7_PERF_APP_USER:-www-data}"
 REMOTE_PHP_BIN="${G7_PERF_PHP_BIN:-php}"
-REMOTE_DB_NAME="${G7_PERF_DB_NAME:-g7devops}"
+REMOTE_DB_NAME="${G7_PERF_DB_NAME:-gnuboard7}"
 REMOTE_DB_PREFIX="${G7_PERF_DB_PREFIX:-g7_}"
 BASELINE_REF="${G7_PERF_BASELINE_REF:-7.0.5}"
 OPTIMIZED_REF="${G7_PERF_OPTIMIZED_REF:-HEAD}"
-BASE_URL="${G7_PERF_BASE_URL:-https://www.g7devops.com}"
+BASE_URL="${G7_PERF_BASE_URL:-https://g7-benchmark.test}"
 SMOKE_BOARD_SLUG="${G7_PERF_BOARD_SLUG:-freebd}"
 DRAIN_TIMEOUT="${G7_PERF_DRAIN_TIMEOUT:-930}"
 SSH_CONNECT_TIMEOUT_SECONDS="${G7_PERF_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
@@ -66,11 +66,11 @@ Options:
   --recover-fail-closed
                     With `on`, resume a prior fail-closed transition that left
                     maintenance/runtime snapshots on the server.
-  --host HOST       SSH alias. Default: g7devops.
-  --root PATH       Remote app root. Default: /home/g7devops/public_html.
-  --app-user USER   Remote PHP-FPM/app user. Default: g7devops.
+  --host HOST       SSH alias. Default: g7-benchmark.
+  --root PATH       Remote app root. Default: /var/www/gnuboard7.
+  --app-user USER   Remote PHP-FPM/app user. Default: www-data.
   --php-bin BIN     Remote PHP binary. Default: php.
-  --db NAME         Remote database name. Default: g7devops.
+  --db NAME         Remote database name. Default: gnuboard7.
   --db-prefix NAME  Remote table prefix. Default: g7_.
   --baseline REF    Exact official source ref. Default: 7.0.5.
   --optimized-ref REF

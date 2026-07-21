@@ -20,7 +20,7 @@ scripts/benchmark/g7-performance-toggle.sh status --scope ecommerce --strict
 scripts/benchmark/g7-performance-toggle.sh restore-original --scope ecommerce --yes
 ```
 
-모든 전환은 변경 전 파일을 `/home/g7devops/backups/ecommerce-performance-harness`에 보관하고, 번들/활성 모듈과 번들/활성 템플릿을 함께 동기화합니다. optimized 소스는 작업 디렉터리가 아니라 검토·커밋된 Git ref(기본 `HEAD`)에서 생성합니다.
+모든 전환은 변경 전 파일을 `/var/backups/gnuboard7/ecommerce-performance-harness`에 보관하고, 번들/활성 모듈과 번들/활성 템플릿을 함께 동기화합니다. optimized 소스는 작업 디렉터리가 아니라 검토·커밋된 Git ref(기본 `HEAD`)에서 생성합니다. 실제 운영 경로는 공개 문서에 하드코딩하지 않고 로컬 환경변수로 주입합니다.
 
 변경은 항상 `scripts/benchmark/g7-performance-toggle.sh`를 사용합니다. 개별 쇼핑몰 스크립트의 변경 명령은 내부 token 없이는 거부하며 직접 `status`만 허용합니다. 통합 하네스는 세 영역에 하나의 원격 lock을 적용합니다.
 
