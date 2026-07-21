@@ -13,6 +13,7 @@
 3. LIKE fallback 자동 적용: FULLTEXT 미지원 DBMS(SQLite, PostgreSQL)에서 자동 전환
 4. 확장 포인트: core.search.engine_drivers 필터 훅으로 Meilisearch 등 커스텀 엔진 등록 가능
 5. AsUnicodeJson 캐스트: JSON 컬럼 FULLTEXT 검색 시 한글 \uXXXX 이스케이프 방지 필수
+6. Scout는 검색엔진이 아닌 드라이버 계층이며, 외부 엔진은 Scout `Engine` 구현으로 연결
 ```
 
 ---
@@ -205,6 +206,8 @@ public function boot(): void
 ```
 
 등록 후 `.env`에서 `SCOUT_DRIVER=meilisearch`로 전환하면 해당 엔진이 사용됩니다.
+
+Laravel Scout 자체가 모든 전문 검색엔진을 내장하는 것은 아닙니다. 기본 제공 목록에 없는 Manticore 같은 엔진도 `Laravel\Scout\Engines\Engine`을 구현해 위 훅으로 등록할 수 있습니다. 별도의 검색 driver/registry를 다시 만들지 말고 기존 Scout `EngineManager`를 정본으로 사용합니다. 단, 엔진 등록만으로 Scout를 사용하지 않는 기존 Repository 검색이 자동 전환되지는 않으므로 각 검색 경로는 `Model::search()` 등 Scout 진입점을 사용하도록 연결해야 합니다.
 
 ### ScoutServiceProvider 동작 흐름
 
