@@ -6,6 +6,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Modules\Sirsoft\Benchmark\Enums\GenerationJobStatus;
 use Modules\Sirsoft\Benchmark\Models\GenerationJob;
@@ -22,6 +23,18 @@ class ResetGenerationJob implements ShouldQueue
     public function __construct(
         public int $generationJobId
     ) {}
+
+    /**
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping("sirsoft-benchmark-reset-{$this->generationJobId}"))
+                ->releaseAfter(5)
+                ->expireAfter($this->timeout + 60),
+        ];
+    }
 
     public function handle(DummyDataResetService $resetService): void
     {

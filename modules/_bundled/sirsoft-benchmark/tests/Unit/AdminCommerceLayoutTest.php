@@ -19,5 +19,7 @@ class AdminCommerceLayoutTest extends TestCase
         $this->assertStringContainsString('쇼핑몰 상품 데이터', $json);
         $this->assertStringContainsString('form.total_products', $json);
         $this->assertStringContainsString('generated?.product_images', $json);
+        $this->assertStringContainsString("{{error.message ?? '초기화 요청에 실패했습니다.'}}", $json);
+        $this->assertStringNotContainsString('{{$error.', $json);
     }
 }

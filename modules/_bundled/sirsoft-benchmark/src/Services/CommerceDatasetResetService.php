@@ -118,6 +118,7 @@ class CommerceDatasetResetService
         $deleted = $this->imagePoolService->storage()->deleteDirectory('images', "benchmark/job-{$job->id}");
         $state['cleanup']['deleted_files'] = $deleted;
         $state['reset_phase'] = 'completed';
+        $state['reset_finished_at'] = now()->toIso8601String();
         $job = $this->heartbeat($job, $state, '쇼핑몰 데이터셋 초기화 완료');
         $job = $this->progressReporter->markCompleted($job, '쇼핑몰 데이터셋 초기화가 완료되었습니다.');
         $this->logger->warning($job, '쇼핑몰 데이터셋 초기화가 완료되었습니다.', GenerationStage::Resetting->value, $state['cleanup']);
@@ -127,12 +128,35 @@ class CommerceDatasetResetService
 
     private function heartbeat(GenerationJob $job, array $state, string $message): GenerationJob
     {
-        $job = $this->progressReporter->heartbeat($job->fresh(), [
-            'runtime_state' => $state,
-            'current_stage' => GenerationStage::Resetting,
-        ], $message);
+        $job = $job->fresh();
+        $job->runtime_state = $state;
+        $job->current_stage = GenerationStage::Resetting;
+        $job->current_step = $message;
+        $job->progress_percent = $this->calculateResetProgress($job, $state);
+        $job->last_heartbeat_at = now();
+        $job->save();
+        $job = $job->refresh();
         $this->logger->warning($job, $message, GenerationStage::Resetting->value, $state['cleanup'] ?? []);
 
         return $job;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    private function calculateResetProgress(GenerationJob $job, array $state): float
+    {
+        $phase = (string) ($state['reset_phase'] ?? 'preflight');
+        $cleanup = is_array($state['cleanup'] ?? null) ? $state['cleanup'] : [];
+
+        return match ($phase) {
+            'preflight' => 0.0,
+            'products' => round(min(1, (int) ($cleanup['deleted_products'] ?? 0) / max(1, (int) $job->generated_products)) * 80, 2),
+            'categories' => round(80 + (min(1, (int) ($cleanup['deleted_categories'] ?? 0) / max(1, (int) $job->generated_categories)) * 10), 2),
+            'brands' => round(90 + (min(1, (int) ($cleanup['deleted_brands'] ?? 0) / max(1, (int) $job->generated_brands)) * 5), 2),
+            'files' => 95.0,
+            'completed' => 100.0,
+            default => 0.0,
+        };
     }
 }

@@ -88,37 +88,66 @@ class BoardCounterSyncService
 
         foreach ($this->normalizeBoardIds($boardIds) as $boardId) {
             $this->syncBoardDerivedState($boardId);
-
-            $board = Board::query()->find($boardId, ['id', 'slug']);
-
-            $postsCount = (int) DB::table('board_posts')
-                ->where('board_id', $boardId)
-                ->whereNull('deleted_at')
-                ->count();
-
-            $commentsCount = (int) DB::table('board_comments')
-                ->where('board_id', $boardId)
-                ->whereNull('deleted_at')
-                ->count();
-
-            Board::query()
-                ->where('id', $boardId)
-                ->update([
-                    'posts_count' => $postsCount,
-                    'comments_count' => $commentsCount,
-                    'updated_at' => now(),
-                ]);
-
-            $this->boardCacheInvalidator->invalidate($boardId, $board?->slug);
-
-            $summaries[] = [
-                'board_id' => $boardId,
-                'posts_count' => $postsCount,
-                'comments_count' => $commentsCount,
-            ];
+            $summaries[] = $this->syncBoardTotals($boardId);
         }
 
         return $summaries;
+    }
+
+    /**
+     * 벤치마크 데이터 삭제 후 게시판 합계만 다시 계산합니다.
+     *
+     * 벤치마크 댓글은 같은 작업에서 생성한 게시글에만 연결되므로 해당 게시글과
+     * 댓글을 모두 삭제한 뒤 남은 게시글의 comments_count 전체 재계산은 불필요합니다.
+     * 수백만 건 UPDATE/GROUP BY를 생략해 초기화 완료 지연을 방지합니다.
+     *
+     * @param  array<int>  $boardIds
+     * @return array<int, array<string, int>>
+     */
+    public function syncBoardTotalsAfterDatasetDeletion(array $boardIds): array
+    {
+        $summaries = [];
+
+        foreach ($this->normalizeBoardIds($boardIds) as $boardId) {
+            $this->pruneOrphanAuthorTermsForBoard($boardId);
+            $summaries[] = $this->syncBoardTotals($boardId);
+        }
+
+        return $summaries;
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function syncBoardTotals(int $boardId): array
+    {
+        $board = Board::query()->find($boardId, ['id', 'slug']);
+
+        $postsCount = (int) DB::table('board_posts')
+            ->where('board_id', $boardId)
+            ->whereNull('deleted_at')
+            ->count();
+
+        $commentsCount = (int) DB::table('board_comments')
+            ->where('board_id', $boardId)
+            ->whereNull('deleted_at')
+            ->count();
+
+        Board::query()
+            ->where('id', $boardId)
+            ->update([
+                'posts_count' => $postsCount,
+                'comments_count' => $commentsCount,
+                'updated_at' => now(),
+            ]);
+
+        $this->boardCacheInvalidator->invalidate($boardId, $board?->slug);
+
+        return [
+            'board_id' => $boardId,
+            'posts_count' => $postsCount,
+            'comments_count' => $commentsCount,
+        ];
     }
 
     /**
@@ -146,6 +175,32 @@ class BoardCounterSyncService
                     ->where('author_name', '<>', '')
                     ->distinct()
             );
+        } catch (QueryException $exception) {
+            if (! $this->isMissingAuthorTermsTable($exception)) {
+                throw $exception;
+            }
+
+            $this->authorTermsAvailable = false;
+        }
+    }
+
+    private function pruneOrphanAuthorTermsForBoard(int $boardId): void
+    {
+        if (! $this->hasAuthorTermsTable()) {
+            return;
+        }
+
+        try {
+            DB::table('board_post_author_terms')
+                ->where('board_id', $boardId)
+                ->whereNotExists(function ($query) {
+                    $query->selectRaw('1')
+                        ->from('board_posts')
+                        ->whereColumn('board_posts.board_id', 'board_post_author_terms.board_id')
+                        ->whereColumn('board_posts.author_name', 'board_post_author_terms.author_name')
+                        ->whereNull('board_posts.deleted_at');
+                })
+                ->delete();
         } catch (QueryException $exception) {
             if (! $this->isMissingAuthorTermsTable($exception)) {
                 throw $exception;

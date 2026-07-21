@@ -7,6 +7,19 @@ $ecommerceVariant = env('G7_ECOMMERCE_PERFORMANCE_VARIANT', 'optimized');
 return [
     /*
     |--------------------------------------------------------------------------
+    | Benchmark worker routing
+    |--------------------------------------------------------------------------
+    |
+    | 큐 설정은 config cache에 포함되어야 하므로 서비스에서 env()를 직접
+    | 읽지 않습니다. 이름이 비어 있으면 선택한 connection의 기본 queue를
+    | 사용합니다.
+    |
+    */
+    'queue_connection' => env('BENCHMARK_QUEUE_CONNECTION', env('QUEUE_CONNECTION', 'database')),
+    'queue_name' => env('BENCHMARK_QUEUE_NAME'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Common bootstrap performance variant
     |--------------------------------------------------------------------------
     |

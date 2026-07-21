@@ -140,6 +140,15 @@ const TestPageHeader: React.FC<{
     </div>
 );
 
+const TestModal: React.FC<{
+    title?: string;
+    children?: React.ReactNode;
+}> = ({ title, children }) => (
+    <div role="dialog" aria-label={title}>
+        {children}
+    </div>
+);
+
 const TestFragment: React.FC<{
     children?: React.ReactNode;
 }> = ({ children }) => <>{children}</>;
@@ -161,6 +170,7 @@ function setupTestRegistry(): ComponentRegistry {
         Select: { component: TestSelect, metadata: { name: 'Select', type: 'composite' } },
         Icon: { component: TestIcon, metadata: { name: 'Icon', type: 'basic' } },
         PageHeader: { component: TestPageHeader, metadata: { name: 'PageHeader', type: 'composite' } },
+        Modal: { component: TestModal, metadata: { name: 'Modal', type: 'composite' } },
     };
 
     return registry;
@@ -212,5 +222,71 @@ describe('admin_benchmark_dashboard 레이아웃', () => {
 
         expect(screen.getByRole('button', { name: '예상 생성량 계산' })).toHaveAttribute('type', 'button');
         expect(screen.getByRole('button', { name: '생성 시작' })).toHaveAttribute('type', 'button');
+    });
+
+    it('작업 상세에서 대상 게시판과 초기화 삭제 결과를 명확하게 표시한다', async () => {
+        testUtils = createLayoutTest(benchmarkLayout, {
+            componentRegistry: registry,
+            routeParams: { id: '4' },
+            auth: {
+                isAuthenticated: true,
+                authType: 'admin',
+                user: { id: 1, name: 'Admin', role: 'admin' },
+            },
+        });
+        testUtils.mockApi('selectedJob', {
+            response: {
+                data: {
+                    id: 4,
+                    dataset_name: 'benchmark-dataset2',
+                    target_summary: '자유게시판 (freebd, ID 1) · 게시글 1,000,000건',
+                    workload_type: 'board',
+                    status: 'completed',
+                    current_stage: 'completed',
+                    progress_percent: 100,
+                    current_step: '데이터셋 초기화가 완료되었습니다.',
+                    reset: {
+                        is_reset: true,
+                        is_completed: true,
+                        phase: 'completed',
+                        cleanup: {
+                            deleted_posts: 1000000,
+                            deleted_comments: 1254010,
+                            deleted_users: 10000,
+                        },
+                        expected: {
+                            posts: 1000000,
+                            comments: 1254010,
+                            users: 10000,
+                        },
+                    },
+                    verification: null,
+                },
+            },
+        });
+        testUtils.mockApi('jobs', { response: { data: [], meta: {} } });
+        testUtils.mockApi('selectedLogs', { response: { data: [] } });
+        testUtils.mockApi('availableBoards', { response: { data: [] } });
+
+        await testUtils.render();
+
+        testUtils.assertNoValidationErrors();
+        expect(screen.getByText('생성·초기화 대상')).toBeInTheDocument();
+        expect(screen.getByText('자유게시판 (freebd, ID 1) · 게시글 1,000,000건')).toBeInTheDocument();
+        expect(screen.getByText('초기화 완료 · completed')).toBeInTheDocument();
+        expect(screen.getByText('게시글 삭제 1000000 / 1000000')).toBeInTheDocument();
+        expect(screen.getByText('댓글 삭제 1254010 / 1254010')).toBeInTheDocument();
+        expect(screen.getByText('더미회원 삭제 10000 / 10000')).toBeInTheDocument();
+    });
+
+    it('초기화 버튼은 즉시 삭제하지 않고 대상 확인 모달을 연다', () => {
+        const serialized = JSON.stringify(benchmarkLayout);
+        const resetModal = benchmarkLayout.modals.find((modal: { id?: string }) => modal.id === 'reset_confirm_modal');
+
+        expect(resetModal).toBeTruthy();
+        expect(serialized).toContain('생성·초기화 대상');
+        expect(serialized).toContain('대상: {{job.target_summary}}');
+        expect(serialized).toContain('"handler":"openModal","target":"reset_confirm_modal"');
+        expect(serialized).toContain('확인 후 초기화');
     });
 });

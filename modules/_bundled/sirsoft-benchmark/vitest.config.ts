@@ -15,7 +15,6 @@ function findProjectRoot(startDir: string): string {
 }
 
 const projectRoot = findProjectRoot(__dirname);
-
 export default defineConfig({
     root: __dirname,
     test: {
@@ -23,7 +22,7 @@ export default defineConfig({
         environment: 'jsdom',
         include: ['resources/js/**/*.{test,spec}.{ts,tsx}'],
         exclude: ['node_modules/', 'dist/'],
-        setupFiles: [path.resolve(projectRoot, 'resources/js/tests/setup.ts')],
+        setupFiles: ['./resources/js/__tests__/setup.ts'],
     },
     resolve: {
         alias: {

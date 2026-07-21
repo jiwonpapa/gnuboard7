@@ -5,12 +5,14 @@ const logger = ((window as any).G7Core?.createLogger?.('Handler:BenchmarkAutoRef
 };
 
 const AUTO_REFRESH_KEY = '__sirsoftBenchmarkAutoRefresh';
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'stopping']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped']);
 
 type AutoRefreshState = {
     intervalId: number;
     intervalMs: number;
     routeId: string;
+    tick: number;
+    refreshing: boolean;
 };
 
 function getCore(): any {
@@ -75,10 +77,16 @@ async function refetchDataSource(dataSourceId: string): Promise<void> {
         return;
     }
 
-    await core.dataSource.refetch(dataSourceId, { sync: true });
+    await core.dataSource.refetch(dataSourceId);
 }
 
 async function refreshBenchmarkState(): Promise<void> {
+    const refreshState = getAutoRefreshState();
+
+    if (!refreshState || refreshState.refreshing) {
+        return;
+    }
+
     if (!isBenchmarkPage()) {
         clearAutoRefresh('left benchmark page');
         return;
@@ -88,15 +96,35 @@ async function refreshBenchmarkState(): Promise<void> {
         return;
     }
 
-    await Promise.allSettled([
-        refetchDataSource('jobs'),
-        refetchDataSource('selectedJob'),
-        refetchDataSource('selectedLogs'),
-    ]);
+    refreshState.refreshing = true;
 
-    const status = getSelectedJobStatus();
-    if (status && TERMINAL_STATUSES.has(status)) {
-        clearAutoRefresh(`terminal status: ${status}`);
+    try {
+        refreshState.tick++;
+
+        // 상세 상태를 우선 갱신하고, 로그와 최근 목록은 낮은 주기로 순차 갱신합니다.
+        // 동시 sync refetch가 전역 transition을 반복 토글해 화면이 깜빡이던 문제를 방지합니다.
+        await refetchDataSource('selectedJob');
+
+        const status = getSelectedJobStatus();
+        if (status && TERMINAL_STATUSES.has(status)) {
+            await refetchDataSource('selectedLogs');
+            await refetchDataSource('jobs');
+            clearAutoRefresh(`terminal status: ${status}`);
+
+            return;
+        }
+
+        if (refreshState.tick % 2 === 0) {
+            await refetchDataSource('selectedLogs');
+        }
+
+        if (refreshState.tick % 3 === 0) {
+            await refetchDataSource('jobs');
+        }
+    } catch (error) {
+        logger.error('[startAutoRefresh] refresh failed', error);
+    } finally {
+        refreshState.refreshing = false;
     }
 }
 
@@ -104,7 +132,7 @@ export async function startAutoRefreshHandler(action: any, _context?: any): Prom
     const enabled = normalizeBoolean(action?.params?.enabled ?? true);
     const routeId = String(action?.params?.routeId ?? '').trim();
     const intervalValue = Number(action?.params?.interval ?? 5000);
-    const intervalMs = Number.isFinite(intervalValue) && intervalValue >= 1000 ? intervalValue : 5000;
+    const intervalMs = Number.isFinite(intervalValue) && intervalValue >= 3000 ? intervalValue : 5000;
 
     if (!enabled || routeId === '' || !isBenchmarkPage()) {
         clearAutoRefresh('disabled');
@@ -127,6 +155,8 @@ export async function startAutoRefreshHandler(action: any, _context?: any): Prom
         intervalId,
         intervalMs,
         routeId,
+        tick: 0,
+        refreshing: false,
     } satisfies AutoRefreshState;
 
     logger.log('[startAutoRefresh] started', { routeId, intervalMs });

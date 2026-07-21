@@ -2,6 +2,7 @@
 
 namespace Modules\Sirsoft\Benchmark\Services;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Benchmark\Enums\GenerationJobStatus;
 use Modules\Sirsoft\Benchmark\Enums\GenerationStage;
@@ -12,6 +13,7 @@ use Modules\Sirsoft\Benchmark\Models\GenerationJob;
 use Modules\Sirsoft\Benchmark\Services\Support\CommerceDatasetPlanner;
 use Modules\Sirsoft\Benchmark\Services\Support\DatasetPlanner;
 use Modules\Sirsoft\Benchmark\Services\Support\GenerationJobLogger;
+use Throwable;
 
 class GenerationJobService
 {
@@ -129,9 +131,40 @@ class GenerationJobService
 
     public function dispatchReset(GenerationJob $job): void
     {
+        try {
+            $this->dispatchResetJob(
+                $job,
+                $this->resolveQueueConnection(),
+                $this->resolveQueueName()
+            );
+        } catch (Throwable $exception) {
+            $job->status = GenerationJobStatus::Failed;
+            $job->current_stage = GenerationStage::Resetting;
+            $job->current_step = '초기화 큐 등록에 실패했습니다.';
+            $job->last_error = $exception->getMessage();
+            $job->last_heartbeat_at = now();
+            $job->save();
+
+            try {
+                $this->logger->error(
+                    $job,
+                    '초기화 큐 등록에 실패했습니다.',
+                    GenerationStage::Resetting->value,
+                    ['exception' => $exception::class]
+                );
+            } catch (Throwable) {
+                // 원래 dispatch 예외를 보존합니다.
+            }
+
+            throw $exception;
+        }
+    }
+
+    protected function dispatchResetJob(GenerationJob $job, string $connection, string $queue): void
+    {
         ResetGenerationJob::dispatch($job->id)
-            ->onConnection($this->resolveQueueConnection())
-            ->onQueue($this->resolveQueueName());
+            ->onConnection($connection)
+            ->onQueue($queue);
     }
 
     public function requestStop(GenerationJob $job): GenerationJob
@@ -162,6 +195,7 @@ class GenerationJobService
         $job->stop_requested_at = null;
         $job->last_error = null;
         $job->current_step = '재개 대기 중';
+        $job->finished_at = null;
         $job->save();
 
         if ($job->current_stage === GenerationStage::Resetting) {
@@ -186,37 +220,54 @@ class GenerationJobService
         return $newJob;
     }
 
-    public function prepareReset(GenerationJob $job): GenerationJob
+    public function prepareReset(GenerationJob $job): ?GenerationJob
     {
-        $runtimeState = $job->runtime_state ?? [];
-        $runtimeState['reset_board_index'] = 0;
-        $runtimeState['reset_user_segment_index'] = 0;
-        $runtimeState['cleanup'] = [
-            'deleted_posts' => 0,
-            'deleted_comments' => 0,
-            'deleted_users' => 0,
-        ];
-        if ($job->workload_type === WorkloadType::Commerce) {
-            $runtimeState['reset_phase'] = 'preflight';
+        return DB::transaction(function () use ($job): ?GenerationJob {
+            $job = GenerationJob::query()->lockForUpdate()->findOrFail($job->getKey());
+
+            if (in_array($job->status, [GenerationJobStatus::Running, GenerationJobStatus::Stopping], true)) {
+                return null;
+            }
+
+            $runtimeState = $job->runtime_state ?? [];
             $runtimeState['cleanup'] = [
-                'deleted_products' => 0,
-                'deleted_categories' => 0,
-                'deleted_brands' => 0,
-                'deleted_files' => false,
+                'deleted_posts' => 0,
+                'deleted_comments' => 0,
+                'deleted_users' => 0,
             ];
-        }
+            $runtimeState['reset_board_index'] = 0;
+            $runtimeState['reset_user_segment_index'] = 0;
+            $runtimeState['reset_delete_cursor'] = 0;
+            $runtimeState['reset_started_at'] = now()->toIso8601String();
+            $runtimeState['reset_finished_at'] = null;
+            if ($job->workload_type === WorkloadType::Commerce) {
+                $runtimeState['reset_phase'] = 'preflight';
+                $runtimeState['cleanup'] = [
+                    'deleted_products' => 0,
+                    'deleted_categories' => 0,
+                    'deleted_brands' => 0,
+                    'deleted_files' => false,
+                ];
+            } else {
+                $runtimeState['reset_phase'] = 'comments';
+            }
 
-        $job->status = GenerationJobStatus::Running;
-        $job->current_stage = GenerationStage::Resetting;
-        $job->current_step = '데이터셋 초기화 대기 중';
-        $job->stop_requested_at = null;
-        $job->runtime_state = $runtimeState;
-        $job->started_at = $job->started_at ?? now();
-        $job->save();
+            $job->status = GenerationJobStatus::Running;
+            $job->current_stage = GenerationStage::Resetting;
+            $job->current_step = '데이터셋 초기화 대기 중';
+            $job->progress_percent = 0;
+            $job->stop_requested_at = null;
+            $job->finished_at = null;
+            $job->last_error = null;
+            $job->last_heartbeat_at = now();
+            $job->runtime_state = $runtimeState;
+            $job->started_at = $job->started_at ?? now();
+            $job->save();
 
-        $this->logger->warning($job, '데이터셋 초기화가 요청되었습니다.', GenerationStage::Resetting->value);
+            $this->logger->warning($job, '데이터셋 초기화가 요청되었습니다.', GenerationStage::Resetting->value);
 
-        return $job->refresh();
+            return $job->refresh();
+        });
     }
 
     /**
@@ -311,31 +362,26 @@ class GenerationJobService
         return substr("bm-job-{$jobId}-{$base}", 0, 120);
     }
 
-    private function resolveQueueName(): string
+    protected function resolveQueueName(): string
     {
-        $configuredQueue = trim((string) env('BENCHMARK_QUEUE_NAME', ''));
+        $configuredQueue = trim((string) config('benchmark.queue_name', ''));
         if ($configuredQueue !== '') {
             return $configuredQueue;
         }
 
-        $defaultConnection = (string) config('queue.default', 'redis');
-        $defaultQueue = config("queue.connections.{$defaultConnection}.queue");
+        $queueConnection = $this->resolveQueueConnection();
+        $defaultQueue = config("queue.connections.{$queueConnection}.queue");
 
         return is_string($defaultQueue) && trim($defaultQueue) !== ''
             ? trim($defaultQueue)
             : 'default';
     }
 
-    private function resolveQueueConnection(): string
+    protected function resolveQueueConnection(): string
     {
-        $configuredConnection = trim((string) env('BENCHMARK_QUEUE_CONNECTION', ''));
+        $configuredConnection = trim((string) config('benchmark.queue_connection', ''));
         if ($configuredConnection !== '') {
             return $configuredConnection;
-        }
-
-        $queueConnection = trim((string) env('QUEUE_CONNECTION', ''));
-        if ($queueConnection !== '') {
-            return $queueConnection;
         }
 
         $defaultConnection = trim((string) config('queue.default', ''));
