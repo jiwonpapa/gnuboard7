@@ -17,6 +17,9 @@ HOST="${G7_OCTANE_HOST:-127.0.0.1}"
 BASELINE_PORT="${G7_OCTANE_BASELINE_PORT:-18080}"
 OCTANE_PORT="${G7_OCTANE_PORT:-18081}"
 OCTANE_RPC_PORT="${G7_OCTANE_RPC_PORT:-16001}"
+FRANKENPHP_ADMIN_PORT="${G7_OCTANE_FRANKENPHP_ADMIN_PORT:-2019}"
+FRANKENPHP_DB_SOCKET="${G7_OCTANE_FRANKENPHP_DB_SOCKET:-}"
+OCTANE_SERVER="${G7_OCTANE_SERVER:-roadrunner}"
 BASELINE_URL="${G7_OCTANE_BASELINE_URL:-}"
 REQUEST_HOST="${G7_OCTANE_REQUEST_HOST:-}"
 WORKERS="${G7_OCTANE_WORKERS:-2}"
@@ -63,7 +66,13 @@ Run options:
                       useful for a real Nginx vhost and loopback Octane comparison.
   --baseline-port N   Managed baseline port. Default: 18080.
   --octane-port N     Temporary Octane HTTP port. Default: 18081.
+  --server NAME       Octane server: roadrunner or frankenphp.
+                      Default: roadrunner.
   --rpc-port N        Temporary RoadRunner RPC port. Default: 16001.
+  --admin-port N      Temporary FrankenPHP admin port. Default: 2019.
+  --frankenphp-db-socket PATH
+                      Explicit MySQL socket for FrankenPHP's embedded PHP. If
+                      omitted, a usable system PHP socket is detected when needed.
   --workers N         Octane worker count. The managed PHP baseline uses the same
                       value; an external PHP-FPM baseline must be matched separately.
                       Default: 2.
@@ -82,8 +91,9 @@ Run options:
                       Minimum Octane/baseline requests-per-second ratio. Default: 0.90.
   --no-performance-gate
                       Record performance without failing on the ratios.
-  --reload-probe      Fire a harmless plugin-updated hook and require the
-                      running Octane worker process to be replaced.
+  --reload-probe      Fire a harmless plugin-updated hook. RoadRunner must
+                      replace worker PIDs; FrankenPHP must accept a Caddy
+                      worker reload and retain the configured worker count.
   --output-dir PATH   Result directory. Default: storage/app/benchmark/octane-ab/<UTC>.
 
 Restore options:
@@ -92,6 +102,8 @@ Restore options:
 Examples:
   scripts/benchmark/octane-ab-harness.sh doctor
   scripts/benchmark/octane-ab-harness.sh run --vus 10 --duration 30s
+  scripts/benchmark/octane-ab-harness.sh run --server frankenphp \
+    --workers 2 --admin-port 2019
   scripts/benchmark/octane-ab-harness.sh run \
     --baseline-url http://127.0.0.1 --request-host www.example.test \
     --performance-path /api/modules/sirsoft-board/boards
@@ -108,7 +120,10 @@ while [[ $# -gt 0 ]]; do
         --request-host) shift; REQUEST_HOST="${1:-}" ;;
         --baseline-port) shift; BASELINE_PORT="${1:-}" ;;
         --octane-port) shift; OCTANE_PORT="${1:-}" ;;
+        --server) shift; OCTANE_SERVER="${1:-}" ;;
         --rpc-port) shift; OCTANE_RPC_PORT="${1:-}" ;;
+        --admin-port) shift; FRANKENPHP_ADMIN_PORT="${1:-}" ;;
+        --frankenphp-db-socket) shift; FRANKENPHP_DB_SOCKET="${1:-}" ;;
         --workers) shift; WORKERS="${1:-}" ;;
         --max-requests) shift; MAX_REQUESTS="${1:-}" ;;
         --vus) shift; VUS="${1:-}" ;;
@@ -143,6 +158,8 @@ validate_number() {
 }
 
 validate_options() {
+    [[ "${OCTANE_SERVER}" == roadrunner || "${OCTANE_SERVER}" == frankenphp ]] \
+        || fail 'server must be roadrunner or frankenphp'
     validate_number workers "${WORKERS}" 1
     validate_number max-requests "${MAX_REQUESTS}" 1
     validate_number vus "${VUS}" 1
@@ -150,7 +167,13 @@ validate_options() {
     validate_number smoke-repeats "${SMOKE_REPEATS}" 1
     validate_number baseline-port "${BASELINE_PORT}" 1024
     validate_number octane-port "${OCTANE_PORT}" 1024
-    validate_number rpc-port "${OCTANE_RPC_PORT}" 1024
+    if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+        validate_number rpc-port "${OCTANE_RPC_PORT}" 1024
+    else
+        validate_number admin-port "${FRANKENPHP_ADMIN_PORT}" 1024
+        [[ "${HOST}" == 127.0.0.1 || "${HOST}" == ::1 ]] \
+            || fail 'FrankenPHP harness runs must bind to a loopback host'
+    fi
     validate_number performance-status "${PERF_EXPECTED_STATUS}" 100
     [[ "${DURATION}" =~ ^[1-9][0-9]*(ms|s|m)$ ]] || fail 'duration must look like 500ms, 15s, or 2m'
     [[ "${PERF_PATH}" == /* ]] || fail 'performance-path must start with /'
@@ -159,6 +182,10 @@ validate_options() {
     if [[ -n "${REQUEST_HOST}" ]]; then
         [[ "${REQUEST_HOST}" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
             || fail 'request-host must be a DNS host with an optional port'
+    fi
+    if [[ -n "${FRANKENPHP_DB_SOCKET}" ]]; then
+        [[ "${FRANKENPHP_DB_SOCKET}" == /* ]] \
+            || fail 'frankenphp-db-socket must be an absolute path'
     fi
 
     local probe path status
@@ -193,6 +220,7 @@ doctor() {
 
     local failed=0
     log "repository=${REPO_ROOT}"
+    log "octane_server=${OCTANE_SERVER}"
     log "php=$(${PHP_BIN} -r 'echo PHP_VERSION;')"
     log "composer=$(${COMPOSER_BIN} --version --no-ansi 2>/dev/null | head -1)"
     log "k6=$(${K6_BIN} version 2>/dev/null | head -1)"
@@ -219,8 +247,13 @@ doctor() {
         log "octane_port=busy:${OCTANE_PORT}"
         failed=1
     fi
-    if port_is_open "${HOST}" "${OCTANE_RPC_PORT}"; then
-        log "octane_rpc_port=busy:${OCTANE_RPC_PORT}"
+    if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+        if port_is_open "${HOST}" "${OCTANE_RPC_PORT}"; then
+            log "octane_rpc_port=busy:${OCTANE_RPC_PORT}"
+            failed=1
+        fi
+    elif port_is_open "${HOST}" "${FRANKENPHP_ADMIN_PORT}"; then
+        log "frankenphp_admin_port=busy:${FRANKENPHP_ADMIN_PORT}"
         failed=1
     fi
 
@@ -237,7 +270,7 @@ doctor() {
 stop_owned_processes() {
     if [[ -n "${OCTANE_PID}" ]] && kill -0 "${OCTANE_PID}" 2>/dev/null; then
         if [[ -f "${REPO_ROOT}/artisan" ]] && "${PHP_BIN}" artisan list --raw 2>/dev/null | grep -q '^octane:stop'; then
-            "${PHP_BIN}" artisan octane:stop --server=roadrunner --no-interaction >/dev/null 2>&1 || true
+            "${PHP_BIN}" artisan octane:stop --server="${OCTANE_SERVER}" --no-interaction >/dev/null 2>&1 || true
         fi
         kill "${OCTANE_PID}" 2>/dev/null || true
         wait "${OCTANE_PID}" 2>/dev/null || true
@@ -258,7 +291,11 @@ snapshot_state() {
     local original_vendor=0
     [[ -d "${REPO_ROOT}/vendor" ]] && original_vendor=1
 
-    local managed_files=(composer.json composer.lock .gitignore config/octane.php rr .rr.yaml storage/app/g7_installed)
+    local managed_files=(
+        composer.json composer.lock .gitignore config/octane.php
+        rr .rr.yaml frankenphp frankenphp.backup public/frankenphp-worker.php
+        storage/app/g7_installed
+    )
     local path
     : > "${STATE_DIR}/existing-files.txt"
     for path in "${managed_files[@]}"; do
@@ -271,17 +308,32 @@ snapshot_state() {
 
     tar -cf "${STATE_DIR}/bootstrap-cache.tar" -C "${REPO_ROOT}" bootstrap/cache
 
-    local composer_json_sha composer_lock_sha
+    local composer_json_sha composer_lock_sha env_sha octane_server_line octane_server_count
     composer_json_sha="$(shasum -a 256 "${REPO_ROOT}/composer.json" | awk '{print $1}')"
     composer_lock_sha="-"
     [[ -f "${REPO_ROOT}/composer.lock" ]] \
         && composer_lock_sha="$(shasum -a 256 "${REPO_ROOT}/composer.lock" | awk '{print $1}')"
+    env_sha='-'
+    octane_server_line=''
+    octane_server_count=0
+    if [[ -f "${REPO_ROOT}/.env" ]]; then
+        env_sha="$(shasum -a 256 "${REPO_ROOT}/.env" | awk '{print $1}')"
+        octane_server_count="$(grep -c '^OCTANE_SERVER=' "${REPO_ROOT}/.env" || true)"
+        [[ "${octane_server_count}" -le 1 ]] \
+            || fail '.env must not contain more than one OCTANE_SERVER entry'
+        [[ "${octane_server_count}" == 0 ]] \
+            || octane_server_line="$(grep '^OCTANE_SERVER=' "${REPO_ROOT}/.env")"
+    fi
 
     {
         printf 'SNAPSHOT_REPO_ROOT=%q\n' "${REPO_ROOT}"
         printf 'ORIGINAL_VENDOR=%q\n' "${original_vendor}"
         printf 'ORIGINAL_COMPOSER_JSON_SHA=%q\n' "${composer_json_sha}"
         printf 'ORIGINAL_COMPOSER_LOCK_SHA=%q\n' "${composer_lock_sha}"
+        printf 'ORIGINAL_ENV_SHA=%q\n' "${env_sha}"
+        printf 'ORIGINAL_OCTANE_SERVER_COUNT=%q\n' "${octane_server_count}"
+        printf 'ORIGINAL_OCTANE_SERVER_LINE=%q\n' "${octane_server_line}"
+        printf 'RUN_OCTANE_SERVER=%q\n' "${OCTANE_SERVER}"
     } > "${STATE_DIR}/manifest.sh"
     printf 'snapshot\n' > "${STATE_DIR}/phase"
 }
@@ -294,11 +346,19 @@ restore_snapshot() {
     # shellcheck disable=SC1090,SC1091
     source "${restore_state_dir}/manifest.sh"
     : "${ORIGINAL_VENDOR:?restore manifest is missing ORIGINAL_VENDOR}"
+    ORIGINAL_ENV_SHA="${ORIGINAL_ENV_SHA:--}"
+    ORIGINAL_OCTANE_SERVER_COUNT="${ORIGINAL_OCTANE_SERVER_COUNT:-0}"
+    ORIGINAL_OCTANE_SERVER_LINE="${ORIGINAL_OCTANE_SERVER_LINE:-}"
+    RUN_OCTANE_SERVER="${RUN_OCTANE_SERVER:-roadrunner}"
     [[ "${SNAPSHOT_REPO_ROOT}" == "${REPO_ROOT}" ]] \
         || fail "snapshot belongs to another repository: ${SNAPSHOT_REPO_ROOT}"
 
     log 'restoring original Composer, Octane, and cache state'
-    local managed_files=(composer.json composer.lock .gitignore config/octane.php rr .rr.yaml storage/app/g7_installed)
+    local managed_files=(
+        composer.json composer.lock .gitignore config/octane.php
+        rr .rr.yaml frankenphp frankenphp.backup public/frankenphp-worker.php
+        storage/app/g7_installed
+    )
     local path
     for path in "${managed_files[@]}"; do
         rm -f "${REPO_ROOT}/${path}"
@@ -308,6 +368,8 @@ restore_snapshot() {
         mkdir -p "${REPO_ROOT}/$(dirname -- "${path}")"
         cp -p "${restore_state_dir}/files/${path}" "${REPO_ROOT}/${path}"
     done < "${restore_state_dir}/existing-files.txt"
+
+    restore_octane_environment
 
     if [[ "${ORIGINAL_VENDOR}" == 1 ]]; then
         "${COMPOSER_BIN}" install --no-interaction --no-progress --prefer-dist \
@@ -328,6 +390,10 @@ restore_snapshot() {
         || fail 'composer.json checksum mismatch after restore'
     [[ "${restored_lock_sha}" == "${ORIGINAL_COMPOSER_LOCK_SHA}" ]] \
         || fail 'composer.lock checksum mismatch after restore'
+    if [[ "${ORIGINAL_ENV_SHA}" != '-' ]]; then
+        [[ "$(shasum -a 256 "${REPO_ROOT}/.env" | awk '{print $1}')" == "${ORIGINAL_ENV_SHA}" ]] \
+            || fail '.env checksum mismatch after restore'
+    fi
     "${PHP_BIN}" artisan about --only=environment --no-ansi > "${RUN_DIR}/restore-artisan-about.log" 2>&1 \
         || fail 'application does not boot after restore'
 
@@ -335,6 +401,25 @@ restore_snapshot() {
     RESTORE_COMPLETE=1
     MUTATION_STARTED=0
     log 'restore=verified'
+}
+
+restore_octane_environment() {
+    local env_file="${REPO_ROOT}/.env"
+    [[ "${ORIGINAL_ENV_SHA}" != '-' && -f "${env_file}" ]] || return
+
+    "${PHP_BIN}" -r '
+        [$path, $count, $original] = array_slice($argv, 1);
+        $contents = file_get_contents($path);
+        if ((int) $count === 1) {
+            $contents = preg_replace("/^OCTANE_SERVER=.*$/m", $original, $contents);
+        } else {
+            $contents = preg_replace("/(?:\\r?\\n)OCTANE_SERVER=[^\\r\\n]*(?:\\r?\\n)\\z/", "", $contents);
+        }
+        if (file_put_contents($path, $contents) === false) {
+            exit(1);
+        }
+    ' "${env_file}" "${ORIGINAL_OCTANE_SERVER_COUNT}" "${ORIGINAL_OCTANE_SERVER_LINE}" \
+        || fail 'failed to restore OCTANE_SERVER in .env'
 }
 
 restore_bootstrap_cache() {
@@ -363,15 +448,18 @@ trap cleanup_on_exit EXIT INT TERM
 
 wait_for_http() {
     local url="$1" expected="$2" deadline=$((SECONDS + READY_TIMEOUT)) code
+    local body="${RUN_DIR}/.ready-body"
     local host_args=()
     [[ -z "${REQUEST_HOST}" ]] || host_args=(-H "Host: ${REQUEST_HOST}")
     while (( SECONDS < deadline )); do
-        code="$(curl -sS "${host_args[@]}" -o /dev/null -w '%{http_code}' --max-time 5 "${url}" 2>/dev/null || true)"
-        if [[ "${code}" == "${expected}" ]]; then
+        code="$(curl -sS "${host_args[@]}" -o "${body}" -w '%{http_code}' --max-time 5 "${url}" 2>/dev/null || true)"
+        if [[ "${code}" == "${expected}" && -s "${body}" ]]; then
+            rm -f "${body}"
             return 0
         fi
         sleep 1
     done
+    rm -f "${body}"
     return 1
 }
 
@@ -402,12 +490,24 @@ start_baseline() {
 
 start_octane() {
     local octane_url="http://${HOST}:${OCTANE_PORT}"
-    log "starting temporary Octane=${octane_url}"
-    OCTANE_HTTPS=false "${PHP_BIN}" artisan octane:start \
-        --server=roadrunner --host="${HOST}" --port="${OCTANE_PORT}" \
-        --rpc-port="${OCTANE_RPC_PORT}" --workers="${WORKERS}" \
-        --max-requests="${MAX_REQUESTS}" --no-interaction \
-        > "${RUN_DIR}/octane-server.log" 2>&1 &
+    log "starting temporary Octane server=${OCTANE_SERVER} url=${octane_url}"
+    local start_env=(OCTANE_HTTPS=false)
+    [[ -z "${FRANKENPHP_DB_SOCKET}" ]] \
+        || start_env+=("DB_SOCKET=${FRANKENPHP_DB_SOCKET}")
+    if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+        env "${start_env[@]}" "${PHP_BIN}" artisan octane:start \
+            --server=roadrunner --host="${HOST}" --port="${OCTANE_PORT}" \
+            --rpc-port="${OCTANE_RPC_PORT}" --workers="${WORKERS}" \
+            --max-requests="${MAX_REQUESTS}" --no-interaction \
+            > "${RUN_DIR}/octane-server.log" 2>&1 &
+    else
+        env "${start_env[@]}" "${PHP_BIN}" artisan octane:start \
+            --server=frankenphp --host="${HOST}" --port="${OCTANE_PORT}" \
+            --admin-port="${FRANKENPHP_ADMIN_PORT}" --workers="${WORKERS}" \
+            --max-requests="${MAX_REQUESTS}" \
+            --caddyfile="${RUN_DIR}/frankenphp.Caddyfile" --no-interaction \
+            > "${RUN_DIR}/octane-server.log" 2>&1 &
+    fi
     OCTANE_PID=$!
 
     local first_probe="${PROBES[0]}"
@@ -465,14 +565,21 @@ run_load() {
 }
 
 octane_worker_pids() {
+    [[ "${OCTANE_SERVER}" == roadrunner ]] || return 0
     pgrep -f "${REPO_ROOT}/vendor/bin/roadrunner-worker$" 2>/dev/null \
         | sort -n | tr '\n' ',' | sed 's/,$//' || true
 }
 
 run_reload_probe() {
     local before after deadline=$((SECONDS + 15))
-    before="$(octane_worker_pids)"
-    [[ -n "${before}" ]] || return 1
+    if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+        before="$(octane_worker_pids)"
+        [[ -n "${before}" ]] || return 1
+    else
+        before="$(curl -sS --max-time 5 "http://${HOST}:${FRANKENPHP_ADMIN_PORT}/config/apps/frankenphp/workers" \
+            | jq -c . 2>/dev/null || true)"
+        [[ -n "${before}" ]] || return 1
+    fi
 
     CACHE_STORE="${CACHE_STORE:-file}" SESSION_DRIVER="${SESSION_DRIVER:-array}" \
         QUEUE_CONNECTION="${QUEUE_CONNECTION:-sync}" \
@@ -480,13 +587,26 @@ run_reload_probe() {
         > "${RUN_DIR}/octane-reload-probe.log" 2>&1 || return 1
 
     while (( SECONDS < deadline )); do
-        after="$(octane_worker_pids)"
-        if [[ -n "${after}" && "${after}" != "${before}" ]]; then
-            printf 'before=%s\nafter=%s\n' "${before}" "${after}" \
-                >> "${RUN_DIR}/octane-reload-probe.log"
-            local first_probe="${PROBES[0]}"
-            wait_for_http "http://${HOST}:${OCTANE_PORT}${first_probe%=*}" "${first_probe##*=}" \
-                && return 0
+        if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+            after="$(octane_worker_pids)"
+            if [[ -n "${after}" && "${after}" != "${before}" ]]; then
+                printf 'before=%s\nafter=%s\n' "${before}" "${after}" \
+                    >> "${RUN_DIR}/octane-reload-probe.log"
+                local first_probe="${PROBES[0]}"
+                wait_for_http "http://${HOST}:${OCTANE_PORT}${first_probe%=*}" "${first_probe##*=}" \
+                    && return 0
+            fi
+        else
+            after="$(curl -sS --max-time 5 "http://${HOST}:${FRANKENPHP_ADMIN_PORT}/config/apps/frankenphp/workers" \
+                | jq -c . 2>/dev/null || true)"
+            if jq -en --argjson workers "${after:-null}" --argjson expected "${WORKERS}" \
+                '($workers | type) == "array" and ($workers | length) > 0 and $workers[0].num == $expected' >/dev/null; then
+                printf 'reload_via=caddy_admin_config_patch\nbefore=%s\nafter=%s\n' "${before}" "${after}" \
+                    >> "${RUN_DIR}/octane-reload-probe.log"
+                local first_probe="${PROBES[0]}"
+                wait_for_http "http://${HOST}:${OCTANE_PORT}${first_probe%=*}" "${first_probe##*=}" \
+                    && return 0
+            fi
         fi
         sleep 1
     done
@@ -551,16 +671,79 @@ extract_new_errors() {
     done < <(find "${REPO_ROOT}/storage/logs" -maxdepth 1 -type f -name 'laravel*.log' -print 2>/dev/null | sort)
 }
 
+app_config_value() {
+    local key="$1"
+    "${PHP_BIN}" -r '
+        $root = $argv[1];
+        require $root."/vendor/autoload.php";
+        $app = require $root."/bootstrap/app.php";
+        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        echo (string) config($argv[2], "");
+    ' "${REPO_ROOT}" "${key}"
+}
+
+prepare_frankenphp_runtime() {
+    local stub="${REPO_ROOT}/vendor/laravel/octane/src/Commands/stubs/Caddyfile"
+    local caddyfile="${RUN_DIR}/frankenphp.Caddyfile"
+    [[ -x "${REPO_ROOT}/frankenphp" ]] || fail 'FrankenPHP binary was not installed'
+    [[ -f "${stub}" ]] || fail 'Laravel Octane FrankenPHP Caddyfile stub is missing'
+
+    # Keep Laravel's host-agnostic http://:<port> site address so an Nginx vhost
+    # Host header is accepted, while binding the actual listener to loopback only.
+    awk -v bind_host="${HOST}" '
+        { print }
+        $0 == "{$CADDY_SERVER_SERVER_NAME} {" { print "\tbind " bind_host }
+    ' "${stub}" > "${caddyfile}"
+    grep -q "^[[:space:]]*bind ${HOST}$" "${caddyfile}" \
+        || fail 'failed to create loopback-only FrankenPHP Caddyfile'
+
+    local configured_host configured_socket system_socket embedded_socket
+    configured_host="$(app_config_value 'database.connections.mysql.host')"
+    configured_socket="$(app_config_value 'database.connections.mysql.unix_socket')"
+    system_socket="$(${PHP_BIN} -r 'echo (string) ini_get("pdo_mysql.default_socket");')"
+    embedded_socket="$("${REPO_ROOT}/frankenphp" php-cli -r 'echo (string) ini_get("pdo_mysql.default_socket");')"
+
+    {
+        "${REPO_ROOT}/frankenphp" version
+        printf 'system_php=%s\n' "$(${PHP_BIN} -r 'echo PHP_VERSION;')"
+        printf 'embedded_php=%s\n' "$("${REPO_ROOT}/frankenphp" php-cli -r 'echo PHP_VERSION;')"
+        printf 'configured_db_host=%s\n' "${configured_host}"
+        printf 'configured_db_socket=%s\n' "${configured_socket}"
+        printf 'system_default_socket=%s\n' "${system_socket}"
+        printf 'embedded_default_socket=%s\n' "${embedded_socket}"
+    } > "${RUN_DIR}/frankenphp-runtime.txt"
+
+    if [[ -n "${FRANKENPHP_DB_SOCKET}" ]]; then
+        [[ -S "${FRANKENPHP_DB_SOCKET}" ]] \
+            || fail "FrankenPHP DB socket is not available: ${FRANKENPHP_DB_SOCKET}"
+    elif [[ "${configured_host}" == localhost && -z "${configured_socket}" \
+        && -n "${system_socket}" && "${system_socket}" != "${embedded_socket}" \
+        && -S "${system_socket}" ]]; then
+        FRANKENPHP_DB_SOCKET="${system_socket}"
+        log "FrankenPHP DB socket compatibility=${FRANKENPHP_DB_SOCKET}"
+    fi
+
+    "${REPO_ROOT}/frankenphp" php-cli -m > "${RUN_DIR}/frankenphp-extensions.txt"
+    local extension
+    for extension in pdo_mysql redis mbstring intl gd curl openssl zip pcntl sodium fileinfo; do
+        grep -iq "^${extension}$" "${RUN_DIR}/frankenphp-extensions.txt" \
+            || fail "FrankenPHP embedded PHP extension is missing: ${extension}"
+    done
+}
+
 install_octane() {
     MUTATION_STARTED=1
     printf 'installing\n' > "${STATE_DIR}/phase"
-    log 'installing temporary Octane and RoadRunner dependencies'
-    "${COMPOSER_BIN}" require \
-        'laravel/octane:^2.18' 'spiral/roadrunner-cli:^2.6' 'spiral/roadrunner-http:^3.3' \
+    log "installing temporary Octane server=${OCTANE_SERVER}"
+    local packages=('laravel/octane:^2.18')
+    if [[ "${OCTANE_SERVER}" == roadrunner ]]; then
+        packages+=('spiral/roadrunner-cli:^2.6' 'spiral/roadrunner-http:^3.3')
+    fi
+    "${COMPOSER_BIN}" require "${packages[@]}" \
         --with-all-dependencies --no-interaction --no-progress \
         > "${RUN_DIR}/octane-composer-install.log" 2>&1
 
-    "${PHP_BIN}" artisan octane:install --server=roadrunner --no-interaction \
+    "${PHP_BIN}" artisan octane:install --server="${OCTANE_SERVER}" --no-interaction \
         > "${RUN_DIR}/octane-install.log" 2>&1
 
     # Composer package discovery는 확장 PSR-4/classmap 캐시를 만들지 않습니다.
@@ -570,11 +753,19 @@ install_octane() {
             >> "${RUN_DIR}/octane-install.log" 2>&1
     fi
 
-    if [[ ! -x "${REPO_ROOT}/rr" ]]; then
+    if [[ "${OCTANE_SERVER}" == roadrunner && ! -x "${REPO_ROOT}/rr" ]]; then
         "${REPO_ROOT}/vendor/bin/rr" get-binary \
             >> "${RUN_DIR}/octane-install.log" 2>&1
         chmod +x "${REPO_ROOT}/rr"
+    elif [[ "${OCTANE_SERVER}" == frankenphp ]]; then
+        prepare_frankenphp_runtime
     fi
+
+    local cache_env=()
+    [[ -z "${FRANKENPHP_DB_SOCKET}" ]] \
+        || cache_env+=("DB_SOCKET=${FRANKENPHP_DB_SOCKET}")
+    env "${cache_env[@]}" "${PHP_BIN}" artisan config:cache --no-interaction \
+        >> "${RUN_DIR}/octane-install.log" 2>&1
     printf 'installed\n' > "${STATE_DIR}/phase"
 }
 
@@ -619,6 +810,7 @@ write_report() {
 
     jq -n \
         --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg octane_server "${OCTANE_SERVER}" \
         --arg baseline_url "${BASELINE_URL}" \
         --arg octane_url "http://${HOST}:${OCTANE_PORT}" \
         --argjson workers "${WORKERS}" --argjson vus "${VUS}" \
@@ -634,7 +826,7 @@ write_report() {
         --argjson baseline_errors "${baseline_errors}" --argjson octane_errors "${octane_errors}" \
         --argjson performance_pass "${performance_pass}" \
         --arg reload_probe "${RELOAD_PROBE_RESULT}" \
-        '{generated_at:$generated_at,scenario:{workers:$workers,vus:$vus,duration:$duration,path:$path,request_host:$request_host,reload_probe:$reload_probe},
+        '{generated_at:$generated_at,scenario:{octane_server:$octane_server,workers:$workers,vus:$vus,duration:$duration,path:$path,request_host:$request_host,reload_probe:$reload_probe},
           baseline:{url:$baseline_url,avg_ms:$baseline_avg,p95_ms:$baseline_p95,p99_ms:$baseline_p99,rps:$baseline_rps,requests:$baseline_count,rss_kb:$baseline_rss,new_errors:$baseline_errors},
           octane:{url:$octane_url,avg_ms:$octane_avg,p95_ms:$octane_p95,p99_ms:$octane_p99,rps:$octane_rps,requests:$octane_count,rss_kb:$octane_rss,new_errors:$octane_errors},
           comparison:{p95_ratio:$p95_ratio,rps_ratio:$rps_ratio,performance_gate_passed:$performance_pass},restore:{verified:true}}' \
@@ -643,6 +835,7 @@ write_report() {
     {
         printf '# 그누보드7 PHP 기본 실행 방식 / Octane A/B 결과\n\n'
         printf -- '- 측정 시각: `%s`\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf -- '- Octane 서버: `%s`\n' "${OCTANE_SERVER}"
         printf -- '- 시나리오: `%s`, VU `%s`, `%s`, 워커 `%s`\n' "${PERF_PATH}" "${VUS}" "${DURATION}" "${WORKERS}"
         [[ -z "${REQUEST_HOST}" ]] || printf -- '- 요청 Host: `%s`\n' "${REQUEST_HOST}"
         printf -- '- 확장 변경 후 워커 재적용: `%s`\n' "${RELOAD_PROBE_RESULT}"
@@ -764,10 +957,16 @@ manual_restore() {
     fi
     RUN_DIR="${RESTORE_RUN_DIR}"
     STATE_DIR="${RUN_DIR}/state"
+    if [[ -f "${STATE_DIR}/manifest.sh" ]]; then
+        # Run metadata contains no credentials and selects the server that must stop.
+        # shellcheck disable=SC1090,SC1091
+        source "${STATE_DIR}/manifest.sh"
+        OCTANE_SERVER="${RUN_OCTANE_SERVER:-roadrunner}"
+    fi
     MUTATION_STARTED=1
     stop_owned_processes
     if "${PHP_BIN}" artisan list --raw 2>/dev/null | grep -q '^octane:stop'; then
-        "${PHP_BIN}" artisan octane:stop --server=roadrunner --no-interaction >/dev/null 2>&1 || true
+        "${PHP_BIN}" artisan octane:stop --server="${OCTANE_SERVER}" --no-interaction >/dev/null 2>&1 || true
     fi
     restore_snapshot "${STATE_DIR}"
 }

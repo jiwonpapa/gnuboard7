@@ -17,6 +17,9 @@ grep -q '^  run' <<< "${help_output}"
 grep -q '^  restore' <<< "${help_output}"
 grep -q -- '--baseline-url URL' <<< "${help_output}"
 grep -q -- '--request-host HOST' <<< "${help_output}"
+grep -q -- '--server NAME' <<< "${help_output}"
+grep -q -- '--admin-port N' <<< "${help_output}"
+grep -q -- '--frankenphp-db-socket PATH' <<< "${help_output}"
 grep -q -- '--no-performance-gate' <<< "${help_output}"
 grep -q -- '--reload-probe' <<< "${help_output}"
 
@@ -30,9 +33,21 @@ if bash "${HARNESS}" doctor --request-host 'bad/host' >/dev/null 2>&1; then
     exit 1
 fi
 
+if bash "${HARNESS}" doctor --server invalid >/dev/null 2>&1; then
+    printf 'invalid Octane server unexpectedly succeeded\n' >&2
+    exit 1
+fi
+
+if G7_OCTANE_HOST=0.0.0.0 bash "${HARNESS}" doctor --server frankenphp >/dev/null 2>&1; then
+    printf 'non-loopback FrankenPHP host unexpectedly succeeded\n' >&2
+    exit 1
+fi
+
 grep -q 'REQUEST_HOST' "${LOAD_SCRIPT}"
 grep -q "http_reqs: \['count>0'\]" "${LOAD_SCRIPT}"
 grep -q "http_req_failed: \['rate==0'\]" "${LOAD_SCRIPT}"
 grep -q 'extension:update-autoload' "${HARNESS}"
+grep -q 'frankenphp.Caddyfile' "${HARNESS}"
+grep -q 'FrankenPHP DB socket compatibility' "${HARNESS}"
 
 printf 'octane A/B harness contract: PASS\n'
