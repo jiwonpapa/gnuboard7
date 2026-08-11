@@ -13,6 +13,8 @@ export const options = {
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     thresholds: {
         checks: ['rate>0.99'],
+        http_req_failed: ['rate==0'],
+        http_reqs: ['count>0'],
     },
 };
 
