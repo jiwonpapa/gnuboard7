@@ -64,7 +64,9 @@ Run options:
   --baseline-port N   Managed baseline port. Default: 18080.
   --octane-port N     Temporary Octane HTTP port. Default: 18081.
   --rpc-port N        Temporary RoadRunner RPC port. Default: 16001.
-  --workers N         Equal baseline/Octane worker target. Default: 2.
+  --workers N         Octane worker count. The managed PHP baseline uses the same
+                      value; an external PHP-FPM baseline must be matched separately.
+                      Default: 2.
   --max-requests N    Octane worker recycle count. Default: 500.
   --vus N             k6 virtual users. Default: 5.
   --duration VALUE    k6 duration. Default: 15s.
@@ -377,6 +379,7 @@ start_baseline() {
     if [[ "${BASELINE_MANAGED}" == 0 ]]; then
         BASELINE_URL="${BASELINE_URL%/}"
         log "using external baseline=${BASELINE_URL}"
+        log "external baseline worker count is not controlled; verify it matches Octane workers=${WORKERS}"
         return
     fi
 
