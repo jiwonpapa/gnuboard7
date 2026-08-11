@@ -35,6 +35,18 @@ class HookManager implements HookManagerInterface
     private static array $runningHookStack = [];
 
     /**
+     * 장기 실행 워커에서 요청 단위 실행 상태만 초기화합니다.
+     *
+     * 등록된 hooks/filters는 애플리케이션 부팅 상태이므로 유지하고, 실행 중 표식과
+     * 현재 훅 스택만 비웁니다. 일반 요청의 finally 정리에 더한 Octane 안전망입니다.
+     */
+    public static function flushRequestState(): void
+    {
+        self::$dispatching = [];
+        self::$runningHookStack = [];
+    }
+
+    /**
      * Hook 이벤트를 발생시켜 등록된 콜백들을 실행합니다.
      *
      * @param  string  $hookName  Hook 이름

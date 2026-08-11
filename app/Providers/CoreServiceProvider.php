@@ -60,6 +60,7 @@ use App\Extension\Storage\CoreStorageDriver;
 use App\Extension\TemplateManager;
 use App\Listeners\ExtensionCompatibilityAlertListener;
 use App\Listeners\Identity\EnforceIdentityPolicyListener;
+use App\Listeners\ResetOctaneRequestState;
 use App\Repositories\ActivityLogRepository;
 use App\Repositories\AttachmentRepository;
 use App\Repositories\IdentityMessageDefinitionRepository;
@@ -98,9 +99,11 @@ use App\Services\TemplateLayoutAttachmentService;
 use App\Services\TemplateService;
 use App\Services\UniqueIdService;
 use App\Support\ExtensionSettingsMirror;
+use App\Support\OctaneRuntimeManager;
 use App\Support\PrivilegedDatabaseAccounts;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
@@ -126,6 +129,7 @@ class CoreServiceProvider extends ServiceProvider
         $this->registerRepositoryBindings();
         $this->registerExtensionManagers();
         $this->registerBenchmarkAxes();
+        $this->registerOctaneIntegration();
         // ActivityLogManager 제거됨 — Monolog 채널(config/logging.php 'activity')로 대체
     }
 
@@ -147,6 +151,27 @@ class CoreServiceProvider extends ServiceProvider
         $this->app->when(BenchCommand::class)
             ->needs('$runners')
             ->giveTagged('benchmark.axes');
+    }
+
+    /**
+     * Octane이 선택적으로 설치된 환경에만 장기 워커 통합을 등록합니다.
+     */
+    private function registerOctaneIntegration(): void
+    {
+        // scoped는 Octane이 요청 종료 시 인스턴스를 비우므로 요청별 reload 중복을 막되
+        // 다음 요청의 확장 변경은 다시 정상적으로 예약할 수 있습니다.
+        $this->app->scoped(OctaneRuntimeManager::class, fn ($app) => new OctaneRuntimeManager($app));
+
+        $requestReceivedEvent = 'Laravel\\Octane\\Events\\RequestReceived';
+        if (! class_exists($requestReceivedEvent)) {
+            return;
+        }
+
+        // Octane의 설정 리스너 목록을 런타임에 바꾸면 패키지 Provider가 이미 목록을
+        // 읽은 뒤일 수 있습니다. 애플리케이션 부팅 완료 시 이벤트에 직접 연결합니다.
+        $this->app->booted(
+            fn () => Event::listen($requestReceivedEvent, ResetOctaneRequestState::class)
+        );
     }
 
     /**

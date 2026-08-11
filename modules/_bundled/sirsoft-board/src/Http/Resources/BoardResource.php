@@ -4,8 +4,8 @@ namespace Modules\Sirsoft\Board\Http\Resources;
 
 use App\Http\Resources\BaseApiResource;
 use App\Models\Permission;
-use App\Models\Role;
 use App\Models\User;
+use App\Support\GuestRoleResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Modules\Sirsoft\Board\Traits\ChecksBoardPermission;
@@ -481,16 +481,6 @@ class BoardResource extends BaseApiResource
      */
     private function checkGuestPermission(Permission $permission): bool
     {
-        static $guestRole = null;
-
-        if ($guestRole === null) {
-            $guestRole = Role::where('identifier', 'guest')->first();
-        }
-
-        if (! $guestRole) {
-            return false;
-        }
-
-        return $guestRole->permissions()->where('permissions.id', $permission->id)->exists();
+        return GuestRoleResolver::hasPermission($permission->identifier);
     }
 }
