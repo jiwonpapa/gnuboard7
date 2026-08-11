@@ -2,32 +2,47 @@
 
 ## 결론
 
-그누보드7은 **RoadRunner 기반 Laravel Octane을 선택 기능으로 지원할 수 있습니다.** `g7devops.com`의 공개 HTTPS 요청 전체를 잠시 Octane으로 전환한 결과, 기능 오류 없이 p95 응답시간이 84.2% 줄고 처리량은 4.01배 증가했습니다. 플러그인 변경 hook에 따른 worker 교체와 교체 후 공개 응답도 확인했습니다.
+그누보드7은 **RoadRunner 기반 Laravel Octane을 선택 기능으로 지원할 수 있지만, 현재 서버에서 PHP-FPM을 전면 대체하면 안 됩니다.** `g7devops.com`의 공개 HTTPS 경로를 실제 전환해 5 VU로 비교한 결과, 메인·게시판 화면·쇼핑몰 화면과 상품 API는 빨라졌지만 게시판 첫 페이지 API는 오히려 느려졌습니다.
 
 시험이 끝난 뒤 PHP-FPM으로 복구했으며 Nginx·Composer 체크섬, 공개 응답, 실행 프로세스와 포트를 확인했습니다. 운영 서버에 Octane은 남아 있지 않습니다.
 
-다만 1 worker의 8초 저부하 시험이므로 **PHP-FPM을 즉시 대체하는 기본값으로 채택할 근거는 부족합니다.** 현재 판정은 `선택 설치 가능`, 공식 기본 지원 여부는 장시간·로그인·쓰기·결제 시나리오 검증 후 결정하는 것이 맞습니다.
+따라서 판정은 `선택 설치 가능`, `기본 전환 보류`입니다. Octane은 Laravel 부팅 비용을 줄이지만 느린 DB 조회를 해결하지 않으며, 2GB 서버에서 worker 수를 줄이면 무거운 요청이 대기열에 쌓입니다. 게시판 첫 페이지 쿼리 개선과 장시간 검증이 먼저입니다.
 
 Laravel Octane은 Laravel을 요청마다 다시 부팅하지 않고 메모리에 올린 애플리케이션 worker가 여러 요청을 처리하는 방식입니다. 부팅 비용이 줄어드는 대신 요청별 상태 누수, 메모리 증가, 배포 후 worker 재적용을 관리해야 합니다. [Laravel Octane 공식 문서](https://laravel.com/docs/12.x/octane), [RoadRunner 운영 지침](https://docs.roadrunner.dev/docs/app-server/production)
 
-## 공개 실서버 결과
+## 공개 실서버 5 VU 비교
 
-- 측정 시각: 2026-08-11 13:08 KST
+- 측정 시각: 2026-08-11 13:58~14:07 KST
 - 서버: `g7devops.com`, Linux, PHP 8.5.8, Laravel 12.62.0
-- 비교: 동일 서버·도메인·TLS·Nginx에서 기존 PHP-FPM과 RoadRunner Octane
-- 부하: 게시판 목록 API, VU 1, 각 8초
-- Octane: RoadRunner 2025.1.15, worker 1, `max-requests=1000`
+- 비교: 동일 서버·도메인·TLS·Nginx·DB에서 현재 PHP-FPM과 RoadRunner Octane
+- 현재 PHP-FPM: 최대 6 worker
+- Octane: 2 worker, `max-requests=500`, CPU 2개·메모리 512MB 제한
+- 부하: 각 경로 5 VU, 15초. 모든 부하 응답의 상태 200·본문 존재와 전후 API `success=true` 검사
 
-| 항목 | PHP-FPM | Octane | 변화 |
+| 경로 | PHP-FPM p95 | Octane p95 | 처리량 변화 | 판정 |
+|---|---:|---:|---:|---|
+| 메인 `/` | 296.71ms | 226.28ms | 22.30 → 38.80 req/s | Octane 우세 |
+| 게시판 화면 `/board/freebd` | 348.59ms | 169.61ms | 22.21 → 41.01 req/s | Octane 우세 |
+| 쇼핑몰 화면 `/shop/products` | 271.64ms | 173.63ms | 23.38 → 42.72 req/s | Octane 우세 |
+| 상품 API 첫 페이지 | 1,175.77ms | 398.14ms | 9.27 → 15.22 req/s | Octane 우세 |
+
+위 네 경로는 양쪽 모두 응답·check 실패 0건이었습니다. Octane의 p95는 23.7~66.1% 감소했고 처리량은 1.64~1.85배였습니다. 메인 화면은 현재 SEO cache가 적용된 실제 운영 상태를 그대로 비교했습니다.
+
+### 게시판 첫 페이지 API 보정 시험
+
+`/api/modules/sirsoft-board/boards/freebd/posts?page=1`은 5 VU·15초 시험에서 PHP-FPM 요청이 제한 시간 안에 하나도 끝나지 않아 시간 기반 처리량을 비교할 수 없었습니다. 따라서 5 VU가 정확히 한 번씩 동시에 요청하고 5개가 모두 끝날 때까지 기다리는 방식으로 다시 측정했습니다.
+
+| 항목 | PHP-FPM | Octane 2 worker | 변화 |
 |---|---:|---:|---:|
-| 평균 응답 | 59.87ms | 14.79ms | 75.3% 감소 |
-| p95 | 121.21ms | 19.16ms | 84.2% 감소 |
-| p99 | 212.76ms | 23.42ms | 89.0% 감소 |
-| 처리량 | 16.58 req/s | 66.43 req/s | 4.01배 |
-| 요청 수 | 133 | 532 | 각 8초 |
-| 응답 검증 실패 | 0 | 0 | 통과 |
+| 완료 요청 | 5/5 | 5/5 | 오류 0 |
+| 평균 응답 | 20.85초 | 27.94초 | Octane 34.0% 증가 |
+| 중앙값 | 20.84초 | 31.35초 | Octane 50.4% 증가 |
+| p95 | 20.87초 | 43.22초 | Octane 2.07배 |
+| 최대 | 20.88초 | 46.18초 | Octane 2.21배 |
 
-Octane systemd 단위의 최대 메모리는 141.5MB, 작업 수는 11개였습니다. 시험 중 DB 연결은 `6/20`, 시험 종료 후 `4/20`으로 돌아왔습니다. 이는 단일 worker의 짧은 결과이며 실제 용량 산정값은 아닙니다.
+현재 PHP-FPM은 최대 6개 요청을 병렬 처리하지만 Octane은 서버 메모리를 고려해 2 worker로 제한했습니다. 따라서 이 결과는 동일 worker 수의 엔진 비교가 아니라 **현재 운영 구성과 이 서버에서 안전하게 적용 가능한 Octane 구성의 실제 비교**입니다. Octane worker를 5~6개로 늘리면 대기시간은 줄 수 있지만 이번 2 worker 시험에서도 최대 메모리가 약 302MB였으므로, 2GB 서버에서 바로 늘리는 것은 안전하지 않습니다.
+
+전체 시험에서 PHP·Nginx 신규 오류는 양쪽 모두 0건이었습니다. 최대 DB 연결은 PHP-FPM 12/20, Octane 9/20이었고 Octane 시험 중 최소 가용 메모리는 420MB였습니다.
 
 ## 기능·reload·복구 결과
 
@@ -37,11 +52,11 @@ Octane systemd 단위의 최대 메모리는 141.5MB, 작업 수는 11개였습�
 | 공개 `/admin` | 200 |
 | 공개 게시판 목록 API | 200 |
 | 미인증 관리자 API | 401 |
-| Octane 공개 경로 증명 | `X-G7-Runtime: octane-public-test` 확인 |
+| Octane 공개 경로 증명 | 모든 시나리오에서 `X-G7-Runtime: octane-public-test` 확인 |
 | 플러그인 변경 hook | 정상 실행 |
-| worker 재적용 | PID `17812 → 17867` |
+| worker 재적용 | PID `23771, 23800 → 25177, 25178` |
 | 재적용 후 공개 요청 | 200 |
-| 신규 애플리케이션·서비스 오류 | 0 |
+| 신규 PHP·Nginx 오류 | 0 |
 | PHP-FPM 복구 후 공개 요청 | 200 |
 | Nginx 원본 체크섬 | 일치 |
 | 운영 Composer 체크섬 | 일치 |
@@ -74,7 +89,7 @@ scripts/benchmark/octane-ab-harness.sh run \
 scripts/benchmark/octane-ab-harness.sh restore --run-dir <결과_디렉터리>
 ```
 
-하네스 작성과 실서버 실행 과정에서 확장 autoload 재생성 누락, PHP 8.5 정적 trait 경고, 잘못된 RoadRunner worker PID 탐지 문제를 발견해 보완했습니다.
+하네스 작성과 실서버 실행 과정에서 확장 autoload 재생성 누락, PHP 8.5 정적 trait 경고, 잘못된 RoadRunner worker PID 탐지 문제를 발견해 보완했습니다. 완료 요청이 0개인 부하 시험이 성공으로 보이지 않도록 `http_reqs > 0`과 요청 실패율 0 조건도 추가했습니다.
 
 ## 그누보드7에 반영한 호환 처리
 
@@ -111,6 +126,7 @@ php artisan extension:update-autoload
 - 로그인 사용자 간 세션·권한·언어·통화 상태 누수 0건
 - 게시글 쓰기·첨부, 상품·장바구니·주문·결제 통보, 에디터 업로드
 - 확장 설치·업데이트 도중 동시 요청과 다중 worker 전체 교체
+- 게시판 첫 페이지 쿼리 병목 개선 후 5 VU 재측정
 - 최소 30분 이상의 메모리 증가·worker recycle·DB 재연결 관찰
 - 대용량 업로드, 외부 API 지연, 스트리밍과 시간 제한
 - systemd 자동 복구와 실제 이전 버전 rollback

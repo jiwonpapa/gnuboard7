@@ -31,6 +31,8 @@ if bash "${HARNESS}" doctor --request-host 'bad/host' >/dev/null 2>&1; then
 fi
 
 grep -q 'REQUEST_HOST' "${LOAD_SCRIPT}"
+grep -q "http_reqs: \['count>0'\]" "${LOAD_SCRIPT}"
+grep -q "http_req_failed: \['rate==0'\]" "${LOAD_SCRIPT}"
 grep -q 'extension:update-autoload' "${HARNESS}"
 
 printf 'octane A/B harness contract: PASS\n'
