@@ -4,18 +4,18 @@ namespace Modules\Sirsoft\Board\Listeners;
 
 use App\Contracts\Extension\HookListenerInterface;
 use App\Helpers\PermissionHelper;
+use App\Search\SearchCategoryPayload;
 use Illuminate\Support\Facades\Log;
 use Modules\Sirsoft\Board\Services\BoardService;
 use Modules\Sirsoft\Board\Services\PostService;
 use Modules\Sirsoft\Board\Traits\FormatsBoardDate;
-use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
  * 통합 검색에 게시글 검색 결과를 제공하는 리스너
  *
  * core.search.results Filter Hook을 구독하여 검색 결과에 게시글을 추가합니다.
  * core.search.build_response Filter Hook을 구독하여 응답 구조를 생성합니다.
- * core.search.validation_rules Filter Hook을 구독하여 검색 파라미터 규칙을 추가합니다.
+ * core.search.index_validation_rules Filter Hook을 구독하여 검색 파라미터 규칙을 추가합니다.
  */
 class SearchPostsListener implements HookListenerInterface
 {
@@ -28,6 +28,8 @@ class SearchPostsListener implements HookListenerInterface
 
     /**
      * 구독할 훅 목록 반환
+     *
+     * @return array
      */
     public static function getSubscribedHooks(): array
     {
@@ -42,7 +44,7 @@ class SearchPostsListener implements HookListenerInterface
                 'priority' => 10,
                 'type' => 'filter',
             ],
-            'core.search.validation_rules' => [
+            'core.search.index_validation_rules' => [
                 'method' => 'addValidationRules',
                 'priority' => 10,
                 'type' => 'filter',
@@ -54,6 +56,7 @@ class SearchPostsListener implements HookListenerInterface
      * 훅 이벤트를 처리합니다.
      *
      * @param  mixed  ...$args  훅에서 전달된 인수들
+     * @return void
      */
     public function handle(...$args): void
     {
@@ -109,12 +112,13 @@ class SearchPostsListener implements HookListenerInterface
             }
 
             if (! $isRelevantTab) {
-                return $this->withCountOnlyResult($results, $boards, $q);
+                // 배지를 그리지 않는 화면은 건수 자체를 요청하지 않는다 — 그 경우 집계를 생략한다.
+                return ($context['include_inactive_counts'] ?? true)
+                    ? $this->withCountOnlyResult($results, $boards, $q)
+                    : $this->withEmptyPostsResult($results);
             }
 
             $results['posts'] = $this->buildSearchResult($boards, $q, $context);
-        } catch (TooManyRequestsHttpException $e) {
-            throw $e;
         } catch (\Exception $e) {
             Log::error('Search posts error', ['message' => $e->getMessage(), 'q' => $q]);
         }
@@ -179,14 +183,13 @@ class SearchPostsListener implements HookListenerInterface
      */
     private function withCountOnlyResult(array $results, iterable $boards, string $keyword): array
     {
+        // 다른 탭을 보는 중이라도 탭 배지에는 건수가 필요하다. 상한을 건 집계라
+        // 대량 매칭에서도 비용이 일정하다.
+        // 잘린 값을 정확한 것처럼 내보내지 않도록 정확도를 함께 싣는다.
         $boardIds = collect($boards)->pluck('id')->all();
-        $count = $this->postService->countAcrossBoardsBounded($boardIds, $keyword);
+        $count = $this->postService->countAcrossBoards($boardIds, $keyword);
 
-        $results['posts'] = [
-            ...$count,
-            'items' => [],
-            'available_boards' => [],
-        ];
+        $results['posts'] = SearchCategoryPayload::fromCountOnly($count, ['available_boards' => []]);
 
         return $results;
     }
@@ -207,27 +210,45 @@ class SearchPostsListener implements HookListenerInterface
         $type = $context['type'] ?? 'all';
 
         $boardIds = collect($boards)->pluck('id')->all();
+        $extra = ['available_boards' => $this->boardService->getActiveBoardsListForFilter()];
 
-        // 전체 탭은 최신 N개만, posts 탭은 DB 페이지네이션
+        /** 조회 결과 항목을 화면 형태로 가공한다. */
+        $format = fn (iterable $items): array => collect($items)
+            ->map(fn ($post) => $this->formatPostResult($post, $keyword))
+            ->all();
+
+        // 전체 탭은 최신 N개만 보여 주므로 깊은 페이지 자체가 없다.
         if ($type === 'all') {
-            $allTabLimit = $context['all_tab_limit'] ?? 5;
-            $searchResult = $this->postService->searchAcrossBoards($boardIds, $keyword, $sort, $allTabLimit, 1);
-        } else {
-            $searchResult = $this->postService->searchAcrossBoards($boardIds, $keyword, $sort, $perPage, $page);
+            $allTabLimit = (int) ($context['all_tab_limit'] ?? 5);
+            $searchPage = $this->postService->searchAcrossBoards($boardIds, $keyword, $sort, $allTabLimit, 1);
+
+            return SearchCategoryPayload::fromBounded($searchPage, $format($searchPage->items()), $extra);
         }
 
-        return [
-            'total' => $searchResult['total'],
-            'total_is_exact' => $searchResult['total_is_exact'] ?? true,
-            'total_relation' => $searchResult['total_relation'] ?? 'eq',
-            'has_more_pages' => $searchResult['has_more_pages'] ?? false,
-            'result_cap' => $searchResult['result_cap'] ?? null,
-            'search_truncated' => $searchResult['search_truncated'] ?? false,
-            'items' => $searchResult['items']->map(
-                fn ($post) => $this->formatPostResult($post, $keyword)
-            )->all(),
-            'available_boards' => $this->boardService->getActiveBoardsListForFilter(),
-        ];
+        // 커서로 처리할 수 있는 정렬이면 키셋으로 응답한다. 첫 페이지는 커서가 없는 것이
+        // 정상이며 그때 다음 커서가 발급된다. 커서 없이 깊은 페이지를 직접 지목한 요청
+        // (딥링크)만 offset 을 유지한다 — 판정은 코어가 하고 이 리스너는 결과 유무만 본다.
+        $cursorPage = $this->postService->searchAcrossBoardsByCursor(
+            $boardIds,
+            $keyword,
+            $sort,
+            (int) $perPage,
+            $context['cursor'] ?? null,
+            (int) $page
+        );
+
+        if ($cursorPage !== null) {
+            return SearchCategoryPayload::fromCursor(
+                $cursorPage,
+                $this->postService->countAcrossBoards($boardIds, $keyword),
+                $format($cursorPage->items()),
+                $extra
+            );
+        }
+
+        $searchPage = $this->postService->searchAcrossBoards($boardIds, $keyword, $sort, (int) $perPage, (int) $page);
+
+        return SearchCategoryPayload::fromBounded($searchPage, $format($searchPage->items()), $extra);
     }
 
     // ─── buildPostsResponse 헬퍼 ─────────────────────────
@@ -243,11 +264,9 @@ class SearchPostsListener implements HookListenerInterface
     {
         return [
             'total' => $postsData['total'] ?? 0,
+            'total_relation' => $postsData['total_relation'] ?? null,
             'total_is_exact' => $postsData['total_is_exact'] ?? true,
-            'total_relation' => $postsData['total_relation'] ?? 'eq',
-            'has_more_pages' => $postsData['has_more_pages'] ?? false,
             'result_cap' => $postsData['result_cap'] ?? null,
-            'search_truncated' => $postsData['search_truncated'] ?? false,
             'items' => $postsData['items'] ?? [],
         ];
     }
@@ -262,26 +281,27 @@ class SearchPostsListener implements HookListenerInterface
      */
     private function buildPostsTabResponse(array $response, array $postsData, array $context): array
     {
-        $page = $context['page'] ?? 1;
-        $perPage = $context['per_page'] ?? 10;
+        $page = (int) ($context['page'] ?? 1);
+        $perPage = (int) ($context['per_page'] ?? 10);
         $totalItems = $postsData['total'] ?? 0;
 
         $response['posts'] = [
             'total' => $totalItems,
+            'total_relation' => $postsData['total_relation'] ?? null,
             'total_is_exact' => $postsData['total_is_exact'] ?? true,
-            'total_relation' => $postsData['total_relation'] ?? 'eq',
-            'has_more_pages' => $postsData['has_more_pages'] ?? false,
             'result_cap' => $postsData['result_cap'] ?? null,
-            'search_truncated' => $postsData['search_truncated'] ?? false,
             'items' => $postsData['items'] ?? [],
         ];
         $response['current_page'] = $page;
         $response['per_page'] = $perPage;
-        $knownLastPage = max(1, (int) ceil($totalItems / $perPage));
-        $response['last_page'] = ! ($postsData['total_is_exact'] ?? true)
-            && ($postsData['has_more_pages'] ?? false)
-                ? max($knownLastPage, $page + 1)
-                : max($knownLastPage, $page);
+        // 총 건수가 상한에 걸리면 마지막 페이지를 계산할 수 없다 — null 로 알린다.
+        // 화면은 이 값이 null 이면 마지막 페이지 점프만 감추고, "다음" 은 계속 노출한다.
+        $response['last_page'] = $postsData['last_page'] ?? null;
+        $response['has_more_pages'] = $postsData['has_more_pages'] ?? false;
+        // 커서 응답이면 다음/이전 커서를 함께 실어 화면이 깊은 페이지를 OFFSET 없이 넘긴다.
+        // offset 응답에서는 두 값이 null 이라 화면이 분기 없이 같은 키를 읽는다.
+        $response['next_cursor'] = $postsData['next_cursor'] ?? null;
+        $response['prev_cursor'] = $postsData['prev_cursor'] ?? null;
 
         return $response;
     }
@@ -323,7 +343,9 @@ class SearchPostsListener implements HookListenerInterface
             ],
             'board_name' => $post->board?->getLocalizedName() ?? '',
             'board_slug' => $boardSlug,
-            'author_name' => $post->author_name ?? $post->user?->name ?? __('board.anonymous'),
+            // 모듈 번역 키는 네임스페이스를 붙여야 해석된다. 붙이지 않으면 해석에 실패해도
+            // 예외 없이 키 문자열이 그대로 화면에 나간다 (실측: 작성자에 "board.anonymous").
+            'author_name' => $post->author_name ?? $post->user?->name ?? __('sirsoft-board::messages.common.guest'),
             'created_at' => $this->formatCreatedAt($post->created_at),
             'created_at_formatted' => $this->formatCreatedAtFormat($post->created_at, g7_module_settings('sirsoft-board', 'display.date_display_format', 'standard')),
             'view_count' => $post->view_count ?? 0,

@@ -5,10 +5,10 @@ namespace Modules\Sirsoft\Ecommerce\Tests\Feature\Search;
 use App\Extension\HookListenerRegistrar;
 use App\Extension\HookManager;
 use App\Extension\ModuleManager;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Ecommerce\Enums\ProductDisplayStatus;
 use Modules\Sirsoft\Ecommerce\Models\Product;
-use Modules\Sirsoft\Ecommerce\Repositories\ProductRepository;
 use Modules\Sirsoft\Ecommerce\Tests\ModuleTestCase;
 
 /**
@@ -164,71 +164,6 @@ class ProductSearchIntegrationTest extends ModuleTestCase
     }
 
     /**
-     * optimized 통합검색은 상품 total과 현재 페이지를 같은 쿼리에서 계산합니다.
-     */
-    public function test_optimized_all_tab_uses_single_window_search_query(): void
-    {
-        config()->set('benchmark.ecommerce_variant', 'optimized');
-        Product::factory()->count(3)->create([
-            'name' => ['ko' => '단일 검색 상품', 'en' => 'singlepasssearchxyz Product'],
-            'display_status' => ProductDisplayStatus::VISIBLE,
-        ]);
-        $this->flushProductFulltextIndex();
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        $response = $this->getJson('/api/search?q=singlepasssearchxyz&type=all');
-
-        $productSearchQueries = collect(DB::getQueryLog())
-            ->pluck('query')
-            ->filter(fn (string $sql) => str_contains(strtolower($sql), 'product_search_matches'))
-            ->values();
-        DB::disableQueryLog();
-
-        $response->assertOk();
-        $this->assertSame(3, $response->json('data.products_count'));
-        $this->assertStringNotContainsString('_g7_search_total', $response->getContent());
-        $this->assertCount(1, $productSearchQueries);
-        $this->assertStringContainsString('count(*) over()', strtolower($productSearchQueries->first()));
-    }
-
-    /**
-     * optimized 상품 검색의 깊은 빈 페이지는 total 확인용 COUNT만 보충합니다.
-     */
-    public function test_optimized_product_search_deep_empty_page_uses_count_fallback(): void
-    {
-        config()->set('benchmark.ecommerce_variant', 'optimized');
-        Product::factory()->count(3)->create([
-            'name' => ['ko' => '깊은 검색 상품', 'en' => 'deepsearchxyz Product'],
-            'display_status' => ProductDisplayStatus::VISIBLE,
-        ]);
-        $this->flushProductFulltextIndex();
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        $result = app(ProductRepository::class)->searchByKeyword(
-            'deepsearchxyz',
-            offset: 990,
-            limit: 10
-        );
-
-        $productSearchQueries = collect(DB::getQueryLog())
-            ->pluck('query')
-            ->filter(fn (string $sql) => str_contains(strtolower($sql), 'product_search_matches'))
-            ->values();
-        DB::disableQueryLog();
-
-        $this->assertSame(3, $result['total']);
-        $this->assertCount(0, $result['items']);
-        $this->assertCount(2, $productSearchQueries);
-        $this->assertTrue($productSearchQueries->contains(
-            fn (string $sql) => str_contains(strtolower($sql), 'count(*) as aggregate')
-        ));
-    }
-
-    /**
      * 가격순 정렬 파라미터가 허용되는지 확인
      */
     public function test_search_accepts_price_sort_options(): void
@@ -317,6 +252,31 @@ class ProductSearchIntegrationTest extends ModuleTestCase
             $this->assertArrayHasKey('sales_status_label', $product);
             $this->assertArrayHasKey('labels', $product);
         }
+    }
+
+    /**
+     * 통합검색 상품 링크가 상점 주소 설정을 따르는지 확인 (공개 #85)
+     *
+     * 기본값 리터럴을 내려보내면 상점 주소를 바꾼 사이트의 검색 결과가 전부
+     * 존재하지 않는 상품 화면을 가리킨다 — 링크는 만들어졌으므로 오류가 남지 않는다.
+     */
+    public function test_search_product_url_follows_shop_route_path_setting(): void
+    {
+        Config::set('g7_settings.modules.sirsoft-ecommerce.basic_info', ['route_path' => 'store']);
+
+        $keyword = 'routepathurlkeyword';
+        $product = Product::factory()->create([
+            'name' => ['ko' => '주소확인용 상품', 'en' => "{$keyword} Route Path"],
+            'display_status' => ProductDisplayStatus::VISIBLE,
+        ]);
+        $this->flushProductFulltextIndex();
+
+        $response = $this->getJson("/api/search?q={$keyword}&type=products");
+        $response->assertStatus(200);
+
+        $products = $response->json('data.products') ?? [];
+        $this->assertNotEmpty($products, '검색 결과가 비어 URL 축을 검증할 수 없다');
+        $this->assertSame("/store/products/{$product->product_code}", $products[0]['url']);
     }
 
     /**

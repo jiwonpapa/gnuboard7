@@ -2,13 +2,14 @@
 
 namespace Modules\Sirsoft\Board\Tests\Unit\Listeners;
 
+use App\Enums\TotalRelation;
 use App\Models\User;
+use App\Support\Query\BoundedPage;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Gate;
 use Modules\Sirsoft\Board\Listeners\SearchPostsListener;
 use Modules\Sirsoft\Board\Services\BoardService;
 use Modules\Sirsoft\Board\Services\PostService;
-use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 use Tests\TestCase;
 
 /**
@@ -16,6 +17,28 @@ use Tests\TestCase;
  */
 class SearchPostsListenerTest extends TestCase
 {
+    /**
+     * 검색 결과 페이지(BoundedPage)를 만듭니다.
+     *
+     * 저장소가 반환하는 계약과 같은 형태를 테스트에서도 그대로 씁니다.
+     *
+     * @param  Collection  $items  페이지 항목
+     * @param  int  $total  총 건수
+     * @return BoundedPage 페이지 결과
+     */
+    private function boundedPage(Collection $items, int $total): BoundedPage
+    {
+        return new BoundedPage(
+            items: $items,
+            total: $total,
+            perPage: 5,
+            currentPage: 1,
+            totalRelation: TotalRelation::Exact,
+            resultCap: 10000,
+            hasMorePages: false,
+        );
+    }
+
     private SearchPostsListener $listener;
 
     private PostService $postService;
@@ -39,7 +62,7 @@ class SearchPostsListenerTest extends TestCase
 
         $this->assertArrayHasKey('core.search.results', $hooks);
         $this->assertArrayHasKey('core.search.build_response', $hooks);
-        $this->assertArrayHasKey('core.search.validation_rules', $hooks);
+        $this->assertArrayHasKey('core.search.index_validation_rules', $hooks);
 
         foreach ($hooks as $hook) {
             $this->assertEquals('filter', $hook['type']);
@@ -79,15 +102,9 @@ class SearchPostsListenerTest extends TestCase
         $this->postService
             ->method('searchAcrossBoards')
             ->with([1], '테스트', $this->anything(), $this->anything(), $this->anything())
-            ->willReturn([
-                'total' => 1,
-                'total_is_exact' => false,
-                'total_relation' => 'gte',
-                'search_truncated' => true,
-                'items' => new Collection([
-                    $this->createPostStub(1, 'notice', '공지사항'),
-                ]),
-            ]);
+            ->willReturn($this->boundedPage(new Collection([
+                $this->createPostStub(1, 'notice', '공지사항'),
+            ]), 1));
 
         $this->boardService
             ->method('getActiveBoardsListForFilter')
@@ -107,7 +124,6 @@ class SearchPostsListenerTest extends TestCase
 
         $this->assertArrayHasKey('posts', $result);
         $this->assertGreaterThan(0, $result['posts']['total']);
-        $this->assertTrue($result['posts']['search_truncated']);
     }
 
     /**
@@ -156,28 +172,6 @@ class SearchPostsListenerTest extends TestCase
         $this->assertArrayNotHasKey('posts', $result);
     }
 
-    public function test_search_posts_rethrows_search_concurrency_limit(): void
-    {
-        $user = User::factory()->make(['id' => 1002]);
-        $board = $this->createBoardStub(1, 'notice', '공지사항');
-        $this->boardService
-            ->method('getActiveBoardsForSearch')
-            ->willReturn(new Collection([$board]));
-        Gate::before(fn ($gateUser) => $gateUser->id === $user->id ? true : null);
-        $this->postService
-            ->method('searchAcrossBoards')
-            ->willThrowException(new TooManyRequestsHttpException(1, 'busy'));
-
-        $this->expectException(TooManyRequestsHttpException::class);
-
-        $this->listener->searchPosts([], [
-            'type' => 'posts',
-            'q' => '테스트',
-            'user' => $user,
-            'request' => null,
-        ]);
-    }
-
     /**
      * formatPostResult()가 created_at(Y-m-d H:i:s 포맷)과 created_at_formatted(표시용) 필드를 반환하는지 확인
      */
@@ -197,12 +191,9 @@ class SearchPostsListenerTest extends TestCase
 
         $this->postService
             ->method('searchAcrossBoards')
-            ->willReturn([
-                'total' => 1,
-                'items' => new Collection([
-                    $this->createPostStub(1, 'notice', '공지사항'),
-                ]),
-            ]);
+            ->willReturn($this->boundedPage(new Collection([
+                $this->createPostStub(1, 'notice', '공지사항'),
+            ]), 1));
 
         Gate::before(fn ($u) => $u->id === 9999 ? true : null);
 
@@ -239,6 +230,7 @@ class SearchPostsListenerTest extends TestCase
      * @param  int  $id  게시판 ID
      * @param  string  $slug  게시판 슬러그
      * @param  string  $name  게시판 이름
+     * @return object
      */
     private function createBoardStub(int $id, string $slug, string $name): object
     {
@@ -270,6 +262,7 @@ class SearchPostsListenerTest extends TestCase
      * @param  int  $id  게시글 ID
      * @param  string  $boardSlug  게시판 슬러그
      * @param  string  $boardName  게시판 이름
+     * @return object
      */
     private function createPostStub(int $id, string $boardSlug, string $boardName): object
     {

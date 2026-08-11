@@ -12,18 +12,6 @@ use Tests\TestCase;
 class SearchControllerTest extends TestCase
 {
     /**
-     * 공개 통합검색은 서버 보호를 위해 IP 기준 10회/분으로 제한합니다.
-     */
-    public function test_search_is_limited_to_ten_requests_per_minute(): void
-    {
-        for ($attempt = 0; $attempt < 10; $attempt++) {
-            $this->getJson('/api/search')->assertOk();
-        }
-
-        $this->getJson('/api/search')->assertTooManyRequests();
-    }
-
-    /**
      * 검색어 없이 요청 시 빈 결과 반환 테스트
      */
     public function test_search_returns_empty_results_when_no_keyword(): void
@@ -145,7 +133,7 @@ class SearchControllerTest extends TestCase
         $longKeyword = str_repeat('가', 201);
 
         // Act: 긴 검색어로 요청
-        $response = $this->getJson('/api/search?q='.$longKeyword);
+        $response = $this->getJson('/api/search?q=' . $longKeyword);
 
         // Assert: 검증 오류 응답
         $response->assertStatus(422)

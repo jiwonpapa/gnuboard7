@@ -3,8 +3,6 @@
 namespace Modules\Sirsoft\Ecommerce\Tests\Feature\Http\Controllers\Admin;
 
 use App\Search\Engines\DatabaseFulltextEngine;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Testing\TestResponse;
 use Laravel\Scout\EngineManager;
 use Modules\Sirsoft\Ecommerce\Models\Product;
 use Modules\Sirsoft\Ecommerce\Tests\ModuleTestCase;
@@ -109,39 +107,6 @@ class ProductControllerSearchTest extends ModuleTestCase
     }
 
     /**
-     * optimized all 검색은 전체 Scout ID를 PHP 배열로 만들지 않고
-     * DB ID UNION + outer pagination으로 정확한 total과 현재 페이지만 반환합니다.
-     */
-    public function test_optimized_all_search_uses_bounded_union_with_exact_total(): void
-    {
-        config()->set('benchmark.ecommerce_variant', 'optimized');
-
-        Product::factory()->count(17)->sequence(
-            fn ($sequence) => ['product_code' => 'BOUNDED-SEARCH-'.str_pad((string) $sequence->index, 3, '0', STR_PAD_LEFT)]
-        )->create();
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        $response = $this->createAdminUserAndSearch(
-            'search_field=all&search_keyword=BOUNDED-SEARCH&per_page=10'
-        );
-
-        $response->assertOk();
-        $this->assertCount(10, $response->json('data.data'));
-        $this->assertSame(17, $response->json('data.pagination.total'));
-
-        $searchQueries = collect(DB::getQueryLog())
-            ->pluck('query')
-            ->filter(fn ($sql) => str_contains(strtolower($sql), 'ecommerce_products'));
-
-        $this->assertTrue($searchQueries->contains(
-            fn ($sql) => str_contains(strtolower($sql), ' union ')
-                && str_contains(strtolower($sql), 'product_search_matches')
-        ));
-    }
-
-    /**
      * code 검색 필드(잘못된 값)가 거부되는지 확인
      */
     public function test_search_field_rejects_code(): void
@@ -231,9 +196,6 @@ class ProductControllerSearchTest extends ModuleTestCase
      */
     private function swapScoutEngineToLikeFallback(): void
     {
-        // 이 헬퍼는 기존 Scout materialization 경로의 A/B 회귀 테스트에서만 사용한다.
-        config()->set('benchmark.ecommerce_variant', 'baseline');
-
         $manager = $this->app->make(EngineManager::class);
         $manager->extend('mysql-fulltext', fn () => new LikeFallbackEngine);
 
@@ -242,17 +204,6 @@ class ProductControllerSearchTest extends ModuleTestCase
         $property = $reflection->getProperty('drivers');
         $property->setAccessible(true);
         $property->setValue($manager, []);
-    }
-
-    /**
-     * 관리자를 생성하고 상품 목록 검색을 수행합니다.
-     */
-    private function createAdminUserAndSearch(string $queryString): TestResponse
-    {
-        $user = $this->createAdminUser(['sirsoft-ecommerce.products.read']);
-
-        return $this->actingAs($user)
-            ->getJson('/api/modules/sirsoft-ecommerce/admin/products?'.$queryString);
     }
 
     /**

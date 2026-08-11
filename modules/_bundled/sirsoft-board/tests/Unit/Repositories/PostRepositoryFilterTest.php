@@ -5,8 +5,6 @@ namespace Modules\Sirsoft\Board\Tests\Unit\Repositories;
 // ModuleTestCase 수동 로드 (autoload 전에 로드 필요)
 require_once __DIR__.'/../../ModuleTestCase.php';
 
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Modules\Sirsoft\Board\Repositories\PostRepository;
 use Modules\Sirsoft\Board\Tests\BoardTestCase;
 
@@ -173,99 +171,5 @@ class PostRepositoryFilterTest extends BoardTestCase
         // Then: author_name에 '중요'가 포함된 공지 분류 게시글만 반환
         // (분류 + 검색 필터 동시 적용 검증이 목적)
         $this->assertCount(0, $result->items());
-    }
-
-    /**
-     * optimized all 검색은 FULLTEXT/작성자/회원 branch를 각각 제한합니다.
-     */
-    public function test_optimized_all_search_uses_bounded_branches_and_keeps_author_match(): void
-    {
-        config()->set('benchmark.board_list_variant', 'optimized');
-
-        $matchedId = $this->createTestPost([
-            'title' => '검색어 없는 제목',
-            'content' => '검색어 없는 본문',
-            'author_name' => 'needlexyzauthor',
-        ]);
-        $this->createTestPost(['author_name' => '다른작성자']);
-        $this->assertTrue(Schema::hasTable('board_post_author_terms'));
-        DB::table('board_post_author_terms')->insertOrIgnore([
-            ['board_id' => $this->board->id, 'author_name' => 'needlexyzauthor'],
-            ['board_id' => $this->board->id, 'author_name' => '다른작성자'],
-        ]);
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        $result = $this->repository->paginate($this->board->slug, [
-            'search' => 'needlexyz',
-            'search_field' => 'all',
-        ], 15);
-
-        $ids = collect($result->items())->pluck('id')->map(fn ($id) => (int) $id)->all();
-        $this->assertContains($matchedId, $ids);
-
-        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
-        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, ' union ')));
-        $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'board_post_author_terms')));
-        $this->assertTrue($queries->contains(fn ($sql) => str_contains($sql, 'users')));
-        $this->assertFalse($queries->contains(
-            fn ($sql) => str_contains($sql, 'user_id in (select') && str_contains($sql, 'limit')
-        ));
-        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, 'count(*) over()')));
-        $this->assertTrue($queries->filter(fn ($sql) => str_contains($sql, 'board_posts'))->every(
-            fn ($sql) => ! str_contains($sql, ' union ')
-        ));
-    }
-
-    public function test_optimized_explicit_search_fields_refuse_pages_beyond_the_result_cap(): void
-    {
-        config()->set('benchmark.board_list_variant', 'optimized');
-        config()->set('benchmark.board_search_sync_cap', 10);
-
-        foreach (['title_content', 'author'] as $searchField) {
-            DB::flushQueryLog();
-            DB::enableQueryLog();
-
-            $result = $this->repository->paginate($this->board->slug, [
-                'search' => 'needle',
-                'search_field' => $searchField,
-                'page' => 2,
-            ], 10, board: $this->board);
-
-            $postQueries = collect(DB::getQueryLog())
-                ->pluck('query')
-                ->filter(fn (string $sql) => str_contains(strtolower($sql), 'board_posts'));
-            DB::disableQueryLog();
-
-            $this->assertEmpty($result->items());
-            $this->assertFalse($result->hasMorePages());
-            $this->assertCount(0, $postQueries, "{$searchField} cap 밖 페이지는 게시글 쿼리를 실행하지 않아야 합니다.");
-        }
-    }
-
-    /**
-     * baseline 검색은 A/B 비교를 위해 기존 단일 OR 경로를 보존합니다.
-     */
-    public function test_baseline_all_search_keeps_original_or_query(): void
-    {
-        config()->set('benchmark.board_list_variant', 'baseline');
-        $this->createTestPost(['author_name' => 'baselineauthorxyz']);
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        $result = $this->repository->paginate($this->board->slug, [
-            'search' => 'baselineauthorxyz',
-            'search_field' => 'all',
-        ], 15);
-
-        $this->assertNotEmpty($result->items());
-
-        $queries = collect(DB::getQueryLog())->pluck('query')->map('strtolower');
-        $this->assertFalse($queries->contains(fn ($sql) => str_contains($sql, ' union ')));
-        $this->assertTrue($queries->contains(
-            fn ($sql) => str_contains($sql, 'author_name') && str_contains($sql, 'exists')
-        ));
     }
 }

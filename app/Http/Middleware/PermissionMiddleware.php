@@ -5,8 +5,8 @@ namespace App\Http\Middleware;
 use App\Enums\PermissionType;
 use App\Helpers\PermissionHelper;
 use App\Helpers\ResponseHelper;
-use App\Models\Permission;
 use App\Models\Role;
+use App\Support\GuestRoleResolver;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
@@ -15,13 +15,6 @@ use Symfony\Component\HttpFoundation\Response;
 
 class PermissionMiddleware
 {
-    /**
-     * guest role 캐시
-     *
-     * @var Role|null
-     */
-    protected static $guestRoleCache = null;
-
     /**
      * 특정 권한을 가진 사용자 또는 비회원(guest)의 접근을 허용합니다.
      *
@@ -126,17 +119,9 @@ class PermissionMiddleware
             return false;
         }
 
-        if (config('benchmark.common_variant', 'optimized') !== 'optimized') {
-            return $guestRole->permissions()
-                ->where('identifier', $permission)
-                ->where('type', $type)
-                ->exists();
-        }
-
-        return $guestRole->permissions->contains(
-            fn (Permission $candidate) => $candidate->identifier === $permission
-                && $candidate->type === $type
-        );
+        // 적재해 둔 권한 컬렉션에서 판정한다. permissions() 로 빌더를 다시 열면
+        // 캐시해 둔 의미가 사라져 판정마다 쿼리가 나간다.
+        return GuestRoleResolver::hasPermission($permission, $type);
     }
 
     /**
@@ -146,13 +131,7 @@ class PermissionMiddleware
      */
     protected function getGuestRole(): ?Role
     {
-        if (self::$guestRoleCache === null) {
-            self::$guestRoleCache = Role::where('identifier', 'guest')
-                ->with('permissions')
-                ->first();
-        }
-
-        return self::$guestRoleCache;
+        return GuestRoleResolver::resolve();
     }
 
     /**
@@ -161,10 +140,12 @@ class PermissionMiddleware
      * RolePermissionSeeder 실행 후 자동 호출 — 시드 직후 권한 변경이 즉시 반영되도록 보장.
      * 운영 환경에서는 권한 재시드 (코어 업데이트 / 확장 install) 시점에 캐시 정합 유지.
      * 테스트 환경에서는 RefreshDatabase 트랜잭션 rollback 후 새 시드의 stale id 회귀 방지.
+     *
+     * @return void
      */
     public static function clearGuestRoleCache(): void
     {
-        self::$guestRoleCache = null;
+        GuestRoleResolver::flush();
     }
 
     /**

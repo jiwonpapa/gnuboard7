@@ -3,19 +3,13 @@
     "layout_name": "shop/index",
     "permissions": [],
     "extends": "_user_base",
-    "computed": {
-        "categories": "{{storefront?.data?.categories}}",
-        "recentProducts": "{{storefront?.data?.recentProducts}}",
-        "popularProducts": "{{storefront?.data?.popularProducts}}",
-        "newProducts": "{{storefront?.data?.newProducts}}"
-    },
     "meta": {
         "seo": {
             "enabled": true,
             "extensions": [
                 { "type": "module", "id": "sirsoft-ecommerce" }
             ],
-            "data_sources": ["products", "storefront"],
+            "data_sources": ["products", "categories", "popularProducts", "newProducts"],
             "page_type": "shop_index",
             "toggle_setting": "$module_settings:sirsoft-ecommerce:seo.seo_shop_index",
             "vars": {
@@ -68,6 +62,18 @@
     },
     "data_sources": [
         {
+            "id": "categories",
+            "label_key": "$t:editor.data_source.categories",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-ecommerce/categories",
+            "method": "GET",
+            "auto_fetch": true,
+            "loading_strategy": "progressive",
+            "fallback": {
+                "data": []
+            }
+        },
+        {
             "id": "products",
             "label_key": "$t:editor.data_source.products",
             "type": "api",
@@ -94,10 +100,10 @@
             }
         },
         {
-            "id": "storefront",
-            "label_key": "$t:editor.data_source.products",
+            "id": "recentProducts",
+            "label_key": "$t:editor.data_source.recentProducts",
             "type": "api",
-            "endpoint": "/api/modules/sirsoft-ecommerce/storefront",
+            "endpoint": "/api/modules/sirsoft-ecommerce/products/recent",
             "method": "GET",
             "auth_mode": "optional",
             "params": {
@@ -106,12 +112,33 @@
             "auto_fetch": true,
             "loading_strategy": "progressive",
             "fallback": {
-                "data": {
-                    "categories": { "data": [] },
-                    "recentProducts": { "data": [] },
-                    "popularProducts": { "data": [] },
-                    "newProducts": { "data": [] }
-                }
+                "data": []
+            }
+        },
+        {
+            "id": "popularProducts",
+            "label_key": "$t:editor.data_source.popularProducts",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-ecommerce/products/popular?limit=8",
+            "method": "GET",
+            "auth_mode": "optional",
+            "auto_fetch": true,
+            "loading_strategy": "progressive",
+            "fallback": {
+                "data": []
+            }
+        },
+        {
+            "id": "newProducts",
+            "label_key": "$t:editor.data_source.newProducts",
+            "type": "api",
+            "endpoint": "/api/modules/sirsoft-ecommerce/products/new?limit=8",
+            "method": "GET",
+            "auth_mode": "optional",
+            "auto_fetch": true,
+            "loading_strategy": "progressive",
+            "fallback": {
+                "data": []
             }
         }
     ],
@@ -143,7 +170,7 @@
                                         "name": "Icon",
                                         "props": {
                                             "name": "shopping-cart",
-                                            "className": "w-6 h-6"
+                                            "className": "text-2xl"
                                         }
                                     },
                                     {
@@ -204,7 +231,7 @@
                                 },
                                 "text": "$t:shop.category.all",
                                 "actions": [
-                                    { "type": "click", "handler": "navigate", "params": { "path": "{{_global.shopBase}}/products", "query": {} } }
+                                    { "comment": "audit:allow layout-list-context-navigate-merge-query 카테고리 '전체' 선택 — 카테고리 필터를 푸는 의도적 리셋이므로 병합하지 않는다", "type": "click", "handler": "navigate", "params": { "path": "{{_global.shopBase}}/products", "query": {} } }
                                 ]
                             },
                             {
@@ -220,7 +247,7 @@
                                         },
                                         "text": "{{cat?.name_localized}}",
                                         "actions": [
-                                            { "type": "click", "handler": "navigate", "params": { "path": "{{_global.shopBase}}/products", "query": { "category": "{{cat?.id}}", "page": "1" } } }
+                                            { "comment": "audit:allow layout-list-context-navigate-merge-query 카테고리 전환 — 다른 목록으로의 이동이라 이전 카테고리의 검색·정렬 상태를 승계하지 않는다", "type": "click", "handler": "navigate", "params": { "path": "{{_global.shopBase}}/products", "query": { "category": "{{cat?.id}}", "page": "1" } } }
                                         ]
                                     }
                                 ]

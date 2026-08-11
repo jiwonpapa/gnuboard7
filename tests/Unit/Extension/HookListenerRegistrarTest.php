@@ -6,11 +6,7 @@ use App\Contracts\Extension\HookListenerInterface;
 use App\Extension\HookListenerRegistrar;
 use App\Extension\HookManager;
 use App\Jobs\DispatchHookListenerJob;
-use App\Models\User;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\App;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -21,6 +17,8 @@ use Tests\TestCase;
  */
 class HookListenerRegistrarTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -61,12 +59,11 @@ class HookListenerRegistrarTest extends TestCase
     {
         Queue::fake();
 
-        $user = User::factory()->make();
-        $user->id = 123;
-        Auth::login($user);
-        App::setLocale('ko');
+        $user = \App\Models\User::factory()->create();
+        \Illuminate\Support\Facades\Auth::login($user);
+        \Illuminate\Support\Facades\App::setLocale('ko');
 
-        $request = Request::create('/api/admin/users', 'GET', [], [], [], [
+        $request = \Illuminate\Http\Request::create('/api/admin/users', 'GET', [], [], [], [
             'REMOTE_ADDR' => '203.0.113.10',
             'HTTP_USER_AGENT' => 'TestAgent/1.0',
         ]);
@@ -112,47 +109,6 @@ class HookListenerRegistrarTest extends TestCase
 
         $this->assertEquals('original_filtered', $result);
         Queue::assertNotPushed(DispatchHookListenerJob::class);
-    }
-
-    /**
-     * optimized 공통 프로파일은 훅별 I/O 대신 리스너별 요약 1건만 남깁니다.
-     */
-    public function test_optimized_common_variant_logs_one_summary_per_listener(): void
-    {
-        config()->set('benchmark.common_variant', 'optimized');
-        Log::spy();
-
-        HookListenerRegistrar::register(StubMultipleHooksListener::class, 'test-source');
-
-        Log::shouldHaveReceived('info')
-            ->once()
-            ->with('훅 리스너 등록 요약', [
-                'listener' => StubMultipleHooksListener::class,
-                'hook_count' => 2,
-                'source' => 'test-source',
-            ]);
-        Log::shouldHaveReceived('info')->once();
-    }
-
-    /**
-     * baseline 공통 프로파일은 기존 훅별 로그 계약을 그대로 보존합니다.
-     */
-    public function test_baseline_common_variant_preserves_per_hook_logs(): void
-    {
-        config()->set('benchmark.common_variant', 'baseline');
-        Log::spy();
-
-        HookListenerRegistrar::register(StubMultipleHooksListener::class, 'test-source');
-
-        Log::shouldHaveReceived('info')
-            ->twice()
-            ->withArgs(function (string $message, array $context): bool {
-                return $message === '훅 리스너 등록 완료'
-                    && in_array($context['hook'], ['test.registrar.multiple.action', 'test.registrar.multiple.filter'], true)
-                    && $context['listener'] === StubMultipleHooksListener::class
-                    && $context['source'] === 'test-source';
-            });
-        Log::shouldHaveReceived('info')->twice();
     }
 
     /**
@@ -323,26 +279,6 @@ class StubFilterListener implements HookListenerInterface
     public function handleFilter(string $value): string
     {
         return $value.'_filtered';
-    }
-}
-
-class StubMultipleHooksListener implements HookListenerInterface
-{
-    public static function getSubscribedHooks(): array
-    {
-        return [
-            'test.registrar.multiple.action' => ['method' => 'handleAction', 'priority' => 10, 'sync' => true],
-            'test.registrar.multiple.filter' => ['method' => 'handleFilter', 'priority' => 20, 'type' => 'filter'],
-        ];
-    }
-
-    public function handle(...$args): void {}
-
-    public function handleAction(): void {}
-
-    public function handleFilter(string $value): string
-    {
-        return $value;
     }
 }
 

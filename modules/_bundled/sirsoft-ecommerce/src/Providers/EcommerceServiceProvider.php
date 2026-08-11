@@ -31,7 +31,9 @@ use Modules\Sirsoft\Ecommerce\Repositories\Contracts\MileageBalanceRepositoryInt
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\MileageTransactionRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderCancelOptionRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderCancelRepositoryInterface;
+use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderCashReceiptRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderOptionRepositoryInterface;
+use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderPaymentRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderRefundOptionRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderRefundRepositoryInterface;
 use Modules\Sirsoft\Ecommerce\Repositories\Contracts\OrderRepositoryInterface;
@@ -64,7 +66,9 @@ use Modules\Sirsoft\Ecommerce\Repositories\MileageBalanceRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\MileageTransactionRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderCancelOptionRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderCancelRepository;
+use Modules\Sirsoft\Ecommerce\Repositories\OrderCashReceiptRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderOptionRepository;
+use Modules\Sirsoft\Ecommerce\Repositories\OrderPaymentRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderRefundOptionRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderRefundRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\OrderRepository;
@@ -90,13 +94,11 @@ use Modules\Sirsoft\Ecommerce\Repositories\TempOrderRepository;
 use Modules\Sirsoft\Ecommerce\Repositories\UserAddressRepository;
 use Modules\Sirsoft\Ecommerce\Seo\EcommerceSitemapContributor;
 use Modules\Sirsoft\Ecommerce\Services\CategoryImageService;
-use Modules\Sirsoft\Ecommerce\Services\CategoryService;
 use Modules\Sirsoft\Ecommerce\Services\CurrencyConversionService;
 use Modules\Sirsoft\Ecommerce\Services\PaymentMethodResolver;
 use Modules\Sirsoft\Ecommerce\Services\ProductImageService;
 use Modules\Sirsoft\Ecommerce\Services\ProductReviewImageService;
 use Modules\Sirsoft\Ecommerce\Services\ProductReviewService;
-use Modules\Sirsoft\Ecommerce\Services\ProductService;
 use Modules\Sirsoft\Ecommerce\Services\ShippingPolicyResolver;
 
 /**
@@ -123,12 +125,6 @@ class EcommerceServiceProvider extends BaseModuleServiceProvider
         ProductReviewImageService::class,
     ];
 
-    /** @var array<int, class-string> */
-    protected array $cacheServices = [
-        CategoryService::class,
-        ProductService::class,
-    ];
-
     /**
      * Repository 인터페이스와 구현체 매핑
      *
@@ -145,7 +141,9 @@ class EcommerceServiceProvider extends BaseModuleServiceProvider
         ExtraFeeTemplateRepositoryInterface::class => ExtraFeeTemplateRepository::class,
         OrderCancelRepositoryInterface::class => OrderCancelRepository::class,
         OrderCancelOptionRepositoryInterface::class => OrderCancelOptionRepository::class,
+        OrderCashReceiptRepositoryInterface::class => OrderCashReceiptRepository::class,
         OrderOptionRepositoryInterface::class => OrderOptionRepository::class,
+        OrderPaymentRepositoryInterface::class => OrderPaymentRepository::class,
         OrderRefundRepositoryInterface::class => OrderRefundRepository::class,
         OrderRefundOptionRepositoryInterface::class => OrderRefundOptionRepository::class,
         OrderRepositoryInterface::class => OrderRepository::class,
@@ -226,8 +224,9 @@ class EcommerceServiceProvider extends BaseModuleServiceProvider
         // Sitemap 기여자 등록
         $this->app->booted(function () {
             if ($this->app->bound(SitemapGenerator::class)) {
+                // Repository 주입을 위해 컨테이너로 해석합니다.
                 $this->app->make(SitemapGenerator::class)->registerContributor(
-                    new EcommerceSitemapContributor
+                    $this->app->make(EcommerceSitemapContributor::class)
                 );
             }
         });

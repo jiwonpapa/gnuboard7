@@ -5,16 +5,16 @@
         "ko": "벤치마크 더미데이터",
         "en": "Benchmark Dummy Data"
     },
-    "version": "0.3.2",
+    "version": "0.4.0",
     "license": "MIT",
     "description": {
         "ko": "대용량 게시판 및 쇼핑몰 상품 벤치마크 데이터 생성 모듈",
         "en": "Module for generating large benchmark datasets for boards and ecommerce products"
     },
-    "g7_version": ">=7.0.3",
+    "g7_version": ">=7.0.6",
     "dependencies": {
         "modules": {
-            "sirsoft-board": ">=1.1.3",
+            "sirsoft-board": ">=1.0.3",
             "sirsoft-ecommerce": ">=1.0.3"
         },
         "plugins": {}

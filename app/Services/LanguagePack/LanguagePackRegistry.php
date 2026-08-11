@@ -56,14 +56,14 @@ class LanguagePackRegistry
             return $this->activeCoreLocalesCache;
         }
 
-        $fromDb = config('benchmark.common_variant', 'optimized') === 'optimized'
-            ? $this->getActivePacks(LanguagePackScope::Core->value)
-                ->pluck('locale')
-                ->unique()
-                ->values()
-                ->all()
-            : $this->repository->getActiveCoreLocales();
-        $merged = array_values(array_unique(array_merge(self::BUNDLED_CORE_LOCALES, $fromDb)));
+        // 활성 언어팩 전체는 getActivePacks() 가 이미 한 번 적재해 캐시한다. 코어 로케일은
+        // 그 컬렉션의 부분집합이므로 DB 를 다시 부르지 않고 여기서 걸러 낸다.
+        // (부팅 경로에서 두 메서드가 모두 호출되므로, 재조회하면 요청마다 쿼리가 하나 더 는다)
+        $fromPacks = $this->getActivePacks(LanguagePackScope::Core->value)
+            ->pluck('locale')
+            ->all();
+
+        $merged = array_values(array_unique(array_merge(self::BUNDLED_CORE_LOCALES, $fromPacks)));
 
         return $this->activeCoreLocalesCache = $merged;
     }
@@ -155,6 +155,8 @@ class LanguagePackRegistry
 
     /**
      * 캐시를 만료시킵니다 (활성화/비활성화/제거 직후 호출).
+     *
+     * @return void
      */
     public function invalidate(): void
     {

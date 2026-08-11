@@ -2,20 +2,23 @@
 
 namespace Modules\Sirsoft\Board\Repositories;
 
-use App\Contracts\Extension\CacheInterface;
 use App\Enums\PermissionType;
 use App\Helpers\PermissionHelper;
-use App\Search\Engines\DatabaseFulltextEngine;
-use App\Search\ManticoreIntegratedSearch;
+use App\Repositories\Concerns\PaginatesWithDeferredJoin;
+use App\Search\KeywordSearch;
+use App\Support\Query\BoundedCount;
+use App\Support\Query\BoundedPage;
+use App\Support\Query\BoundedPaginator;
+use App\Support\Query\KeysetPaginator;
+use App\Support\Query\PaginationLimits;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Database\QueryException;
+use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Modules\Sirsoft\Board\Enums\PostStatus;
 use Modules\Sirsoft\Board\Enums\TriggerType;
 use Modules\Sirsoft\Board\Models\Attachment;
@@ -25,7 +28,6 @@ use Modules\Sirsoft\Board\Models\Post;
 use Modules\Sirsoft\Board\Repositories\Contracts\PostRepositoryInterface;
 use Modules\Sirsoft\Board\Traits\ChecksBoardPermission;
 use Modules\Sirsoft\Board\Traits\FormatsBoardDate;
-use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
 
 /**
  * 게시글 Repository
@@ -36,38 +38,12 @@ class PostRepository implements PostRepositoryInterface
 {
     use ChecksBoardPermission;
     use FormatsBoardDate;
-
-    /** 검색 window total을 Controller까지 전달하는 내부 모델 속성 */
-    private const INTERNAL_TOTAL_ATTRIBUTE = '__g7_normal_posts_total';
-
-    /** 검색 total이 정확한 값인지 전달하는 내부 모델 속성 */
-    private const INTERNAL_TOTAL_EXACT_ATTRIBUTE = '__g7_normal_posts_total_is_exact';
-
-    /** 검색 total의 의미(eq/gte/unknown)를 전달하는 내부 모델 속성 */
-    private const INTERNAL_TOTAL_RELATION_ATTRIBUTE = '__g7_normal_posts_total_relation';
-
-    /** 작성자 검색 사전 존재 여부를 요청 안에서 재사용합니다. */
-    private ?bool $authorTermsAvailable = null;
-
-    /** 첫 페이지에 함께 노출할 공지글 최대 수 */
-    private const MAX_NOTICE_POSTS = 10;
-
-    /** 한 페이지에서 본문과 함께 펼칠 답글 최대 수 */
-    private const MAX_INLINE_REPLIES = 100;
-
-    /** 메모리 상한을 넘긴 FULLTEXT 키워드의 재시도 억제 시간 */
-    private const BROAD_FULLTEXT_CACHE_TTL_SECONDS = 600;
-
-    /** 게시판별 최신 ID 제한 조회에 사용하는 covering index */
-    private const LIST_ID_INDEX = 'idx_board_posts_list_id';
+    use PaginatesWithDeferredJoin;
 
     /**
      * PostRepository 생성자
      */
-    public function __construct(
-        private readonly CacheInterface $cache,
-        private readonly ManticoreIntegratedSearch $manticoreSearch,
-    ) {}
+    public function __construct() {}
 
     /**
      * 게시판의 게시글 목록을 페이지네이션하여 조회합니다.
@@ -76,6 +52,7 @@ class PostRepository implements PostRepositoryInterface
      * @param  array  $filters  필터 조건
      * @param  int  $perPage  페이지당 항목 수 (일반 게시글 기준)
      * @param  bool  $withTrashed  삭제된 게시글 포함 여부
+     * @param  Board|null  $board  게시판 모델 (이미 조회된 경우 전달하여 중복 쿼리 방지)
      * @return Paginator 페이지네이션된 게시글 목록 (simplePaginate — COUNT 쿼리 제거)
      */
     public function paginate(string $slug, array $filters = [], int $perPage = 15, bool $withTrashed = false, ?Board $board = null): Paginator
@@ -94,7 +71,7 @@ class PostRepository implements PostRepositoryInterface
 
         // buildSortedPostList를 사용하여 페이지네이션된 목록 조회
         // attachments, board 제거 — 목록에서는 has_attachment(attachments_count) 사용, board는 Controller에서 전달
-        $query = fn () => $this->buildSortedPostList(
+        return $this->buildSortedPostList(
             slug: $slug,
             columns: $listColumns,
             withTrashed: $withTrashed,
@@ -105,40 +82,6 @@ class PostRepository implements PostRepositoryInterface
             currentPage: $currentPage,
             board: $board,
         );
-
-        return ! empty($filters['search'])
-            ? $this->withSearchConcurrencyGuard($query)
-            : $query();
-    }
-
-    /**
-     * MySQL 서버 한 대에서 무거운 게시판 검색을 한 번만 실행합니다.
-     *
-     * 대기 시간이 0인 advisory lock이므로 중복 검색은 DB 자원을 기다리며 쌓이지
-     * 않고 즉시 429 성격으로 실패합니다. SQLite 등 테스트 DB에서는 no-op입니다.
-     */
-    private function withSearchConcurrencyGuard(callable $callback): mixed
-    {
-        if (DB::getDriverName() !== 'mysql') {
-            return $callback();
-        }
-
-        $lockName = 'g7:board-search:sync';
-        $result = DB::selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lockName]);
-        if ((int) ($result->acquired ?? 0) !== 1) {
-            throw new TooManyRequestsHttpException(1, __('errors.503.message'));
-        }
-
-        try {
-            return $callback();
-        } finally {
-            try {
-                DB::selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName]);
-            } catch (\Throwable) {
-                // 연결 장애로 인한 해제 실패가 원래 검색 예외를 덮지 않게 합니다.
-                // MySQL named lock은 해당 연결이 끊기면 자동 해제됩니다.
-            }
-        }
     }
 
     /**
@@ -149,6 +92,32 @@ class PostRepository implements PostRepositoryInterface
      */
     private function applyFilters($query, array $filters): void
     {
+        // 검색
+        if (! empty($filters['search'])) {
+            // FULLTEXT 와 LIKE 는 이스케이프 규칙이 다르다. LIKE 용으로 이스케이프한 문자열을
+            // MATCH 에 그대로 넘기면 백슬래시가 검색어의 일부로 들어간다.
+            $rawKeyword = (string) $filters['search'];
+            $likeKeyword = $this->escapeLikeKeyword($rawKeyword);
+            $searchField = $filters['search_field'] ?? 'all';
+
+            $query->where(function ($q) use ($rawKeyword, $likeKeyword, $searchField) {
+                // 제목+내용 검색: FULLTEXT 활용 (all, title_content)
+                // 코어 헬퍼를 거쳐야 BOOLEAN MODE 연산자(+ - * " 등) 입력이 500 이 되지 않는다.
+                if ($searchField === 'all' || $searchField === 'title_content') {
+                    KeywordSearch::apply($q, ['title', 'content'], $rawKeyword, 'or');
+                }
+
+                // 작성자 검색
+                if ($searchField === 'all' || $searchField === 'author' || $searchField === 'author_name') {
+                    $q->orWhere('author_name', 'like', "%{$likeKeyword}%")
+                        ->orWhereHas('user', function ($uq) use ($likeKeyword) {
+                            $uq->where('name', 'like', "%{$likeKeyword}%")
+                                ->orWhere('email', 'like', "%{$likeKeyword}%");
+                        });
+                }
+            });
+        }
+
         // 상태 필터
         if (! empty($filters['status'])) {
             if ($filters['status'] === 'secret') {
@@ -196,679 +165,6 @@ class PostRepository implements PostRepositoryInterface
             // 종료일 23:59:59까지 검색
             $query->where('created_at', '<=', $filters['created_at_to'].' 23:59:59');
         }
-
-        // optimized ID branch가 나머지 필터를 포함하도록 검색은 마지막에 적용한다.
-        if (! empty($filters['search'])) {
-            $this->applySearchFilter(
-                $query,
-                $filters['search'],
-                $filters['search_field'] ?? 'all'
-            );
-        }
-    }
-
-    /**
-     * 게시글 검색 조건을 적용합니다.
-     *
-     * baseline은 기존 OR 쿼리를 보존하고, optimized all 검색은 FULLTEXT,
-     * 작성자 스냅샷, 회원 정보 매칭을 별도 ID 집합으로 분리합니다.
-     */
-    private function applySearchFilter(Builder $query, string $search, string $searchField): void
-    {
-        $keyword = $this->escapeLikeKeyword($search);
-
-        if (
-            $searchField === 'all'
-            && config('benchmark.board_list_variant', 'optimized') === 'optimized'
-        ) {
-            $this->applyOptimizedAllSearch($query, $search, $keyword);
-
-            return;
-        }
-
-        // G7 7.0.4 기준 경로. baseline A/B 비교와 개별 search_field 계약을 보존한다.
-        $query->where(function ($q) use ($keyword, $searchField) {
-            if ($searchField === 'all' || $searchField === 'title_content') {
-                if (DatabaseFulltextEngine::supportsFulltext()) {
-                    $q->orWhereRaw('MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)', [$keyword]);
-                } else {
-                    $q->orWhere('title', 'like', "%{$keyword}%")
-                        ->orWhere('content', 'like', "%{$keyword}%");
-                }
-            }
-
-            if ($searchField === 'all' || $searchField === 'author' || $searchField === 'author_name') {
-                $q->orWhere('author_name', 'like', "%{$keyword}%")
-                    ->orWhereHas('user', function ($uq) use ($keyword) {
-                        $uq->where('name', 'like', "%{$keyword}%")
-                            ->orWhere('email', 'like', "%{$keyword}%");
-                    });
-            }
-        });
-    }
-
-    /**
-     * all 검색을 인덱스 가능한 ID UNION 서브쿼리로 변환합니다.
-     */
-    private function applyOptimizedAllSearch(Builder $query, string $search, string $likeKeyword): void
-    {
-        // 게시판/공지/원글/권한/삭제 및 필터 조건을 각 branch에 복제해 스캔을 줄인다.
-        $fulltextIds = (clone $query)->select('board_posts.id as matched_post_id');
-        if (DatabaseFulltextEngine::supportsFulltext()) {
-            $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($search);
-            if ($fulltextKeyword === '') {
-                $fulltextIds->whereRaw('1 = 0');
-            } else {
-                $fulltextIds->whereRaw(
-                    'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)',
-                    [$fulltextKeyword]
-                );
-            }
-        } else {
-            $fulltextIds->where(function ($q) use ($likeKeyword) {
-                $q->where('title', 'like', "%{$likeKeyword}%")
-                    ->orWhere('content', 'like', "%{$likeKeyword}%");
-            });
-        }
-
-        if ($this->hasAuthorTermsTable()) {
-            // 게시글 전체가 아니라 게시판별 고유 작성자명만 부분검색하고,
-            // 매칭된 이름을 기존 (board_id, author_name) 인덱스로 equality join한다.
-            // 컬럼을 별칭 처리해 원본 쿼리의 board_id 조건과 모호해지지 않게 한다.
-            $matchingAuthorTerms = DB::table('board_post_author_terms')
-                ->select([
-                    'board_id as matched_board_id',
-                    'author_name as matched_author_name',
-                ])
-                ->where('author_name', 'like', "%{$likeKeyword}%");
-            $authorNameIds = (clone $query)
-                ->select('board_posts.id as matched_post_id')
-                ->joinSub($matchingAuthorTerms, 'board_search_author_terms', function ($join) {
-                    $join->on('board_search_author_terms.matched_board_id', '=', 'board_posts.board_id')
-                        ->on('board_search_author_terms.matched_author_name', '=', 'board_posts.author_name');
-                });
-        } else {
-            // 마이그레이션 전·정확 복구 상태에서는 기존 의미를 보존합니다.
-            $authorNameIds = (clone $query)
-                ->select('board_posts.id as matched_post_id')
-                ->where('author_name', 'like', "%{$likeKeyword}%");
-        }
-
-        // 회원을 먼저 선별한 뒤 board_posts.user_id 인덱스로 연결해
-        // 대량 게시글 각 행의 상관 EXISTS 반복을 피한다.
-        $matchingUserIds = DB::table('users')
-            ->select('users.id as matched_user_id')
-            ->where(function ($users) use ($likeKeyword) {
-                $users->where('name', 'like', "%{$likeKeyword}%")
-                    ->orWhere('email', 'like', "%{$likeKeyword}%");
-            })
-            ->distinct();
-
-        $eligibleUserPosts = (clone $query)->select([
-            'board_posts.id as matched_post_id',
-            'board_posts.user_id as matched_user_id',
-        ]);
-        // 작성자 회원 집합과 조회 대상 게시글을 각각 derived table로 유지한다.
-        // JOIN_ORDER 같은 강제 힌트는 실제 MySQL EXPLAIN으로 효과를 확인하기 전에는 사용하지 않는다.
-        $userIds = DB::query()
-            ->fromSub($matchingUserIds, 'board_search_users')
-            ->select('board_search_user_posts.matched_post_id')
-            ->joinSub(
-                query: $eligibleUserPosts,
-                as: 'board_search_user_posts',
-                first: function ($join) {
-                    $join->on(
-                        'board_search_user_posts.matched_user_id',
-                        '=',
-                        'board_search_users.matched_user_id'
-                    );
-                }
-            );
-
-        // derived UNION을 먼저 materialize한 후 outer list와 조인한다.
-        // WHERE IN + UNION은 MySQL이 outer 행마다 DEPENDENT SUBQUERY로 변환할 수 있어
-        // FULLTEXT branch조차 PK eq_ref로 평가되므로 사용하지 않는다.
-        // UNION(distinct)으로 여러 branch에 동시 매칭된 ID 중복을 제거해 목록 중복을 막는다.
-        $matchingIds = $fulltextIds
-            ->union($authorNameIds)
-            ->union($userIds);
-
-        $query->joinSub($matchingIds, 'board_search_matches', function ($join) {
-            $join->on('board_posts.id', '=', 'board_search_matches.matched_post_id');
-        });
-    }
-
-    /**
-     * 작성자 검색 사전 테이블이 준비됐는지 확인합니다.
-     */
-    private function hasAuthorTermsTable(): bool
-    {
-        return $this->authorTermsAvailable ??= Schema::hasTable('board_post_author_terms');
-    }
-
-    /**
-     * 동기 검색이 확인할 최대 후보 수입니다.
-     *
-     * cap + 1건을 조회해야 total이 하한값인지 정확한 값인지 구분할 수 있습니다.
-     */
-    private function searchCandidateLimit(): int
-    {
-        return max(10, (int) config('benchmark.board_search_sync_cap', 1000)) + 1;
-    }
-
-    /**
-     * optimized 게시판 검색용 BOOLEAN MODE 토큰 정제입니다.
-     *
-     * 공용 sanitizer의 토큰별 exact phrase는 대량 인덱스에서 FULLTEXT
-     * initialization을 길게 만들 수 있어 연산자만 제거하고 일반 토큰으로 검색합니다.
-     */
-    private function sanitizeOptimizedBooleanKeyword(string $keyword): string
-    {
-        $cleaned = preg_replace('/[+\-<>()~*"@]/u', ' ', $keyword);
-        $cleaned = preg_replace('/[\x00-\x1F\x7F]/u', ' ', (string) $cleaned);
-        $tokens = preg_split('/\s+/u', trim((string) $cleaned), -1, PREG_SPLIT_NO_EMPTY);
-
-        return empty($tokens) ? '' : implode(' ', $tokens);
-    }
-
-    /** FULLTEXT 메모리 차단 시 확인할 최근 게시글 수입니다. */
-    private function searchFallbackScanCap(): int
-    {
-        return max(100, min(5000, (int) config('benchmark.board_search_fallback_scan_cap', 1000)));
-    }
-
-    /** 동일한 광범위 FULLTEXT 검색의 반복 실행을 막는 캐시 키입니다. */
-    private function broadFulltextCacheKey(string $keyword): string
-    {
-        $normalized = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $keyword)));
-
-        return 'search:fts-result-cache-limit:'.hash('sha256', $normalized);
-    }
-
-    private function shouldBypassFulltext(string $keyword): bool
-    {
-        try {
-            return (bool) $this->cache->get($this->broadFulltextCacheKey($keyword), false);
-        } catch (\Throwable) {
-            // 캐시 장애가 검색 자체를 막지 않게 하며 DB 안전장치는 계속 적용됩니다.
-            return false;
-        }
-    }
-
-    private function rememberBroadFulltext(string $keyword): void
-    {
-        try {
-            $this->cache->put(
-                $this->broadFulltextCacheKey($keyword),
-                true,
-                self::BROAD_FULLTEXT_CACHE_TTL_SECONDS
-            );
-        } catch (\Throwable) {
-            // 캐시 실패 시에도 현재 요청은 제한형 fallback으로 복구합니다.
-        }
-    }
-
-    /** MySQL InnoDB FULLTEXT 결과 캐시 상한 오류인지 판별합니다. */
-    private function isFulltextResultCacheLimitExceeded(QueryException $exception): bool
-    {
-        $driverError = is_array($exception->errorInfo ?? null)
-            ? (int) ($exception->errorInfo[1] ?? 0)
-            : 0;
-
-        return $driverError === 188
-            || str_contains(strtolower($exception->getMessage()), 'fts query exceeds result cache limit');
-    }
-
-    /**
-     * 최근 eligible ID를 먼저 고정한 뒤 그 범위 안에서만 LIKE를 수행합니다.
-     *
-     * ID 조회와 본문 검색을 두 쿼리로 분리해 optimizer의 join 순서와 무관하게
-     * LIKE 대상 행 수를 고정합니다. 결과는 완전 검색이 아닌 제한형 하한값입니다.
-     */
-    private function buildBoundedSearchFallbackQuery(Builder $baseQuery, string $keyword): Builder
-    {
-        $recentIds = (clone $baseQuery)
-            ->reorder()
-            ->forceIndex(self::LIST_ID_INDEX)
-            ->orderBy('board_posts.id', 'desc')
-            ->limit($this->searchFallbackScanCap())
-            ->pluck('board_posts.id')
-            ->map(static fn ($id) => (int) $id)
-            ->all();
-        $escapedKeyword = $this->escapeLikeKeyword($keyword);
-
-        return (clone $baseQuery)
-            ->reorder()
-            ->forceIndex('PRIMARY')
-            ->whereIntegerInRaw('board_posts.id', $recentIds)
-            ->where(function ($query) use ($escapedKeyword) {
-                $query->where('board_posts.title', 'like', "%{$escapedKeyword}%")
-                    ->orWhere('board_posts.content', 'like', "%{$escapedKeyword}%");
-            });
-    }
-
-    /**
-     * 선택된 검색 채널을 각각 제한한 뒤 ID 후보만 병합합니다.
-     *
-     * FULLTEXT/작성자명/회원 검색을 UNION derived table 하나로 합치면 MySQL이
-     * outer LIMIT 전에 전체 ID를 materialize할 수 있습니다. 각 branch 내부에
-     * LIMIT을 먼저 적용하면 한 요청이 만들 수 있는 후보와 임시 테이블 크기가
-     * 명시적으로 제한됩니다.
-     *
-     * @return array{candidates: Collection<int, Post>, total_is_exact: bool, branch_reached_limit: bool, fallback_used: bool}
-     */
-    private function fetchOptimizedSearchCandidates(
-        Builder $baseQuery,
-        string $search,
-        string $searchField,
-        string $likeKeyword,
-        string $orderBy,
-        string $orderDirection,
-        int $limit
-    ): array {
-        $limit = max(1, min($limit, $this->searchCandidateLimit()));
-        if (! in_array($searchField, ['all', 'title_content', 'author', 'author_name'], true)) {
-            $searchField = 'all';
-        }
-        $branches = [];
-
-        if (in_array($searchField, ['all', 'title_content'], true)) {
-            $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
-            $bypassFulltext = $fulltextSupported && $this->shouldBypassFulltext($search);
-            $fulltext = $bypassFulltext
-                ? $this->buildBoundedSearchFallbackQuery($baseQuery, $search)
-                : clone $baseQuery;
-            if ($fulltextSupported && ! $bypassFulltext) {
-                $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($search);
-                $fulltext->whereRaw(
-                    $fulltextKeyword === ''
-                        ? '1 = 0'
-                        : 'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)',
-                    $fulltextKeyword === '' ? [] : [$fulltextKeyword]
-                );
-            } elseif (! $fulltextSupported) {
-                $fulltext->where(function ($query) use ($likeKeyword) {
-                    $query->where('title', 'like', "%{$likeKeyword}%")
-                        ->orWhere('content', 'like', "%{$likeKeyword}%");
-                });
-            }
-            // FULLTEXT 전체 결과를 created_at 등으로 먼저 정렬하면 LIMIT 전 대량 filesort가
-            // 발생할 수 있으므로 엔진이 반환하는 후보를 먼저 제한하고 아래에서 정렬합니다.
-            $branches[] = [
-                'query' => $fulltext,
-                'order_by_id' => $bypassFulltext,
-                'fallback_base' => $fulltextSupported && ! $bypassFulltext ? clone $baseQuery : null,
-                'fallback_used' => $bypassFulltext,
-            ];
-        }
-
-        if (in_array($searchField, ['all', 'author', 'author_name'], true)) {
-            if ($this->hasAuthorTermsTable()) {
-                // 작성자 사전 자체도 제한해 `%keyword%`가 사전 전체를 materialize하지 않게 합니다.
-                $matchingAuthorTerms = DB::table('board_post_author_terms')
-                    ->select([
-                        'board_id as matched_board_id',
-                        'author_name as matched_author_name',
-                    ])
-                    ->where('author_name', 'like', "%{$likeKeyword}%")
-                    ->orderBy('board_id')
-                    ->orderBy('author_name')
-                    ->limit($limit);
-                $authorNames = (clone $baseQuery)
-                    ->joinSub($matchingAuthorTerms, 'board_search_author_terms', function ($join) {
-                        $join->on('board_search_author_terms.matched_board_id', '=', 'board_posts.board_id')
-                            ->on('board_search_author_terms.matched_author_name', '=', 'board_posts.author_name');
-                    });
-            } else {
-                $authorNames = (clone $baseQuery)
-                    ->where('author_name', 'like', "%{$likeKeyword}%");
-            }
-            $branches[] = ['query' => $authorNames, 'order_by_id' => true];
-
-            $matchingUserIds = DB::table('users')
-                ->select('users.id')
-                ->where(function ($users) use ($likeKeyword) {
-                    $users->where('name', 'like', "%{$likeKeyword}%")
-                        ->orWhere('email', 'like', "%{$likeKeyword}%");
-                })
-                ->orderBy('users.id')
-                ->limit($limit)
-                ->pluck('users.id')
-                ->map(static fn ($id) => (int) $id)
-                ->all();
-            $branches[] = [
-                // MySQL은 LIMIT이 있는 IN subquery를 지원하지 않는 버전이 있으므로
-                // 제한된 회원 ID를 먼저 materialize한 뒤 정수 IN 목록으로 조회합니다.
-                'query' => (clone $baseQuery)->whereIntegerInRaw('board_posts.user_id', $matchingUserIds),
-                'order_by_id' => true,
-            ];
-        }
-
-        $selectColumns = ['board_posts.id'];
-        if ($orderBy !== 'id') {
-            $selectColumns[] = "board_posts.{$orderBy}";
-        }
-
-        $candidates = collect();
-        $branchReachedLimit = false;
-        $fallbackUsed = false;
-        foreach ($branches as $branchConfig) {
-            /** @var Builder $branch */
-            $branch = $branchConfig['query']->reorder();
-            if ($branchConfig['order_by_id']) {
-                $branch->orderBy('board_posts.id', $orderDirection);
-            }
-            try {
-                $rows = $branch->limit($limit)->get($selectColumns);
-            } catch (QueryException $exception) {
-                if (! ($branchConfig['fallback_base'] ?? null)
-                    || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
-                    throw $exception;
-                }
-
-                $this->rememberBroadFulltext($search);
-                $fallbackUsed = true;
-                $branch = $this->buildBoundedSearchFallbackQuery(
-                    $branchConfig['fallback_base'],
-                    $search
-                );
-                $rows = $branch
-                    ->orderBy('board_posts.id', $orderDirection)
-                    ->limit($limit)
-                    ->get($selectColumns);
-            }
-
-            $fallbackUsed = $fallbackUsed || ($branchConfig['fallback_used'] ?? false);
-            $branchReachedLimit = $branchReachedLimit || $rows->count() === $limit;
-            foreach ($rows as $row) {
-                $candidates->put((int) $row->id, $row);
-            }
-        }
-
-        $directionMultiplier = $orderDirection === 'desc' ? -1 : 1;
-        $candidates = $candidates->sort(function (Post $left, Post $right) use ($orderBy, $directionMultiplier) {
-            $leftValue = $left->getRawOriginal($orderBy);
-            $rightValue = $right->getRawOriginal($orderBy);
-            $comparison = is_numeric($leftValue) && is_numeric($rightValue)
-                ? ((float) $leftValue <=> (float) $rightValue)
-                : strcmp((string) $leftValue, (string) $rightValue);
-
-            if ($comparison === 0) {
-                $comparison = (int) $left->id <=> (int) $right->id;
-            }
-
-            return $comparison * $directionMultiplier;
-        })->values();
-
-        return [
-            'candidates' => $candidates,
-            // 작성자/회원 사전은 의도적으로 제한하므로 해당 검색 total은 보수적으로 하한값입니다.
-            'total_is_exact' => $searchField === 'title_content'
-                && ! $branchReachedLimit
-                && ! $fallbackUsed,
-            'branch_reached_limit' => $branchReachedLimit,
-            'fallback_used' => $fallbackUsed,
-        ];
-    }
-
-    /**
-     * 검색 메타를 빈 결과에서도 잃지 않는 simple paginator를 생성합니다.
-     *
-     * @param  array{total: int, total_is_exact: bool, total_relation: string, fallback_used: bool}  $metadata
-     */
-    private function makeBoundedSearchPaginator(
-        Collection $items,
-        int $perPage,
-        int $currentPage,
-        array $metadata
-    ): Paginator {
-        return new class($items, $perPage, $currentPage, $metadata) extends \Illuminate\Pagination\Paginator
-        {
-            /** @param  array<string, mixed>  $searchMetadata */
-            public function __construct(
-                $items,
-                int $perPage,
-                int $currentPage,
-                private readonly array $searchMetadata
-            ) {
-                parent::__construct($items, $perPage, $currentPage, [
-                    'path' => self::resolveCurrentPath(),
-                    'pageName' => 'page',
-                ]);
-            }
-
-            /** @return array<string, mixed> */
-            public function searchMetadata(): array
-            {
-                return $this->searchMetadata;
-            }
-        };
-    }
-
-    /**
-     * 제한된 후보에서 simple paginator와 검색 total 메타를 만듭니다.
-     *
-     * @return array{paginator: \Illuminate\Pagination\Paginator, total: int, total_is_exact: bool, total_relation: string}
-     */
-    private function paginateOptimizedSearch(
-        Builder $baseQuery,
-        string $search,
-        string $searchField,
-        string $orderBy,
-        string $orderDirection,
-        int $perPage,
-        int $currentPage
-    ): array {
-        $offset = max(0, ($currentPage - 1) * $perPage);
-        $resultCap = $this->searchCandidateLimit() - 1;
-        if ($offset >= $resultCap) {
-            $paginator = $this->makeBoundedSearchPaginator(
-                collect(),
-                $perPage,
-                $currentPage,
-                [
-                    'total' => $resultCap,
-                    'total_is_exact' => false,
-                    'total_relation' => 'gte',
-                    'fallback_used' => false,
-                ]
-            );
-            $paginator->hasMorePagesWhen(false);
-
-            return [
-                'paginator' => $paginator,
-                'total' => $resultCap,
-                'total_is_exact' => false,
-                'total_relation' => 'gte',
-            ];
-        }
-
-        $requestedCandidates = $offset + $perPage + 1;
-        $result = $this->fetchOptimizedSearchCandidates(
-            $baseQuery,
-            $search,
-            $searchField,
-            $this->escapeLikeKeyword($search),
-            $orderBy,
-            $orderDirection,
-            $requestedCandidates
-        );
-
-        $allCandidates = $result['candidates']->take($resultCap)->values();
-        $pageCandidates = $allCandidates->slice($offset, $perPage + 1)->values();
-        $paginator = $this->makeBoundedSearchPaginator(
-            $pageCandidates,
-            $perPage,
-            $currentPage,
-            [
-                'total' => $allCandidates->count(),
-                'total_is_exact' => $result['total_is_exact'],
-                'total_relation' => $result['total_is_exact'] ? 'eq' : 'gte',
-                'fallback_used' => $result['fallback_used'],
-            ]
-        );
-        $paginator->hasMorePagesWhen(
-            $allCandidates->count() > $offset + $perPage
-            || ($result['branch_reached_limit'] && $offset + $perPage < $resultCap)
-        );
-
-        return [
-            'paginator' => $paginator,
-            'total' => $allCandidates->count(),
-            'total_is_exact' => $result['total_is_exact'],
-            'total_relation' => $result['total_is_exact'] ? 'eq' : 'gte',
-        ];
-    }
-
-    /**
-     * exact COUNT 대신 cap + 1건만 세어 정확값 또는 하한값을 반환합니다.
-     *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap: int, search_truncated: bool}
-     */
-    private function boundedSearchCount(
-        Builder $query,
-        Builder $fallbackBaseQuery,
-        string $keyword
-    ): array {
-        $candidateLimit = $this->searchCandidateLimit();
-        $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
-        $fallbackUsed = $fulltextSupported && $this->shouldBypassFulltext($keyword);
-        if ($fallbackUsed) {
-            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
-        }
-
-        $countCandidates = static function (Builder $source) use ($candidateLimit): int {
-            $boundedIds = (clone $source)
-                ->reorder()
-                ->select('board_posts.id')
-                ->limit($candidateLimit);
-
-            return (int) DB::query()
-                ->fromSub($boundedIds, 'bounded_board_search')
-                ->count();
-        };
-
-        try {
-            $total = $countCandidates($query);
-        } catch (QueryException $exception) {
-            if (! $fulltextSupported || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
-                throw $exception;
-            }
-
-            $this->rememberBroadFulltext($keyword);
-            $fallbackUsed = true;
-            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
-            $total = $countCandidates($query);
-        }
-
-        $isExact = ! $fallbackUsed && $total < $candidateLimit;
-        $resultCap = $candidateLimit - 1;
-
-        return [
-            'total' => min($total, $resultCap),
-            'total_is_exact' => $isExact,
-            'total_relation' => $isExact ? 'eq' : 'gte',
-            'result_cap' => $resultCap,
-            'search_truncated' => $fallbackUsed,
-        ];
-    }
-
-    /**
-     * 공개 검색 결과를 ID-first + limit 방식으로 조회합니다.
-     *
-     * 첫 쿼리는 정렬에 필요한 컬럼과 ID만 cap 안에서 읽고, LONGTEXT 본문과 관계는
-     * 실제 응답 페이지 ID에 한해서만 hydrate합니다.
-     *
-     * @param  array<int, string>  $relations
-     * @return array{total: int, total_is_exact: bool, total_relation: string, has_more_pages: bool, result_cap: int, search_truncated: bool, items: \Illuminate\Database\Eloquent\Collection}
-     */
-    private function boundedPublicSearchPage(
-        Builder $query,
-        Builder $fallbackBaseQuery,
-        array $relations,
-        string $keyword,
-        string $orderBy,
-        string $direction,
-        int $perPage,
-        int $page
-    ): array {
-        $allowedOrderColumns = ['id', 'created_at', 'view_count', 'relevance'];
-        $orderBy = in_array($orderBy, $allowedOrderColumns, true) ? $orderBy : 'created_at';
-        $direction = strtolower($direction) === 'asc' ? 'asc' : 'desc';
-        $perPage = max(1, $perPage);
-        $page = max(1, $page);
-        $offset = ($page - 1) * $perPage;
-        $resultCap = $this->searchCandidateLimit() - 1;
-        $candidateLimit = min($offset + $perPage + 1, $resultCap + 1);
-
-        $fulltextSupported = DatabaseFulltextEngine::supportsFulltext();
-        $fallbackUsed = $fulltextSupported && $this->shouldBypassFulltext($keyword);
-        if ($fallbackUsed) {
-            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
-        }
-
-        $fetchCandidates = function (Builder $source, bool $useFulltextRelevance) use (
-            $orderBy,
-            $direction,
-            $keyword,
-            $candidateLimit
-        ): Collection {
-            $candidateQuery = (clone $source)->reorder()->select('board_posts.id');
-            if ($orderBy === 'relevance' && $useFulltextRelevance) {
-                $fulltextKeyword = $this->sanitizeOptimizedBooleanKeyword($keyword);
-                $candidateQuery
-                    ->selectRaw(
-                        'MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE) AS search_relevance',
-                        [$fulltextKeyword]
-                    )
-                    ->orderBy('search_relevance', 'desc');
-            } else {
-                $resolvedOrderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
-                if ($resolvedOrderBy !== 'id') {
-                    $candidateQuery->addSelect("board_posts.{$resolvedOrderBy}");
-                }
-                $candidateQuery->orderBy("board_posts.{$resolvedOrderBy}", $direction);
-            }
-
-            return $candidateQuery
-                ->orderBy('board_posts.id', $direction)
-                ->limit($candidateLimit)
-                ->get();
-        };
-
-        try {
-            $candidates = $fetchCandidates($query, $fulltextSupported && ! $fallbackUsed);
-        } catch (QueryException $exception) {
-            if (! $fulltextSupported || ! $this->isFulltextResultCacheLimitExceeded($exception)) {
-                throw $exception;
-            }
-
-            $this->rememberBroadFulltext($keyword);
-            $fallbackUsed = true;
-            $query = $this->buildBoundedSearchFallbackQuery($fallbackBaseQuery, $keyword);
-            $candidates = $fetchCandidates($query, false);
-        }
-
-        $totalIsExact = ! $fallbackUsed && $candidates->count() < $candidateLimit;
-        $exposedCandidates = $candidates->take($resultCap);
-        $ids = $exposedCandidates->slice($offset, $perPage)->pluck('id')->map(fn ($id) => (int) $id)->all();
-        $itemsById = empty($ids)
-            ? (new Post)->newCollection()
-            : Post::query()->whereIn('id', $ids)->with($relations)->get()->keyBy('id');
-        $items = (new Post)->newCollection(
-            collect($ids)->map(fn (int $id) => $itemsById->get($id))->filter()->all()
-        );
-        $hasMorePages = $exposedCandidates->count() > $offset + $perPage;
-
-        return [
-            'total' => min($candidates->count(), $resultCap),
-            'total_is_exact' => $totalIsExact,
-            'total_relation' => $totalIsExact ? 'eq' : 'gte',
-            'has_more_pages' => $hasMorePages,
-            'result_cap' => $resultCap,
-            'search_truncated' => $fallbackUsed,
-            'items' => $items,
-        ];
     }
 
     /**
@@ -888,6 +184,7 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @return Post|null 게시글 모델 (없으면 null)
      */
     public function find(string $slug, int $id): ?Post
     {
@@ -901,6 +198,7 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @return Post 게시글 모델
      *
      * @throws ModelNotFoundException
      */
@@ -917,6 +215,7 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
      * @param  array  $data  수정할 데이터
+     * @return Post 수정된 게시글 모델
      *
      * @throws ModelNotFoundException
      */
@@ -933,6 +232,7 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @return bool 삭제 성공 여부
      *
      * @throws ModelNotFoundException
      */
@@ -948,6 +248,7 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @return bool 영구 삭제 성공 여부
      *
      * @throws ModelNotFoundException
      */
@@ -965,6 +266,8 @@ class PostRepository implements PostRepositoryInterface
      * @param  int  $id  게시글 ID
      * @param  string  $status  변경할 상태 (published/blinded/deleted)
      * @param  array  $actionLog  작업 이력 데이터
+     * @param  string|null  $triggerType  트리거 유형 (admin, report 등)
+     * @return Post 상태가 변경된 게시글 모델
      *
      * @throws ModelNotFoundException
      */
@@ -1003,19 +306,27 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @param  int|null  $boardId  게시판 ID (전달 시 슬러그 재조회 생략)
      * @return int 증가된 조회수
      */
-    public function incrementViewCount(string $slug, int $id): int
+    public function incrementViewCount(string $slug, int $id, ?int $boardId = null): int
     {
-        $board = Board::where('slug', $slug)->first();
+        // 상세 화면은 이미 게시판을 조회한 뒤 여기로 온다. 슬러그로 다시 찾으면 같은 요청에서
+        // 게시판을 두 번 읽는다 — 호출자가 알고 있으면 그대로 받는다.
+        if ($boardId === null) {
+            $boardId = Board::where('slug', $slug)->value('id');
+        }
 
-        Post::where('board_id', $board?->id)
+        Post::where('board_id', $boardId)
             ->where('id', $id)
             ->increment('view_count');
 
-        $post = $this->find($slug, $id);
-
-        return $post?->view_count ?? 0;
+        // 증가된 값만 필요하다. find() 는 게시판을 또 찾고 user 관계까지 적재하므로
+        // 조회수 하나 읽자고 쓰기에는 과하다.
+        return (int) (Post::withTrashed()
+            ->where('board_id', $boardId)
+            ->where('id', $id)
+            ->value('view_count') ?? 0);
     }
 
     /**
@@ -1118,11 +429,17 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  int  $id  게시글 ID
+     * @param  int|null  $boardId  게시판 ID (전달 시 Board 재조회 생략)
+     * @param  Board|null  $board  이미 조회한 게시판 모델 (전달 시 board 관계 적재까지 생략)
      * @return Post|null 게시글 모델 (카운트 포함)
      */
-    public function findWithCounts(string $slug, int $id, ?int $boardId = null): ?Post
+    public function findWithCounts(string $slug, int $id, ?int $boardId = null, ?Board $board = null): ?Post
     {
-        // boardId가 전달되면 Board 모델 재조회 없이 직접 사용
+        // 호출자가 이미 손에 쥔 Board 를 넘기면 그 인스턴스를 그대로 쓴다 (#519 F3).
+        // $board 는 아래 답글 로딩에서 참조하므로 어느 경로로 오든 정의돼 있어야 한다
+        // (초기화가 없으면 boardId 를 받은 경로에서 미정의 변수 경고가 난다).
+        $boardId = $board?->id ?? $boardId;
+
         if (! $boardId) {
             $board = Board::where('slug', $slug)->first();
             $boardId = $board?->id;
@@ -1135,12 +452,13 @@ class PostRepository implements PostRepositoryInterface
             || $this->checkBoardPermission($slug, 'admin.manage')
             || $this->checkBoardPermission($slug, 'manager', PermissionType::User);
 
+        // Board 를 이미 받았으면 관계로 같은 행을 다시 읽지 않는다 (조회 후 setRelation 으로 부착).
+        $relations = $board ? ['user', 'user.avatarAttachment'] : ['user', 'user.avatarAttachment', 'board'];
+
         $post = Post::withTrashed()
             ->where('board_id', $boardId)
             ->with([
-                'user',
-                'user.avatarAttachment',
-                'board',
+                ...$relations,
                 'parent' => function ($query) {
                     $query->withTrashed()
                         ->with('user');
@@ -1163,6 +481,11 @@ class PostRepository implements PostRepositoryInterface
 
         // 모든 하위 답글을 재귀적으로 로드하여 트리 구조로 설정
         if ($post) {
+            // 호출자가 넘긴 Board 는 관계로 적재하지 않았으므로 여기서 부착한다.
+            if ($board) {
+                $post->setRelation('board', $board);
+            }
+
             // loadAllDescendantReplies는 board_id만 필요하므로 Board 모델 대신 조회된 board 사용
             $board = $board ?? $post->board;
             $allReplies = $this->loadAllDescendantReplies($post->id, $board, $hasDeletePermission);
@@ -1230,24 +553,11 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $slug  게시판 슬러그
      * @param  array  $filters  필터 조건
      * @param  bool  $withTrashed  삭제된 게시글 포함 여부
-     * @return int 일반 게시글 수 (답글, 공지 제외)
+     * @return BoundedCount 일반 게시글 수 + 정확도 (답글, 공지 제외)
      */
-    public function countNormalPosts(string $slug, array $filters = [], bool $withTrashed = false): int
-    {
-        $count = fn () => $this->countNormalPostsWithoutGuard($slug, $filters, $withTrashed);
-
-        return ! empty($filters['search'])
-            ? $this->withSearchConcurrencyGuard($count)
-            : $count();
-    }
-
-    private function countNormalPostsWithoutGuard(string $slug, array $filters, bool $withTrashed): int
+    public function countNormalPosts(string $slug, array $filters = [], bool $withTrashed = false): BoundedCount
     {
         $board = Board::where('slug', $slug)->first();
-        $optimizedSearch = config('benchmark.board_list_variant', 'optimized') === 'optimized'
-            && ! empty($filters['search']);
-        $search = (string) ($filters['search'] ?? '');
-        $searchField = (string) ($filters['search_field'] ?? 'all');
 
         // 권한 스코프 필터링용 permission identifier (Service에서 컨텍스트 기반으로 전달)
         $scopePermission = $filters['scope_permission'] ?? "sirsoft-board.{$slug}.admin.posts.read";
@@ -1265,28 +575,14 @@ class PostRepository implements PostRepositoryInterface
             $query->withTrashed();
         }
 
-        // optimized 검색은 branch별 후보를 별도로 제한하므로 기존 필터 쿼리에서 제외합니다.
-        $queryFilters = $filters;
-        if ($optimizedSearch) {
-            unset($queryFilters['search'], $queryFilters['search_field']);
-        }
-        $this->applyFilters($query, $queryFilters);
+        // 필터 적용
+        $this->applyFilters($query, $filters);
 
-        if ($optimizedSearch) {
-            $result = $this->fetchOptimizedSearchCandidates(
-                $query,
-                $search,
-                $searchField,
-                $this->escapeLikeKeyword($search),
-                'id',
-                'desc',
-                $this->searchCandidateLimit()
-            );
-
-            return min($result['candidates']->count(), $this->searchCandidateLimit() - 1);
-        }
-
-        return $query->count();
+        // 총 건수는 상한까지만 센다. 검색어가 걸린 목록은 매칭 수가 데이터 증가에 비례하고,
+        // 이 값은 목록 화면이 열릴 때마다 계산된다. 상한 이하면 지금과 값이 같고, 초과할
+        // 때만 "이상" 으로 보고한다 — 페이지 이동은 simplePaginate 의 per_page + 1 실측이
+        // 담당하므로 상한과 무관하게 끝까지 열려 있다.
+        return BoundedPaginator::count($query, PaginationLimits::resultCap('board.posts'));
     }
 
     /**
@@ -1297,6 +593,7 @@ class PostRepository implements PostRepositoryInterface
      * @param  int  $id  현재 게시글 ID
      * @param  array  $filters  정렬 파라미터 (order_by, order_direction)
      * @param  bool  $withTrashed  삭제된 게시글 포함 여부 (기본: false)
+     * @param  int|null  $boardId  게시판 ID (전달 시 Board 재조회 생략)
      * @return array{prev: Post|null, next: Post|null} 이전/다음 게시글
      */
     public function getAdjacentPosts(string $slug, int $id, array $filters = [], bool $withTrashed = false, ?int $boardId = null): array
@@ -1425,12 +722,13 @@ class PostRepository implements PostRepositoryInterface
             // → 콜드 스타트(버퍼 풀 미적재)에서도 ~2ms (range scan 대비 100배 이상 빠름)
             $aggregateFunc = $strictOp === '<' ? 'MAX' : 'MIN';
             $subQuery = $baseQuery()
-                ->select(DB::raw("{$aggregateFunc}(`{$orderBy}`)"))
+                ->select(DB::raw("{$aggregateFunc}({$orderBy})"))
                 ->where($orderBy, $strictOp, $currentValue);
 
+            // 서브쿼리는 빌더 그대로 넘긴다 — toSql() 로 문자열을 붙이고 mergeBindings 로
+            // 바인딩을 손수 옮기면 조건 추가 순서에 따라 바인딩이 어긋날 수 있다.
             return $baseQuery()
-                ->where($orderBy, DB::raw("({$subQuery->toSql()})"))
-                ->mergeBindings($subQuery->getQuery())
+                ->where($orderBy, '=', $subQuery)
                 ->orderBy('id', $idSort)
                 ->first();
         }
@@ -1468,11 +766,6 @@ class PostRepository implements PostRepositoryInterface
         int $currentPage = 1,
         ?Board $board = null
     ) {
-        $optimized = config('benchmark.board_list_variant', 'optimized') === 'optimized';
-        $hasSearch = ! empty($filters['search']);
-        $optimizedSearch = $optimized && $hasSearch;
-        $searchField = (string) ($filters['search_field'] ?? 'all');
-
         // board가 전달되지 않은 경우에만 DB 조회 (하위 호환 유지)
         if (! $board) {
             $board = Board::where('slug', $slug)->first();
@@ -1510,8 +803,14 @@ class PostRepository implements PostRepositoryInterface
                 $noticeQuery->with($relations);
             }
 
-            if ($optimized) {
-                $noticeQuery->limit(self::MAX_NOTICE_POSTS);
+            // 공지는 운영자가 등록하는 데이터라 통상 소수지만, 개수를 막는 장치가 없으면
+            // 잘못 늘어난 게시판에서 한 페이지를 여는 것만으로 전량이 메모리에 올라온다.
+            // `created_at desc` 정렬이므로 상한에 걸릴 때 최신 공지가 우선 보존된다 —
+            // 잘린 공지는 후속 페이지에 노출될 경로가 없어 이 순서가 유일한 안전판이다.
+            // 조정은 코어 필터 훅 `core.pagination.filter_result_cap` (context: board.notices).
+            $noticeCap = PaginationLimits::resultCap('board.notices');
+            if ($noticeCap !== null) {
+                $noticeQuery->limit($noticeCap);
             }
 
             $notices = $noticeQuery->get($columns);
@@ -1533,14 +832,8 @@ class PostRepository implements PostRepositoryInterface
             $parentQuery->whereNull('deleted_at');
         }
 
-        // optimized 검색은 아래에서 선택된 검색 branch를 각각 제한합니다.
-        $queryFilters = $filters;
-        if ($optimizedSearch) {
-            unset($queryFilters['search'], $queryFilters['search_field']);
-        }
-
         // 필터 적용 (원글만 검색, 답글은 3단계에서 별도 필터링)
-        $this->applyFilters($parentQuery, $queryFilters);
+        $this->applyFilters($parentQuery, $filters);
 
         // 정렬 (order_by 파라미터 사용, 기본값: id)
         $orderBy = $filters['order_by'] ?? 'id';
@@ -1575,117 +868,54 @@ class PostRepository implements PostRepositoryInterface
             $orderDirection = 'desc'; // 기본값으로 폴백
         }
 
-        // 게시판별 ID 정렬은 MySQL 통계 오차가 크면 PRIMARY 역순 스캔을 선택해
-        // 앞선 게시판을 찾으려고 다른 게시판 수십만 행을 건너뛸 수 있습니다.
-        // 기본 목록 조건에서는 게시판 범위를 먼저 고정하는 전용 인덱스를 강제합니다.
-        if (
-            $optimized
-            && ! $optimizedSearch
-            && ! $withTrashed
-            && $orderBy === 'id'
-            && $this->hasOnlyBaseListFilters($filters)
-        ) {
-            $parentQuery->forceIndex(self::LIST_ID_INDEX);
-        }
-
-        // 정렬 적용 (id를 2차 정렬로 추가 — 동일 값 내 순서를 결정론적으로 보장)
+        // 정렬 스펙 (id를 2차 정렬로 추가 — 동일 값 내 순서를 결정론적으로 보장)
         // created_at은 초 단위라 실질적 중복이 드물지만, view_count/title/author_name은 중복이 많음
-        $parentQuery->orderBy($orderBy, $orderDirection)->orderBy('id', $orderDirection);
+        $sort = [['column' => $orderBy, 'direction' => $orderDirection]];
 
         // 페이지네이션 여부에 따라 분기
-        $embeddedTotal = null;
-        $embeddedTotalIsExact = null;
-        $embeddedTotalRelation = null;
         if ($perPage !== null) {
-            if ($optimized) {
-                // 깊은 페이지에서 LONGTEXT와 관계 컬럼까지 정렬하지 않도록 ID만 먼저 페이지네이션한다.
-                // 실제 목록 행은 선택된 ID(최대 perPage건)에 한해 별도 조회한다.
-                if ($optimizedSearch) {
-                    $searchPage = $this->paginateOptimizedSearch(
-                        $parentQuery,
-                        (string) $filters['search'],
-                        $searchField,
-                        $orderBy,
-                        $orderDirection,
-                        $perPage,
-                        $currentPage
-                    );
-                    $paginator = $searchPage['paginator'];
-                    $pageIndex = $paginator->getCollection();
-                    $embeddedTotal = $searchPage['total'];
-                    $embeddedTotalIsExact = $searchPage['total_is_exact'];
-                    $embeddedTotalRelation = $searchPage['total_relation'];
-                } else {
-                    $paginator = $parentQuery->simplePaginate($perPage, ['id'], 'page', $currentPage);
-                    $pageIndex = $paginator->getCollection();
-
-                    if ($hasSearch) {
-                        if ($pageIndex->isNotEmpty()) {
-                            $embeddedTotal = (($currentPage - 1) * $perPage)
-                                + $pageIndex->count()
-                                + ($paginator->hasMorePages() ? 1 : 0);
-                            $embeddedTotalIsExact = ! $paginator->hasMorePages();
-                            $embeddedTotalRelation = $embeddedTotalIsExact ? 'eq' : 'gte';
-                        } elseif ($currentPage === 1) {
-                            $embeddedTotal = 0;
-                            $embeddedTotalIsExact = true;
-                            $embeddedTotalRelation = 'eq';
-                        }
-                    }
-                }
-                $parents = $this->hydrateListPostsByIds(
-                    $pageIndex->pluck('id')->all(),
-                    $boardId,
-                    $columns,
-                    $withTrashed,
-                    $relations,
-                    $withCount
-                );
-            } else {
-                // G7 7.0.4 원본 경로: OFFSET 전에 목록 컬럼과 관계를 함께 조회한다.
-                if (! empty($relations)) {
-                    $parentQuery->with($relations);
-                }
-                $paginator = $parentQuery->simplePaginate($perPage, $columns, 'page', $currentPage);
-                $parents = $paginator->getCollection();
-            }
+            // 지연 조인 — 이번 페이지의 원글 ID 를 먼저 구하고, 그 ID 에 대해서만 목록 컬럼과
+            // 관계를 읽는다. OFFSET 이 건너뛰는 원글의 본문 앞부분(SUBSTRING)까지 읽던 비용이
+            // 사라진다. COUNT 는 기존과 같이 수행하지 않는다(total 은 Service 캐시 카운트).
+            $paginator = $this->paginateWithDeferredJoin(
+                query: $parentQuery,
+                columns: $columns,
+                sort: $sort,
+                perPage: $perPage,
+                page: (int) $currentPage,
+                relations: $relations,
+                simple: true,
+            );
+            $parents = $paginator->getCollection();
         } else {
             // 전체 조회
+            $parentQuery->orderBy($orderBy, $orderDirection)->orderBy('id', $orderDirection);
+
             if (! empty($relations)) {
                 $parentQuery->with($relations);
             }
-            if (! empty($withCount)) {
-                $parentQuery->withCount($withCount);
-            }
+
             $parents = $parentQuery->get($columns);
             $paginator = null;
         }
 
         // 3단계: 모든 하위 답글 조회 (모든 depth 처리 — depth-1만이 아닌 depth-2+ 포함)
+        //
+        // 깊이별로 한 번씩 조회하되 누적 건수에 상한을 둔다. 상한이 없으면 답글이 많은
+        // 게시판에서 한 페이지를 여는 것만으로 그 게시판의 답글 전량을 메모리에 올린다.
         $parentIds = $parents->pluck('id')->toArray();
+        $replyCap = PaginationLimits::resultCap('board.reply_tree');
         $allReplies = collect([]);
 
         if (! empty($parentIds)) {
-            $currentLevelIds = $optimized
-                ? $parents
-                    ->filter(fn (Post $post) => $post->replies_count > 0)
-                    ->pluck('id')
-                    ->all()
-                : $parentIds;
+            $currentLevelIds = $parentIds;
+            $seenIds = array_flip($parentIds);
 
             while (! empty($currentLevelIds)) {
                 $levelQuery = Post::query()
                     ->where('board_id', $boardId)
                     ->whereIn('parent_id', $currentLevelIds)
                     ->orderBy('id', 'asc');
-
-                if ($optimized) {
-                    $remaining = self::MAX_INLINE_REPLIES - $allReplies->count();
-                    if ($remaining <= 0) {
-                        break;
-                    }
-                    $levelQuery->limit($remaining);
-                }
 
                 if ($withTrashed) {
                     $levelQuery->withTrashed();
@@ -1696,8 +926,9 @@ class PostRepository implements PostRepositoryInterface
                 if (! empty($relations)) {
                     $levelQuery->with($relations);
                 }
-                if ($optimized && ! empty($withCount)) {
-                    $levelQuery->withCount($withCount);
+
+                if ($replyCap !== null) {
+                    $levelQuery->limit(max(1, $replyCap - $allReplies->count()));
                 }
 
                 $levelReplies = $levelQuery->get($columns);
@@ -1707,23 +938,38 @@ class PostRepository implements PostRepositoryInterface
                 }
 
                 $allReplies = $allReplies->merge($levelReplies);
-                $currentLevelIds = $optimized
-                    ? $levelReplies
-                        ->filter(fn (Post $post) => $post->replies_count > 0)
-                        ->pluck('id')
-                        ->all()
-                    : $levelReplies->pluck('id')->all();
+                $currentLevelIds = $levelReplies->pluck('id')->toArray();
+
+                // 오염된 데이터(순환 참조)에서도 유한 종료를 보장한다.
+                $currentLevelIds = array_values(array_filter(
+                    $currentLevelIds,
+                    function ($id) use (&$seenIds) {
+                        if (isset($seenIds[$id])) {
+                            return false;
+                        }
+                        $seenIds[$id] = true;
+
+                        return true;
+                    }
+                ));
+
+                if ($replyCap !== null && $allReplies->count() >= $replyCap) {
+                    break;
+                }
             }
         }
 
         $replies = $allReplies;
 
         // 4단계: 병합 (원글 + 모든 하위 답글을 깊이 우선 순으로)
+        //
+        // 부모별로 한 번만 그룹지어 둔다. 노드마다 전체 컬렉션을 where 로 훑으면
+        // 답글 수의 제곱에 비례해 비교가 늘어난다.
+        $repliesByParent = $replies->sortBy('id')->groupBy('parent_id');
         $mergedItems = collect([]);
 
-        $appendReplies = function (int $postId) use (&$appendReplies, &$mergedItems, $replies): void {
-            $directReplies = $replies->where('parent_id', $postId)->sortBy('id');
-            foreach ($directReplies as $reply) {
+        $appendReplies = function (int $postId) use (&$appendReplies, &$mergedItems, $repliesByParent): void {
+            foreach ($repliesByParent->get($postId) ?? [] as $reply) {
                 $mergedItems->push($reply);
                 $appendReplies($reply->id);
             }
@@ -1737,14 +983,6 @@ class PostRepository implements PostRepositoryInterface
         // 5단계: 공지글을 맨 앞에 추가
         $finalItems = $notices->merge($mergedItems);
 
-        // 검색 total 메타는 첫 응답 모델의 숨김 속성으로 Service/Resource에 전달합니다.
-        // 페이지 1의 검색 결과가 0건이어도 공지가 있으면 공지 모델에 전달할 수 있습니다.
-        if ($embeddedTotal !== null && $finalItems->isNotEmpty()) {
-            $finalItems->first()->setAttribute(self::INTERNAL_TOTAL_ATTRIBUTE, $embeddedTotal);
-            $finalItems->first()->setAttribute(self::INTERNAL_TOTAL_EXACT_ATTRIBUTE, $embeddedTotalIsExact);
-            $finalItems->first()->setAttribute(self::INTERNAL_TOTAL_RELATION_ATTRIBUTE, $embeddedTotalRelation);
-        }
-
         // 페이지네이션 사용 시 paginator에 최종 컬렉션 설정
         if ($paginator !== null) {
             $paginator->setCollection($finalItems);
@@ -1754,54 +992,6 @@ class PostRepository implements PostRepositoryInterface
 
         // 전체 조회 시 컬렉션 반환
         return $finalItems;
-    }
-
-    /**
-     * 페이지 인덱스에서 선택된 게시글만 목록 표시용 컬럼과 관계로 조회합니다.
-     *
-     * @param  array<int>  $ids  페이지 순서대로 정렬된 게시글 ID
-     * @param  int|null  $boardId  게시판 ID
-     * @param  array  $columns  목록 조회 컬럼
-     * @param  bool  $withTrashed  삭제된 게시글 포함 여부
-     * @param  array  $relations  Eager Load 관계
-     * @param  array  $withCount  카운트 관계
-     * @return Collection<int, Post>
-     */
-    private function hydrateListPostsByIds(
-        array $ids,
-        ?int $boardId,
-        array $columns,
-        bool $withTrashed,
-        array $relations,
-        array $withCount
-    ): Collection {
-        if ($ids === []) {
-            return collect();
-        }
-
-        $query = Post::query()
-            ->where('board_id', $boardId)
-            ->whereIn('id', $ids);
-
-        if ($withTrashed) {
-            $query->withTrashed();
-        } else {
-            $query->whereNull('deleted_at');
-        }
-
-        if (! empty($relations)) {
-            $query->with($relations);
-        }
-        if (! empty($withCount)) {
-            $query->withCount($withCount);
-        }
-
-        $postsById = $query->get($columns)->keyBy('id');
-
-        return collect($ids)
-            ->map(fn (int $id) => $postsById->get($id))
-            ->filter()
-            ->values();
     }
 
     /**
@@ -1943,10 +1133,9 @@ class PostRepository implements PostRepositoryInterface
         $inactiveBoardIds = $this->getInactiveBoardIds();
         $allExcludeIds = array_unique(array_merge($excludeBoardIds, $inactiveBoardIds));
 
+        // 관계/정렬은 지연 조인이 담당한다 (inner 는 키 컬럼만 조회)
         $query = Post::query()
-            ->where('board_posts.user_id', $userId)
-            ->with('board')
-            ->orderBy($orderColumn, $orderDirection);
+            ->where('board_posts.user_id', $userId);
 
         if ($boardIdFilter) {
             $query->where('board_posts.board_id', $boardIdFilter);
@@ -1969,7 +1158,26 @@ class PostRepository implements PostRepositoryInterface
             });
         }
 
-        $paginator = $query->paginate($perPage, ['*'], 'page', null, $cachedTotal);
+        // 본문(content)은 목록 가공에 앞부분만 쓰이지만 태그 제거 후 길이가 줄어드는 것을 감안해
+        // 넉넉히 잘라 읽는다. 잘라 읽기는 이번 페이지 분량(outer)에서만 일어난다.
+        $listColumns = [
+            'board_posts.id', 'board_posts.board_id', 'board_posts.user_id',
+            'board_posts.title', 'board_posts.status', 'board_posts.is_secret',
+            'board_posts.content_mode', 'board_posts.view_count', 'board_posts.comments_count',
+            'board_posts.created_at', 'board_posts.updated_at', 'board_posts.deleted_at',
+            // DB::raw 는 테이블 프리픽스가 적용되지 않는다. 단일 테이블 조회라 컬럼만 적으면 충분하다.
+            DB::raw('SUBSTRING(content, 1, 1000) as content'),
+        ];
+
+        // 캐시된 total 을 그대로 통과시켜 COUNT 를 다시 수행하지 않는다
+        $paginator = $this->paginateWithDeferredJoin(
+            query: $query,
+            columns: $listColumns,
+            sort: [['column' => $orderColumn, 'direction' => $orderDirection]],
+            perPage: $perPage,
+            relations: ['board'],
+            total: $cachedTotal,
+        );
 
         // paginate 후 10건에만 PHP 가공 적용 (N+1 아님)
         $paginator->through(function ($post) {
@@ -1996,24 +1204,6 @@ class PostRepository implements PostRepositoryInterface
     }
 
     /**
-     * 게시판·공지·원글·미삭제 기본 조건 외에 선택도가 다른 필터가 없는지 확인합니다.
-     */
-    private function hasOnlyBaseListFilters(array $filters): bool
-    {
-        foreach (['status', 'user_id', 'created_at_from', 'created_at_to'] as $key) {
-            if (! empty($filters[$key])) {
-                return false;
-            }
-        }
-
-        if (isset($filters['category']) && $filters['category'] !== '') {
-            return false;
-        }
-
-        return ! array_key_exists('is_notice', $filters) || $filters['is_notice'] === null;
-    }
-
-    /**
      * 사용자가 댓글을 단 게시글 활동을 DB 레벨 페이지네이션으로 조회합니다.
      *
      * @param  int  $userId  사용자 ID
@@ -2034,59 +1224,88 @@ class PostRepository implements PostRepositoryInterface
         int $perPage,
         ?int $cachedTotal = null
     ): LengthAwarePaginator {
-        // DB::raw() / whereRaw() 내부 raw SQL은 prefix 자동 적용이 안 되므로 명시적으로 처리
-        $prefix = DB::getTablePrefix();
-        $commentsTable = $prefix.'board_comments';
-        $postsTable = $prefix.'board_posts';
+        // 테이블명은 모델에서 얻는다 — 문자열로 박으면 테이블명이 바뀔 때 조용히 깨진다
+        $postsTable = (new Post)->getTable();
+        $commentsTable = (new Comment)->getTable();
 
         // 비활성 게시판 제외 — JOIN 없이 인덱스 활용
         $inactiveBoardIds = $this->getInactiveBoardIds();
         $allExcludeIds = array_unique(array_merge($excludeBoardIds, $inactiveBoardIds));
 
-        $latestCommentSub = DB::table(DB::raw("{$commentsTable} as bc_outer"))
-            ->selectRaw('bc_outer.post_id, bc_outer.content, bc_outer.created_at')
-            ->whereRaw("bc_outer.id = (
-                SELECT bc2.id FROM {$commentsTable} bc2
-                WHERE bc2.post_id = bc_outer.post_id
-                  AND bc2.user_id = ?
-                  AND bc2.deleted_at IS NULL
-                ORDER BY bc2.created_at DESC
-                LIMIT 1
-            ) AND bc_outer.user_id = ? AND bc_outer.deleted_at IS NULL", [$userId, $userId]);
+        /**
+         * 내가 이 글에 단 댓글 조건 (검색어까지 반영 — 활동 판정 · 건수 집계 공통).
+         *
+         * @param  \Illuminate\Contracts\Database\Eloquent\Builder  $q  댓글 하위 쿼리
+         */
+        $myComment = function ($q) use ($userId, $search) {
+            $q->where('user_id', $userId)->whereNull('deleted_at');
 
-        $query = Post::query()
-            ->join(DB::raw("{$commentsTable} AS uc"), function ($join) use ($userId, $postsTable) {
-                $join->on(DB::raw("{$postsTable}.id"), '=', DB::raw('uc.post_id'))
-                    ->whereRaw('uc.user_id = ?', [$userId])
-                    ->whereRaw('uc.deleted_at IS NULL');
-            })
-            ->leftJoinSub($latestCommentSub, 'lc', 'board_posts.id', '=', 'lc.post_id')
-            ->select([
-                'board_posts.*',
-                DB::raw('COUNT(DISTINCT uc.id) as activity_count'),
-                // board_posts.* 에 이미 comments_count 가 포함되므로 중복 지정 금지
-                // (pagination count 쿼리가 subquery 로 감싸질 때 SQLSTATE[42S21] 유발)
-                'lc.content as comment_content',
-                'lc.created_at as comment_created_at',
-            ])
-            ->with('board')
-            ->groupBy('board_posts.id', 'board_posts.board_id', 'board_posts.comments_count', 'lc.content', 'lc.created_at')
-            ->orderBy($orderColumn, $orderDirection);
+            if ($search) {
+                $q->where('content', 'like', '%'.$this->escapeLikeKeyword($search).'%');
+            }
+        };
+
+        // "내가 댓글을 단 글" 집합은 EXISTS 로 정한다. 조인으로 행을 불린 뒤 groupBy 로 접는
+        // 방식은 inner 가 읽는 행 수를 댓글 수만큼 늘리고, 그룹 쿼리라 총 건수도 서브쿼리로
+        // 감싸야 한다. EXISTS 는 글 1건당 1행이라 둘 다 필요 없다.
+        $query = Post::query()->whereHas('comments', $myComment);
 
         if ($boardIdFilter) {
-            $query->where('board_posts.board_id', $boardIdFilter);
+            $query->where("{$postsTable}.board_id", $boardIdFilter);
         }
 
         if (! empty($allExcludeIds)) {
-            $query->whereNotIn('board_posts.board_id', $allExcludeIds);
+            $query->whereNotIn("{$postsTable}.board_id", $allExcludeIds);
         }
 
-        if ($search) {
-            $keyword = $this->escapeLikeKeyword($search);
-            $query->where('uc.content', 'like', "%{$keyword}%");
-        }
+        // 목록 컬럼: 본문 전체 대신 앞부분만 (가공 후 표시 자수보다 넉넉히 잘라 읽는다).
+        // SUBSTRING 은 빌더에 대응 표현이 없는 표준 SQL 함수라 이 한 곳만 raw 로 남긴다.
+        // 테이블명·프리픽스는 문자열로 박지 않고 모델과 연결 설정에서 얻는다.
+        $listColumns = [
+            "{$postsTable}.id", "{$postsTable}.board_id", "{$postsTable}.user_id",
+            "{$postsTable}.title", "{$postsTable}.status", "{$postsTable}.is_secret",
+            "{$postsTable}.content_mode", "{$postsTable}.view_count", "{$postsTable}.comments_count",
+            "{$postsTable}.created_at", "{$postsTable}.updated_at", "{$postsTable}.deleted_at",
+            DB::raw('SUBSTRING('.DB::getTablePrefix().$postsTable.'.content, 1, 1000) as content'),
+            'lc.content as comment_content',
+            'lc.created_at as comment_created_at',
+        ];
 
-        $paginator = $query->paginate($perPage, ['*'], 'page', null, $cachedTotal);
+        // 정렬은 항상 board_posts 컬럼(작성일/조회수)이라 inner 에서 그대로 적용된다.
+        // 캐시된 total 이 있으면 COUNT 를 건너뛴다. 검색/게시판 필터가 걸린 조회는 캐시를 쓰지
+        // 않아 total 이 null 로 들어오며, 이때 trait 이 그룹 쿼리를 서브쿼리로 감싸 그룹 수를 센다.
+        $paginator = $this->paginateWithDeferredJoin(
+            query: $query,
+            columns: $listColumns,
+            sort: [['column' => $orderColumn, 'direction' => $orderDirection]],
+            perPage: $perPage,
+            relations: ['board'],
+            keyName: 'id',
+            total: $cachedTotal,
+            // 최근 댓글 조회와 활동 건수 집계는 이번 페이지의 게시글에 대해서만 실행한다.
+            // inner 에 두면 건너뛸 행 전체에 대해 상관 서브쿼리가 돌아간다.
+            outerUsing: function ($outer) use ($userId, $myComment, $postsTable, $commentsTable) {
+                // 글마다 "내가 단 댓글 중 가장 최근 1건" — 원래 raw SQL 로 쓰던 상관 서브쿼리를
+                // 빌더로 옮겼다. created_at 동률에서 순서가 흔들리지 않도록 id 를 덧붙인다.
+                $latest = DB::table("{$commentsTable} as bc_outer")
+                    ->select('bc_outer.post_id', 'bc_outer.content', 'bc_outer.created_at')
+                    ->where('bc_outer.user_id', $userId)
+                    ->whereNull('bc_outer.deleted_at')
+                    ->where('bc_outer.id', '=', function ($q) use ($userId, $commentsTable) {
+                        $q->select('bc2.id')
+                            ->from("{$commentsTable} as bc2")
+                            ->whereColumn('bc2.post_id', 'bc_outer.post_id')
+                            ->where('bc2.user_id', $userId)
+                            ->whereNull('bc2.deleted_at')
+                            ->orderByDesc('bc2.created_at')
+                            ->orderByDesc('bc2.id')
+                            ->limit(1);
+                    });
+
+                $outer->leftJoinSub($latest, 'lc', "{$postsTable}.id", '=', 'lc.post_id')
+                    ->withCount(['comments as activity_count' => $myComment]);
+            },
+        );
 
         // paginate 후 10건에만 PHP 가공 적용
         $paginator->through(function ($post) {
@@ -2121,63 +1340,32 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $keyword  검색 키워드
      * @param  string  $orderBy  정렬 컬럼
      * @param  string  $direction  정렬 방향 (asc, desc)
-     * @param  int  $limit  조회할 최대 항목 수
-     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: \Illuminate\Database\Eloquent\Collection}
+     * @param  int  $perPage  페이지당 항목 수
+     * @param  int  $page  페이지 번호
+     * @return BoundedPage 페이지 결과 (총 건수 정확도 포함)
      */
-    public function searchByKeyword(string $slug, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $limit = 10): array
-    {
-        if ($this->manticoreSearch->isEnabled()) {
-            $boardId = (int) Board::query()->where('slug', $slug)->value('id');
-            $result = $this->manticoreSearch->searchPosts(
-                $boardId > 0 ? [$boardId] : [],
-                $keyword,
-                $orderBy,
-                $direction,
-                $limit,
-            );
-
-            if ($result !== null) {
-                return $this->manticorePostResult($result, ['user']);
-            }
-        }
-
-        return $this->withSearchConcurrencyGuard(
-            fn () => $this->searchByKeywordWithoutGuard($slug, $keyword, $orderBy, $direction, $limit)
-        );
-    }
-
-    /** @return array<string, mixed> */
-    private function searchByKeywordWithoutGuard(string $slug, string $keyword, string $orderBy, string $direction, int $limit): array
-    {
-        $baseQuery = $this->buildPublicSearchBaseQuery($slug);
-        $query = clone $baseQuery;
-        $this->applyKeywordSearch($query, $keyword);
-
-        if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
-            return $this->boundedPublicSearchPage(
-                $query,
-                $baseQuery,
-                ['user'],
-                $keyword,
-                $orderBy,
-                $direction,
-                $limit,
-                1
-            );
-        }
-
-        $total = $query->count();
-        $orderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
-
-        $items = $query->with('user')
+    public function searchByKeyword(
+        string $slug,
+        string $keyword,
+        string $orderBy = 'created_at',
+        string $direction = 'desc',
+        int $perPage = 10,
+        int $page = 1
+    ): BoundedPage {
+        // 종전에는 같은 FULLTEXT 술어를 count() 로 한 번, get() 으로 또 한 번 실행했다.
+        // 페이지네이터 한 번으로 합치고, 총 건수에는 상한을 건다.
+        $query = $this->buildPublicSearchQuery($slug, $keyword)
+            ->with('user')
             ->orderBy($orderBy, $direction)
-            ->limit($limit)
-            ->get();
+            // 전순서 보장 — 정렬 컬럼이 비고유라 페이지 경계에서 행이 겹치거나 샐 수 있다
+            ->orderBy('id', $direction === 'asc' ? 'asc' : 'desc');
 
-        return [
-            'total' => $total,
-            'items' => $items,
-        ];
+        return BoundedPaginator::paginate(
+            $query,
+            perPage: $perPage,
+            page: $page,
+            resultCap: PaginationLimits::resultCap('search'),
+        );
     }
 
     /**
@@ -2185,33 +1373,14 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  string  $slug  게시판 슬러그
      * @param  string  $keyword  검색 키워드
-     * @return int 일치하는 게시글 수
+     * @return BoundedCount 일치하는 게시글 수 (정확도 포함)
      */
-    public function countByKeyword(string $slug, string $keyword): int
+    public function countByKeyword(string $slug, string $keyword): BoundedCount
     {
-        if ($this->manticoreSearch->isEnabled()) {
-            $boardId = (int) Board::query()->where('slug', $slug)->value('id');
-            $total = $this->manticoreSearch->countPosts($boardId > 0 ? [$boardId] : [], $keyword);
-
-            if ($total !== null) {
-                return $total;
-            }
-        }
-
-        return $this->withSearchConcurrencyGuard(
-            fn () => $this->countByKeywordWithoutGuard($slug, $keyword)
+        return BoundedPaginator::count(
+            $this->buildPublicSearchQuery($slug, $keyword),
+            PaginationLimits::resultCap('search')
         );
-    }
-
-    private function countByKeywordWithoutGuard(string $slug, string $keyword): int
-    {
-        $baseQuery = $this->buildPublicSearchBaseQuery($slug);
-        $query = clone $baseQuery;
-        $this->applyKeywordSearch($query, $keyword);
-
-        return config('benchmark.board_list_variant', 'optimized') === 'optimized'
-            ? $this->boundedSearchCount($query, $baseQuery, $keyword)['total']
-            : $query->count();
     }
 
     /**
@@ -2223,63 +1392,53 @@ class PostRepository implements PostRepositoryInterface
      * @param  string  $direction  정렬 방향 (asc, desc)
      * @param  int  $perPage  페이지당 항목 수
      * @param  int  $page  페이지 번호
-     * @return array{total: int, total_is_exact?: bool, total_relation?: string, has_more_pages?: bool, result_cap?: int, search_truncated?: bool, items: \Illuminate\Database\Eloquent\Collection}
+     * @return BoundedPage 페이지 결과 (총 건수 정확도 포함)
      */
-    public function searchAcrossBoards(array $boardIds, string $keyword, string $orderBy = 'created_at', string $direction = 'desc', int $perPage = 10, int $page = 1): array
-    {
-        if ($this->manticoreSearch->isEnabled()) {
-            $result = $this->manticoreSearch->searchPosts(
-                $boardIds,
-                $keyword,
-                $orderBy,
-                $direction,
-                $perPage,
-                $page,
-            );
+    public function searchAcrossBoards(
+        array $boardIds,
+        string $keyword,
+        string $orderBy = 'created_at',
+        string $direction = 'desc',
+        int $perPage = 10,
+        int $page = 1
+    ): BoundedPage {
+        // count() + get() 이중 실행을 페이지네이터 한 번으로 합친다.
+        // 다른 탭 조회 시 배지용 COUNT 까지 더해 같은 술어가 3회 실행되던 경로다.
+        $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword)
+            ->with('user', 'board')
+            ->orderBy($orderBy, $direction)
+            ->orderBy('id', $direction === 'asc' ? 'asc' : 'desc');
 
-            if ($result !== null) {
-                return $this->manticorePostResult($result, ['user', 'board']);
-            }
-        }
-
-        return $this->withSearchConcurrencyGuard(
-            fn () => $this->searchAcrossBoardsWithoutGuard($boardIds, $keyword, $orderBy, $direction, $perPage, $page)
+        return BoundedPaginator::paginate(
+            $query,
+            perPage: $perPage,
+            page: $page,
+            resultCap: PaginationLimits::resultCap('search'),
         );
     }
 
-    /** @return array<string, mixed> */
-    private function searchAcrossBoardsWithoutGuard(array $boardIds, string $keyword, string $orderBy, string $direction, int $perPage, int $page): array
-    {
-        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
-        $query = clone $baseQuery;
-        $this->applyKeywordSearch($query, $keyword);
+    /**
+     * {@inheritDoc}
+     */
+    public function searchAcrossBoardsByCursor(
+        array $boardIds,
+        string $keyword,
+        array $sortKeys,
+        int $perPage = 10,
+        ?string $cursor = null
+    ): CursorPaginator {
+        // 커서 모드에는 OFFSET 이 없다. 깊은 페이지에서 건너뛸 행을 실제로 읽던 비용이
+        // 사라지므로 상한 COUNT 도 이 경로에서는 하지 않는다 (총 건수는 배지 집계 담당).
+        $query = $this->buildPublicSearchQueryByIds($boardIds, $keyword)
+            ->with('user', 'board');
 
-        if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
-            return $this->boundedPublicSearchPage(
-                $query,
-                $baseQuery,
-                ['user', 'board'],
-                $keyword,
-                $orderBy,
-                $direction,
-                $perPage,
-                $page
-            );
-        }
-
-        $total = $query->count();
-        $orderBy = $orderBy === 'relevance' ? 'created_at' : $orderBy;
-
-        $items = (clone $query)
-            ->with('user', 'board')
-            ->orderBy($orderBy, $direction)
-            ->forPage($page, $perPage)
-            ->get();
-
-        return [
-            'total' => $total,
-            'items' => $items,
-        ];
+        return KeysetPaginator::paginate(
+            query: $query,
+            perPage: $perPage,
+            sortKeys: $sortKeys,
+            uniqueKey: 'id',
+            cursor: $cursor,
+        );
     }
 
     /**
@@ -2287,160 +1446,70 @@ class PostRepository implements PostRepositoryInterface
      *
      * @param  array  $boardIds  검색 대상 게시판 ID 목록
      * @param  string  $keyword  검색 키워드
-     * @return int 키워드와 일치하는 게시글 수
+     * @return BoundedCount 키워드와 일치하는 게시글 수 (정확도 포함)
      */
-    public function countAcrossBoards(array $boardIds, string $keyword): int
+    public function countAcrossBoards(array $boardIds, string $keyword): BoundedCount
     {
-        if ($this->manticoreSearch->isEnabled()) {
-            $total = $this->manticoreSearch->countPosts($boardIds, $keyword);
-
-            if ($total !== null) {
-                return $total;
-            }
-        }
-
-        return $this->withSearchConcurrencyGuard(
-            fn () => $this->countAcrossBoardsWithoutGuard($boardIds, $keyword)
+        return BoundedPaginator::count(
+            $this->buildPublicSearchQueryByIds($boardIds, $keyword),
+            PaginationLimits::resultCap('search')
         );
-    }
-
-    private function countAcrossBoardsWithoutGuard(array $boardIds, string $keyword): int
-    {
-        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
-        $query = clone $baseQuery;
-        $this->applyKeywordSearch($query, $keyword);
-
-        return config('benchmark.board_list_variant', 'optimized') === 'optimized'
-            ? $this->boundedSearchCount($query, $baseQuery, $keyword)['total']
-            : $query->count();
-    }
-
-    /**
-     * 여러 게시판의 검색 건수를 cap + 1까지만 확인하고 total 의미를 함께 반환합니다.
-     *
-     * @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool}
-     */
-    public function countAcrossBoardsBounded(array $boardIds, string $keyword): array
-    {
-        if ($this->manticoreSearch->isEnabled()) {
-            $total = $this->manticoreSearch->countPosts($boardIds, $keyword);
-
-            if ($total !== null) {
-                return [
-                    'total' => $total,
-                    'total_is_exact' => true,
-                    'total_relation' => 'eq',
-                ];
-            }
-        }
-
-        return $this->withSearchConcurrencyGuard(
-            fn () => $this->countAcrossBoardsBoundedWithoutGuard($boardIds, $keyword)
-        );
-    }
-
-    /**
-     * Manticore가 반환한 현재 페이지 ID만 MySQL 모델로 복원하고 검색 순서를 유지합니다.
-     *
-     * @param  array{total: int, ids: array<int, int>}  $result
-     * @param  array<int, string>  $relations
-     * @return array{total: int, total_is_exact: true, total_relation: string, items: Collection}
-     */
-    private function manticorePostResult(array $result, array $relations): array
-    {
-        $ids = $result['ids'];
-        $items = $ids === []
-            ? (new Post)->newCollection()
-            : Post::query()->with($relations)->whereIn('id', $ids)->get();
-
-        if ($ids !== []) {
-            $order = array_flip($ids);
-            $items = $items->sortBy(
-                static fn (Post $post): int => $order[$post->id] ?? PHP_INT_MAX
-            )->values();
-        }
-
-        return [
-            'total' => $result['total'],
-            'total_is_exact' => true,
-            'total_relation' => 'eq',
-            'items' => $items,
-        ];
-    }
-
-    /** @return array{total: int, total_is_exact: bool, total_relation: string, result_cap?: int, search_truncated?: bool} */
-    private function countAcrossBoardsBoundedWithoutGuard(array $boardIds, string $keyword): array
-    {
-        $baseQuery = $this->buildPublicSearchBaseQueryByIds($boardIds);
-        $query = clone $baseQuery;
-        $this->applyKeywordSearch($query, $keyword);
-
-        if (config('benchmark.board_list_variant', 'optimized') === 'optimized') {
-            return $this->boundedSearchCount($query, $baseQuery, $keyword);
-        }
-
-        return [
-            'total' => $query->count(),
-            'total_is_exact' => true,
-            'total_relation' => 'eq',
-        ];
     }
 
     /**
      * 공개 게시글 검색용 기본 쿼리를 생성합니다.
      *
      * @param  string  $slug  게시판 슬러그
+     * @param  string  $keyword  검색 키워드
+     * @return Builder
      */
-    private function buildPublicSearchBaseQuery(string $slug): Builder
+    private function buildPublicSearchQuery(string $slug, string $keyword)
     {
         $board = Board::where('slug', $slug)->first();
 
-        return Post::query()
+        $query = Post::query()
             ->where('board_id', $board?->id)
             ->where('status', PostStatus::Published->value)
             ->where('is_secret', false);
+
+        $this->applyKeywordSearch($query, $keyword);
+
+        return $query;
     }
 
     /**
      * 여러 게시판 ID를 대상으로 공개 게시글 검색용 기본 쿼리를 생성합니다.
      *
      * @param  array  $boardIds  게시판 ID 목록
+     * @param  string  $keyword  검색 키워드
+     * @return Builder
      */
-    private function buildPublicSearchBaseQueryByIds(array $boardIds): Builder
+    private function buildPublicSearchQueryByIds(array $boardIds, string $keyword)
     {
-        return Post::query()
+        $query = Post::query()
             ->whereIn('board_id', $boardIds)
             ->where('status', PostStatus::Published->value)
             ->where('is_secret', false);
+
+        $this->applyKeywordSearch($query, $keyword);
+
+        return $query;
     }
 
     /**
      * 키워드 검색 조건을 쿼리에 적용합니다.
      *
-     * FULLTEXT 인덱스가 지원되면 MATCH...AGAINST를, 아니면 LIKE fallback을 사용합니다.
+     * 어떤 조건이 붙는지는 활성 검색 엔진이 정합니다. 저장소는 "이 컬럼들로 이 키워드를
+     * 걸어라" 만 말하고 엔진 종류를 알지 않습니다 — 구체 엔진을 여기서 지목하면 플러그인이
+     * 등록한 검색 엔진이 호출될 기회 자체를 잃습니다. 정제·폴백(LIKE, 와일드카드 escape
+     * 포함)은 모두 코어 해석기가 단독으로 수행합니다.
      *
      * @param  Builder  $query  쿼리 빌더
      * @param  string  $keyword  검색 키워드
      */
     private function applyKeywordSearch(Builder $query, string $keyword): void
     {
-        if (DatabaseFulltextEngine::supportsFulltext()) {
-            $fulltextKeyword = config('benchmark.board_list_variant', 'optimized') === 'optimized'
-                ? $this->sanitizeOptimizedBooleanKeyword($keyword)
-                : $keyword;
-            if ($fulltextKeyword === '') {
-                $query->whereRaw('1 = 0');
-
-                return;
-            }
-            $query->whereRaw('MATCH(`title`, `content`) AGAINST(? IN BOOLEAN MODE)', [$fulltextKeyword]);
-        } else {
-            $escapedKeyword = $this->escapeLikeKeyword($keyword);
-            $query->where(function ($q) use ($escapedKeyword) {
-                $q->where('title', 'like', "%{$escapedKeyword}%")
-                    ->orWhere('content', 'like', "%{$escapedKeyword}%");
-            });
-        }
+        KeywordSearch::apply($query, ['title', 'content'], $keyword);
     }
 
     /**
@@ -2498,6 +1567,27 @@ class PostRepository implements PostRepositoryInterface
             ->withTrashed()
             ->with(['user'])
             ->find($id);
+    }
+
+    /**
+     * Sitemap 용으로 게시판의 공개 게시글을 스트리밍 조회합니다.
+     *
+     * lazyById 는 id 기준 키셋 페이징으로 청크를 순차 조회하므로,
+     * 결과셋 전체가 메모리(및 DB 드라이버 버퍼)에 적재되지 않습니다.
+     *
+     * @param  int  $boardId  게시판 ID
+     * @param  int  $chunkSize  청크 크기
+     * @return iterable<Post> 공개 게시글 순회자 (id, updated_at 만 조회)
+     */
+    public function streamPublishedForSitemap(int $boardId, int $chunkSize = 500): iterable
+    {
+        return Post::query()
+            ->where('board_id', $boardId)
+            ->where('status', PostStatus::Published)
+            ->where('is_secret', false)
+            ->select(['id', 'updated_at'])
+            ->orderBy('id')
+            ->lazyById($chunkSize);
     }
 
     /**
@@ -2612,6 +1702,7 @@ class PostRepository implements PostRepositoryInterface
      */
     private function getInactiveBoardIds(): array
     {
+        // audit:allow query-unbounded-get reason: 게시판은 운영자가 만든 수만큼만 존재한다 (글 수와 무관)
         return Board::where('is_active', false)->pluck('id')->all();
     }
 

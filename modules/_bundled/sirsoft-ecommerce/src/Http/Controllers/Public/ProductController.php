@@ -6,17 +6,14 @@ use App\Helpers\ResponseHelper;
 use App\Http\Controllers\Api\Base\PublicBaseController;
 use Exception;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Modules\Sirsoft\Ecommerce\Http\Requests\Public\PublicProductListRequest;
 use Modules\Sirsoft\Ecommerce\Http\Requests\Public\PublicProductNewRequest;
 use Modules\Sirsoft\Ecommerce\Http\Requests\Public\PublicProductPopularRequest;
 use Modules\Sirsoft\Ecommerce\Http\Requests\Public\PublicProductRecentRequest;
 use Modules\Sirsoft\Ecommerce\Http\Resources\ProductCollection;
 use Modules\Sirsoft\Ecommerce\Http\Resources\ProductListResource;
-use Modules\Sirsoft\Ecommerce\Http\Resources\PublicCategoryResource;
 use Modules\Sirsoft\Ecommerce\Http\Resources\PublicProductResource;
 use Modules\Sirsoft\Ecommerce\Models\Product;
-use Modules\Sirsoft\Ecommerce\Services\CategoryService;
 use Modules\Sirsoft\Ecommerce\Services\ProductService;
 
 /**
@@ -27,57 +24,8 @@ use Modules\Sirsoft\Ecommerce\Services\ProductService;
 class ProductController extends PublicBaseController
 {
     public function __construct(
-        private ProductService $productService,
-        private CategoryService $categoryService
+        private ProductService $productService
     ) {}
-
-    /**
-     * 상품 목록 첫 화면의 보조 블록을 한 요청으로 반환합니다.
-     */
-    public function storefront(Request $request): JsonResponse
-    {
-        try {
-            $this->logApiUsage('products.storefront');
-
-            $ids = array_slice(array_values(array_unique(array_filter(
-                array_map('intval', explode(',', (string) $request->query('ids', '')))
-            ))), 0, 20);
-
-            $categories = $this->categoryService->getPublicCategoryTree();
-            $recentProducts = $this->productService->getProductsByIds($ids);
-            $popularProducts = $this->productService->getPopularProducts(8);
-            $newProducts = $this->productService->getNewProducts(8);
-
-            $categoryData = config('benchmark.ecommerce_variant') === 'optimized'
-                ? PublicCategoryResource::resolveTree($categories)
-                : PublicCategoryResource::collection($categories)->resolve($request);
-
-            return ResponseHelper::moduleSuccess(
-                'sirsoft-ecommerce',
-                'messages.products.fetch_success',
-                [
-                    'categories' => [
-                        'data' => $categoryData,
-                    ],
-                    'recentProducts' => [
-                        'data' => ProductListResource::collection($recentProducts)->resolve($request),
-                    ],
-                    'popularProducts' => [
-                        'data' => ProductListResource::collection($popularProducts)->resolve($request),
-                    ],
-                    'newProducts' => [
-                        'data' => ProductListResource::collection($newProducts)->resolve($request),
-                    ],
-                ]
-            );
-        } catch (Exception $e) {
-            return ResponseHelper::moduleError(
-                'sirsoft-ecommerce',
-                'messages.products.fetch_failed',
-                500
-            );
-        }
-    }
 
     /**
      * 공개 상품 목록을 조회합니다.

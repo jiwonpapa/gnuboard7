@@ -1,21 +1,24 @@
-# Gnuboard7 7.0.5 Performance Lab
+# Gnuboard7 7.0.6 Performance Lab
 
-공식 그누보드7 `7.0.5`를 기준으로 병목을 재현하고, 성능 튜닝·더미데이터·A/B 하네스·검색 대안 시험을 공개하는 비공식 연구 포크입니다.
+공식 그누보드7 `7.0.6` 소스와 성능 개선을 기준으로, 더미데이터·A/B 하네스와 `7.0.5`에서 수행한 성능 실험 자료를 공개하는 비공식 연구 포크입니다.
 
-[![Upstream](https://img.shields.io/badge/upstream-Gnuboard7%207.0.5-2563eb)](https://github.com/gnuboard/g7/tree/7.0.5)
-[![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.5-performance-lab)
-[![Benchmark](https://img.shields.io/badge/benchmark-v0.3.2-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.5-performance-lab/modules/_bundled/sirsoft-benchmark)
-[![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/LICENSE)
+[![Upstream](https://img.shields.io/badge/upstream-Gnuboard7%207.0.6-2563eb)](https://github.com/gnuboard/g7/tree/7.0.6)
+[![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.6-performance-lab)
+[![Benchmark](https://img.shields.io/badge/benchmark-v0.4.0-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.6-performance-lab/modules/_bundled/sirsoft-benchmark)
+[![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/LICENSE)
 
 > [!IMPORTANT]
 > 이 저장소는 `gnuboard/g7`의 공식 배포판이나 공식 지원 채널이 아닙니다. 현재 브랜치는 정식 릴리스가 아니라 성능 연구·검증용 `Experimental / Performance Lab`입니다.
+
+> [!NOTE]
+> `7.0.6`에는 공식 목록·검색·게시판·쇼핑 성능 개선이 포함됐습니다. 이 브랜치는 충돌하는 `7.0.5` 코어 튜닝을 재적용하지 않고 공식 구현을 채택했습니다. 기존 튜닝 코드와 Manticore 직결 시험은 [`codex/7.0.5-performance-lab`](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.5-performance-lab)에 보존되어 있습니다.
 
 ## 저장소 목적
 
 이 저장소는 문서만 모아 둔 보고서 저장소가 아닙니다. 튜닝이 코어·게시판·쇼핑몰·DB 인덱스·벤치마크 도구에 걸쳐 있으므로 공식 원본 소스와 변경 코드를 함께 공개합니다.
 
-- 동일 서버·동일 데이터·동일 부하에서 공식 `7.0.5`와 튜닝 상태 비교
-- 게시판·쇼핑몰·공통 요청 경로의 실제 병목 수정
+- 동일 서버·동일 데이터·동일 부하에서 수행한 공식 `7.0.5`와 튜닝 상태 비교 자료 보존
+- 공식 `7.0.6`의 게시판·쇼핑몰·공통 요청 경로 개선을 새 기준선으로 채택
 - CPU·RSS·가용 메모리·swap을 함께 기록하는 A/B 하네스 제공
 - 성능 ON/OFF와 공식 원본 물리 원복 절차 제공
 - 현실·성장·병리 데이터셋 생성과 대량 초기화 도구 제공
@@ -28,17 +31,20 @@
 
 | 항목 | 상태 | 경계 |
 |---|---|---|
-| 전체 G7 7.0.5 기반 소스 | 공개 | 공식 원본과 이 포크의 변경 이력을 함께 제공 |
-| 공통·게시판·쇼핑 성능 튜닝 | VM 검증 | R/G 읽기 부하 중심, 실쓰기·장기 soak는 미완료 |
-| `sirsoft-benchmark` v0.3.2 | 기능 검증 | 격리된 테스트 서버 전용 |
+| 전체 G7 7.0.6 기반 소스 | 공개 | 공식 태그 `7.0.6`을 병합한 기준선 |
+| 공식 목록·검색 성능 개선 | 업스트림 반영 | 이 브랜치에서 별도 코어 패치를 중복 적용하지 않음 |
+| 기존 7.0.5 튜닝 | 이력 보존 | 수치·코드 지도는 7.0.5 결과이며 7.0.6 결과로 재표기하지 않음 |
+| `sirsoft-benchmark` v0.4.0 | 호환성 갱신 | 격리된 테스트 서버 전용 |
 | 더미데이터 대량 초기화 | 기능 검증 | queue·cursor chunk·재개·중복 실행 방지·진행 UI 포함 |
-| 성능 A/B·자원 하네스 | 공개 | 전용 VM과 사전 스냅샷 필수 |
-| Manticore 연결 | 대안 시험 | Scout를 우회한 읽기 비교이며 정식 검색 드라이버가 아님 |
+| 성능 A/B·자원 하네스 | 7.0.5 이력 | 7.0.6 재측정 전에는 수치 비교에 사용하지 않음 |
+| Manticore 연결 | 7.0.5 대안 시험 | 7.0.6 브랜치에는 직결 코드를 재적용하지 않음 |
 | 배포·스테이징 스크립트 | 공개 | 환경별 비밀값과 서버 설정은 저장소에 포함하지 않음 |
 | 태그형 정식 릴리스·ZIP | 미배포 | 안정화 gate 통과 후 별도 릴리스 예정 |
 | 실서비스 인증 | 미완료 | 주문·결제·배송·쓰기·동시 색인 부하 미검증 |
 
-## 구현한 작업
+## 7.0.5에서 구현·검증한 작업
+
+아래 항목과 실측값은 `7.0.5` 연구 결과입니다. `7.0.6`은 같은 문제 영역에 공식 구현을 도입했으므로 새 기준선에서 다시 계측해야 합니다.
 
 ### 공통 요청 경로
 
@@ -80,7 +86,7 @@
 - MySQL/Manticore 연결만 전환하는 검색 하네스
 - 외부 인덱스 장애 시 기존 MySQL 경로로 복귀하며, 게시판 검색은 bounded fallback으로 처리
 
-G7은 이미 Laravel Scout custom engine 확장점을 제공합니다. 따라서 이 저장소는 별도 검색 driver/registry 신설을 제안하지 않습니다. 현재 Manticore 코드는 대안성 확인용이며 Scout adapter, 증분 색인, freshness, 장애 전환까지 제품화한 결과가 아닙니다.
+G7은 이미 Laravel Scout custom engine 확장점을 제공합니다. 따라서 이 저장소는 별도 검색 driver/registry 신설을 제안하지 않습니다. Manticore 결과는 `7.0.5`에서 대안성을 확인한 이력이며 Scout adapter, 증분 색인, freshness, 장애 전환까지 제품화한 결과가 아닙니다.
 
 ## 실측 요약
 
@@ -110,6 +116,7 @@ Manticore 읽기 시험은 현재 시험 색인 기준으로 R 48,468건을 82.9
 > [!CAUTION]
 > `sirsoft-benchmark`, 더미 생성, 초기화, A/B 전환 스크립트는 운영 데이터가 없는 격리 VM에서만 사용하십시오. 운영 DB에서 실행하면 대량 데이터 생성·삭제와 인덱스 변경이 발생할 수 있습니다.
 
+- `g7-performance-toggle.sh`의 소스 archive와 수치는 `7.0.5` 전용 이력입니다. `7.0.6` 서버에서 `on`, `off`, `restore-original`을 실행하지 마십시오.
 - 기존 검증 VM에 `3379ed93`로 배포한 toggle manifest는 benchmark v0.2.6, 최종 운영 모듈은 v0.3.2라 `status --strict`에 source drift가 남아 있습니다.
 - 해당 기존 VM에서 toggle을 다시 실행하면 benchmark 모듈이 이전 버전으로 돌아갈 수 있으므로 manifest 재고정 전 재실행을 금지합니다. 신규 clone은 별도 스냅샷과 strict 검증을 거쳐야 합니다.
 - `off`는 비교용 논리 기준선이며 완전한 물리 원복이 아닙니다.
@@ -120,14 +127,14 @@ Manticore 읽기 시험은 현재 시험 색인 기준으로 R 48,468건을 82.9
 
 ## 설치와 확인
 
-현재 공개 브랜치를 확인하려면 다음과 같이 clone합니다.
+현재 `7.0.6` 브랜치를 확인하려면 다음과 같이 clone합니다.
 
 ```bash
-git clone --branch codex/7.0.5-performance-lab https://github.com/jiwonpapa/gnuboard7.git
+git clone --branch codex/7.0.6-performance-lab https://github.com/jiwonpapa/gnuboard7.git
 cd gnuboard7
 ```
 
-일반 설치 절차는 [INSTALL.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/INSTALL.md)를 따릅니다. 실환경 값은 `.env.example`을 복사한 로컬 `.env`에만 기록하고 커밋하지 마십시오.
+일반 설치 절차는 [INSTALL.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/INSTALL.md)를 따릅니다. 실환경 값은 `.env.example`을 복사한 로컬 `.env`에만 기록하고 커밋하지 마십시오.
 
 하네스 사용법은 먼저 help와 문서를 확인하십시오.
 
@@ -141,23 +148,23 @@ scripts/benchmark/g7-search-backend-toggle.sh --help
 
 ## 주요 문서
 
-- [성능 튜닝 상세 코드 지도·재현 가이드](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-and-implementation-prompt-2026-07-21.md)
-- [게시판 공개용 성능 튜닝 코드 지도](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-board-post-2026-07-21.md)
-- [VM 성능·검색·서버 사양 초기 조사](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-7.0.5-vm-performance-report-2026-07-21.md)
-- [통합 성능 전환 하네스](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/g7-performance-toggle-harness.md)
-- [게시판 성능 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/board-list-bottleneck-analysis-2026-07-15.md)
-- [쇼핑몰 상품 병목 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/docs/benchmark/ecommerce-product-bottleneck-analysis-2026-07-15.md)
+- [성능 튜닝 상세 코드 지도·재현 가이드](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-and-implementation-prompt-2026-07-21.md)
+- [게시판 공개용 성능 튜닝 코드 지도](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/g7-7.0.5-performance-tuning-code-map-board-post-2026-07-21.md)
+- [VM 성능·검색·서버 사양 초기 조사](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/g7-7.0.5-vm-performance-report-2026-07-21.md)
+- [통합 성능 전환 하네스](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/g7-performance-toggle-harness.md)
+- [게시판 성능 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/board-list-bottleneck-analysis-2026-07-15.md)
+- [쇼핑몰 상품 병목 분석](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/docs/benchmark/ecommerce-product-bottleneck-analysis-2026-07-15.md)
 
 ## 배포 예정과 남은 작업
 
 정식 태그·배포 ZIP·독립 업데이트 채널은 아직 제공하지 않습니다. 다음 gate를 완료한 뒤 첫 실험 릴리스를 판단합니다.
 
-1. 기존 검증 VM의 toggle archive/manifest를 benchmark v0.3.2에 재고정하고 `status --strict` 재검증
-2. 네이티브 MySQL 통합검색의 광범위 exact count 재설계
+1. 공식 7.0.6 기준으로 더미 모듈 설치·초기화와 자원 하네스 재검증
+2. 공식 7.0.6 네이티브 통합검색·목록 개선을 동일 R/G 데이터로 재측정
 3. 주문·결제·배송·재고 데이터 생성기와 실쓰기 부하 추가
 4. ecommerce 인덱스를 benchmark 모듈에서 정식 ecommerce migration으로 이전
 5. 동일 R/G 스냅샷의 30분 steady·2시간 soak·spike/breakpoint 실행
-6. 필요할 때만 Manticore를 기존 Scout custom engine으로 제품화
+6. 공식 7.0.6 검색 결과가 운영 목표를 충족하지 못할 때만 Scout custom engine 실험 재개
 7. 공개 배포용 changelog, 버전, 설치·원복 gate 확정
 
 G7MediaBooster 등 별도 플러그인·제품은 이 저장소에 합치지 않으며 각 제품 저장소에서 독립 배포합니다.
@@ -191,7 +198,7 @@ G7MediaBooster 등 별도 플러그인·제품은 이 저장소에 합치지 않
 ```bash
 git remote add upstream https://github.com/gnuboard/g7.git
 git fetch upstream --tags
-git log --oneline 7.0.5..codex/7.0.5-performance-lab
+git log --oneline 7.0.6..codex/7.0.6-performance-lab
 ```
 
 업스트림 변경을 이 포크에 반영할 때는 성능 기준선·toggle manifest·DB migration·A/B 결과가 함께 달라지는지 먼저 검토해야 합니다.
@@ -199,8 +206,8 @@ git log --oneline 7.0.5..codex/7.0.5-performance-lab
 ## 라이선스와 저작권
 
 - 원본 그누보드7: [SIRSOFT / gnuboard/g7](https://github.com/gnuboard/g7)
-- 기준 버전: 공식 `7.0.5`
-- 라이선스: [MIT](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.5-performance-lab/LICENSE)
+- 기준 버전: 공식 `7.0.6`
+- 라이선스: [MIT](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/LICENSE)
 - 이 저장소의 추가 변경과 보고서는 공식 G7 릴리스가 아닙니다.
 
 원본 저작권과 `LICENSE`를 유지하며, 포크 변경에 대한 이슈와 검증은 이 저장소에서 별도로 관리합니다.

@@ -178,11 +178,15 @@ class Product extends Model implements FulltextSearchable
      *
      * 대표 이미지(`is_thumbnail=true`) 가 없으면 첫 번째 이미지로 폴백.
      *
+     * `images` 가 이미 eager load 된 경우(목록 화면)는 로드된 컬렉션에서 고른다. 관계 빌더를
+     * 다시 태우면 행마다 쿼리가 1~2회 더 나가 eager load 가 무의미해진다. 로드된 컬렉션은
+     * 관계 정의의 `sort_order` 정렬을 그대로 가지므로 선택 결과는 재쿼리와 동일하다.
+     *
      * @return string|null 대표 이미지 download_url 또는 이미지가 없으면 null
      */
     public function getThumbnailUrl(): ?string
     {
-        if (config('benchmark.ecommerce_variant') === 'optimized' && $this->relationLoaded('images')) {
+        if ($this->relationLoaded('images')) {
             $thumbnailImage = $this->images->firstWhere('is_thumbnail', true)
                 ?? $this->images->first();
 
