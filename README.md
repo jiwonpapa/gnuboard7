@@ -4,7 +4,7 @@
 
 [![Upstream](https://img.shields.io/badge/upstream-Gnuboard7%207.0.6-2563eb)](https://github.com/gnuboard/g7/tree/7.0.6)
 [![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.6-performance-lab)
-[![Benchmark](https://img.shields.io/badge/benchmark-v0.4.0-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.6-performance-lab/modules/_bundled/sirsoft-benchmark)
+[![Benchmark](https://img.shields.io/badge/benchmark-v0.4.1-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.6-performance-lab/modules/_bundled/sirsoft-benchmark)
 [![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.6-performance-lab/LICENSE)
 
 > [!IMPORTANT]
@@ -34,8 +34,8 @@
 | 전체 G7 7.0.6 기반 소스 | 공개 | 공식 태그 `7.0.6`을 병합한 기준선 |
 | 공식 목록·검색 성능 개선 | 업스트림 반영 | 이 브랜치에서 별도 코어 패치를 중복 적용하지 않음 |
 | 기존 7.0.5 튜닝 | 이력 보존 | 수치·코드 지도는 7.0.5 결과이며 7.0.6 결과로 재표기하지 않음 |
-| `sirsoft-benchmark` v0.4.0 | 호환성 갱신 | 격리된 테스트 서버 전용 |
-| 더미데이터 대량 초기화 | 기능 검증 | queue·cursor chunk·재개·중복 실행 방지·진행 UI 포함 |
+| `sirsoft-benchmark` v0.4.1 | 7.0.6 호환성 검증 | 게시판·이커머스 생성/초기화 및 공식 `g7:bench` 화면 프로파일 확인 |
+| 더미데이터 대량 초기화 | 로컬 계약 검증 | MySQL 8.4에서 게시글·댓글·상품·분류·브랜드 생성 후 잔여 행 없이 초기화 |
 | 성능 A/B·자원 하네스 | 7.0.5 이력 | 7.0.6 재측정 전에는 수치 비교에 사용하지 않음 |
 | Manticore 연결 | 7.0.5 대안 시험 | 7.0.6 브랜치에는 직결 코드를 재적용하지 않음 |
 | 배포·스테이징 스크립트 | 공개 | 환경별 비밀값과 서버 설정은 저장소에 포함하지 않음 |
@@ -159,13 +159,12 @@ scripts/benchmark/g7-search-backend-toggle.sh --help
 
 정식 태그·배포 ZIP·독립 업데이트 채널은 아직 제공하지 않습니다. 다음 gate를 완료한 뒤 첫 실험 릴리스를 판단합니다.
 
-1. 공식 7.0.6 기준으로 더미 모듈 설치·초기화와 자원 하네스 재검증
+1. 공식 7.0.6 기준으로 자원 하네스 재검증
 2. 공식 7.0.6 네이티브 통합검색·목록 개선을 동일 R/G 데이터로 재측정
 3. 주문·결제·배송·재고 데이터 생성기와 실쓰기 부하 추가
-4. ecommerce 인덱스를 benchmark 모듈에서 정식 ecommerce migration으로 이전
-5. 동일 R/G 스냅샷의 30분 steady·2시간 soak·spike/breakpoint 실행
-6. 공식 7.0.6 검색 결과가 운영 목표를 충족하지 못할 때만 Scout custom engine 실험 재개
-7. 공개 배포용 changelog, 버전, 설치·원복 gate 확정
+4. 동일 R/G 스냅샷의 30분 steady·2시간 soak·spike/breakpoint 실행
+5. 공식 7.0.6 검색 결과가 운영 목표를 충족하지 못할 때만 Scout custom engine 실험 재개
+6. 공개 배포용 changelog, 버전, 설치·원복 gate 확정
 
 G7MediaBooster 등 별도 플러그인·제품은 이 저장소에 합치지 않으며 각 제품 저장소에서 독립 배포합니다.
 

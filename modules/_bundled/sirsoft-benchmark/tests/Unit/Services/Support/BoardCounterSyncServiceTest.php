@@ -6,6 +6,7 @@ require_once dirname(__DIR__, 5).'/sirsoft-board/tests/ModuleTestCase.php';
 require_once dirname(__DIR__, 5).'/sirsoft-board/tests/BoardTestCase.php';
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Mockery;
 use Modules\Sirsoft\Benchmark\Services\Support\BoardCacheInvalidator;
 use Modules\Sirsoft\Benchmark\Services\Support\BoardCounterSyncService;
@@ -21,20 +22,10 @@ class BoardCounterSyncServiceTest extends BoardTestCase
         parent::tearDown();
     }
 
-    public function test_board_sync_backfills_author_terms_after_raw_post_insert(): void
+    public function test_board_sync_updates_totals_without_legacy_author_terms_table(): void
     {
-        $authorName = 'benchmark-raw-author';
-        $this->createTestPost(['author_name' => $authorName]);
-
-        // Observer 개입 여부와 무관하게 sync 직전 누락 상태를 명시적으로 재현합니다.
-        DB::table('board_post_author_terms')
-            ->where('board_id', $this->board->id)
-            ->where('author_name', $authorName)
-            ->delete();
-        $this->assertDatabaseMissing('board_post_author_terms', [
-            'board_id' => $this->board->id,
-            'author_name' => $authorName,
-        ]);
+        $this->assertFalse(Schema::hasTable('board_post_author_terms'));
+        $this->createTestPost(['author_name' => 'benchmark-raw-author']);
 
         $cacheInvalidator = Mockery::mock(BoardCacheInvalidator::class);
         $cacheInvalidator->shouldReceive('invalidate')
@@ -46,29 +37,18 @@ class BoardCounterSyncServiceTest extends BoardTestCase
             $cacheInvalidator,
         );
 
-        $service->syncBoardsWithoutDatasetVerification([$this->board->id]);
+        $summaries = $service->syncBoardsWithoutDatasetVerification([$this->board->id]);
 
-        $this->assertDatabaseHas('board_post_author_terms', [
-            'board_id' => $this->board->id,
-            'author_name' => $authorName,
-        ]);
+        $this->assertSame($this->board->id, $summaries[0]['board_id']);
+        $this->assertSame(1, $summaries[0]['posts_count']);
+        $this->assertSame(0, $summaries[0]['comments_count']);
     }
 
     public function test_post_delete_sync_updates_only_board_totals(): void
     {
-        $authorName = 'benchmark-deleted-author';
-        $post = $this->createTestPost([
-            'author_name' => $authorName,
+        $postId = $this->createTestPost([
+            'author_name' => 'benchmark-deleted-author',
             'comments_count' => 17,
-        ]);
-
-        DB::table('board_post_author_terms')
-            ->where('board_id', $this->board->id)
-            ->where('author_name', $authorName)
-            ->delete();
-        DB::table('board_post_author_terms')->insert([
-            'board_id' => $this->board->id,
-            'author_name' => 'benchmark-orphan-author',
         ]);
 
         $cacheInvalidator = Mockery::mock(BoardCacheInvalidator::class);
@@ -86,14 +66,6 @@ class BoardCounterSyncServiceTest extends BoardTestCase
         $this->assertSame($this->board->id, $summaries[0]['board_id']);
         $this->assertSame(1, $summaries[0]['posts_count']);
         $this->assertSame(0, $summaries[0]['comments_count']);
-        $this->assertSame(17, (int) $post->fresh()->comments_count);
-        $this->assertDatabaseMissing('board_post_author_terms', [
-            'board_id' => $this->board->id,
-            'author_name' => $authorName,
-        ]);
-        $this->assertDatabaseMissing('board_post_author_terms', [
-            'board_id' => $this->board->id,
-            'author_name' => 'benchmark-orphan-author',
-        ]);
+        $this->assertSame(17, (int) DB::table('board_posts')->where('id', $postId)->value('comments_count'));
     }
 }

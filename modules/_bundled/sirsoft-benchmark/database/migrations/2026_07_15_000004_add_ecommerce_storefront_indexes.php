@@ -18,10 +18,12 @@ return new class extends Migration
         $productIndexes = array_column(Schema::getIndexes('ecommerce_products'), 'name');
         $clauses = [];
 
-        if (! in_array('idx_ecommerce_products_public_latest', $productIndexes, true)) {
+        if (! in_array('idx_products_display_created_id', $productIndexes, true)
+            && ! in_array('idx_ecommerce_products_public_latest', $productIndexes, true)) {
             $clauses[] = 'ADD INDEX idx_ecommerce_products_public_latest (display_status, deleted_at, created_at, id)';
         }
-        if (! in_array('idx_ecommerce_products_public_price', $productIndexes, true)) {
+        if (! in_array('idx_products_display_price_id', $productIndexes, true)
+            && ! in_array('idx_ecommerce_products_public_price', $productIndexes, true)) {
             $clauses[] = 'ADD INDEX idx_ecommerce_products_public_price (display_status, deleted_at, selling_price, id)';
         }
 
@@ -34,7 +36,8 @@ return new class extends Migration
         }
 
         $orderIndexes = array_column(Schema::getIndexes('ecommerce_order_options'), 'name');
-        if (! in_array('idx_ecommerce_order_options_recent_sales', $orderIndexes, true)) {
+        if (! in_array('idx_order_options_product_created_qty', $orderIndexes, true)
+            && ! in_array('idx_ecommerce_order_options_recent_sales', $orderIndexes, true)) {
             DB::statement(
                 'ALTER TABLE '.DB::getTablePrefix().'ecommerce_order_options '
                 .'ADD INDEX idx_ecommerce_order_options_recent_sales (created_at, product_id, quantity)'

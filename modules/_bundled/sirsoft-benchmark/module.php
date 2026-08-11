@@ -103,4 +103,22 @@ class Module extends AbstractModule
             ],
         ];
     }
+
+    /**
+     * 그누보드7 7.0.6 성능 계측 프로파일을 반환합니다.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function getBenchmarkProfiles(): array
+    {
+        return [
+            'generation_jobs_screen' => [
+                'type' => 'screen',
+                'label' => '더미데이터 최근 작업 화면',
+                'route' => 'api.modules.sirsoft-benchmark.admin.generation-jobs.index',
+                'query' => ['per_page' => 20],
+                'permissions' => ['sirsoft-benchmark.jobs.read'],
+            ],
+        ];
+    }
 }
