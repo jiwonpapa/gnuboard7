@@ -21,6 +21,8 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  */
 class PublicTemplateController extends PublicBaseController
 {
+    use ClearsTemplateCaches;
+
     public function __construct(
         private TemplateService $templateService,
         private TemplateLayoutAttachmentService $layoutAttachmentService,
@@ -225,7 +227,7 @@ class PublicTemplateController extends PublicBaseController
 
         // 캐시 버전을 응답에 포함하여 프론트엔드가 API 호출 시 사용하도록 함
         $responseData = $configData['data'];
-        $responseData['cache_version'] = ClearsTemplateCaches::getExtensionCacheVersion();
+        $responseData['cache_version'] = self::getExtensionCacheVersion();
 
         return $this->success(
             __('templates.messages.config_retrieved'),

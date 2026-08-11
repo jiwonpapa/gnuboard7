@@ -6,7 +6,6 @@ use App\Exceptions\TemplateNotFoundException;
 use App\Extension\ModuleManager;
 use App\Extension\PluginManager;
 use App\Extension\TemplateManager;
-use App\Extension\Traits\ClearsTemplateCaches;
 use App\Http\View\Composers\Traits\CollectsActiveExtensionMeta;
 use App\Http\View\Composers\Traits\CollectsExtensionAssets;
 use App\Http\View\Composers\Traits\CollectsTemplateExternals;
@@ -104,7 +103,7 @@ class UserTemplateComposer
         $templateExternals = $this->collectTemplateExternals($activeTemplate);
 
         // 확장 기능 캐시 버전 (브라우저 캐시 무효화용)
-        $extensionCacheVersion = ClearsTemplateCaches::getExtensionCacheVersion();
+        $extensionCacheVersion = self::getExtensionCacheVersion();
 
         // 확장 프론트엔드 병합 번들 URL (상시 ON — 활성 에셋이 없으면 null)
         $bundleUrls = $this->buildExtensionBundleUrls($moduleAssets, $pluginAssets, $extensionCacheVersion);

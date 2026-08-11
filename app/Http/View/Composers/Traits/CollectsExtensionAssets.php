@@ -22,6 +22,8 @@ use Illuminate\Support\Facades\Log;
  */
 trait CollectsExtensionAssets
 {
+    use ClearsTemplateCaches;
+
     /**
      * 확장 병합 번들 URL 을 생성합니다.
      *
@@ -92,7 +94,7 @@ trait CollectsExtensionAssets
             $active = $activeResolver();
 
             // 캐시 버전 조회 (브라우저 캐시 무효화용)
-            $cacheVersion = ClearsTemplateCaches::getExtensionCacheVersion();
+            $cacheVersion = self::getExtensionCacheVersion();
 
             foreach ($active as $identifier => $extension) {
                 // 확장에 에셋이 있는지 확인
