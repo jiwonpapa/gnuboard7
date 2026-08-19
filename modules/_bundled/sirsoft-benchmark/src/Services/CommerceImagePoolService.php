@@ -80,7 +80,7 @@ class CommerceImagePoolService
             throw new \RuntimeException('sirsoft-ecommerce 모듈이 설치되어 있지 않습니다.');
         }
 
-        return $module->getStorage();
+        return $module->getStorageFor('images');
     }
 
     /**

@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands\Traits;
 
-use App\Search\DTO\SearchIndexHealth;
 use App\Search\DTO\SearchIndexRepairReport;
 use App\Search\SearchIndexMaintenanceManager;
 
@@ -13,8 +12,8 @@ use App\Search\SearchIndexMaintenanceManager;
  * 사이트에 영향을 줍니다. 그래서 **기본값은 재생성하지 않음**이고, 운영자가
  * `--rebuild-search-index` 로 명시했을 때만 수행합니다.
  *
- * 옵션을 주지 않아도 점검 결과는 안내합니다 — 색인이 누락되면 검색이 오류 없이 0건을
- * 돌려주므로, 알려주지 않으면 운영자가 알 방법이 없습니다.
+ * 점검 자체도 대용량 FULLTEXT 인덱스를 초기화할 수 있으므로 명시 옵션이 없으면
+ * 실행하지 않습니다. 읽기 전용 점검은 별도 `search:index` 명령으로 수행합니다.
  */
 trait RebuildsSearchIndex
 {
@@ -36,6 +35,14 @@ trait RebuildsSearchIndex
      */
     protected function handleSearchIndexRebuild(?bool $requested = null): ?SearchIndexRepairReport
     {
+        $requested ??= (bool) $this->option('rebuild-search-index');
+
+        // FULLTEXT 자기 매칭 점검도 대용량 테이블에서는 인덱스 초기화와 메모리 급증을
+        // 유발한다. 확장 설치·업데이트의 기본 경로에서는 검색 점검을 완전히 분리한다.
+        if (! $requested) {
+            return null;
+        }
+
         $manager = app(SearchIndexMaintenanceManager::class);
 
         // 점검을 제공하지 않는 엔진에서는 조용히 넘어간다 (검색 자체는 정상 동작)
@@ -43,42 +50,10 @@ trait RebuildsSearchIndex
             return null;
         }
 
-        $requested ??= (bool) $this->option('rebuild-search-index');
+        $report = $manager->repairStale();
+        $this->reportRebuild($report);
 
-        if ($requested) {
-            $report = $manager->repairStale();
-            $this->reportRebuild($report);
-
-            return $report;
-        }
-
-        $this->warnStale($manager->inspect());
-
-        return null;
-    }
-
-    /**
-     * 재생성하지 않은 경우, 색인 누락 사실만 안내합니다.
-     *
-     * @param  array<int, SearchIndexHealth>  $results  점검 결과
-     * @return void
-     */
-    private function warnStale(array $results): void
-    {
-        $stale = array_values(array_filter($results, fn (SearchIndexHealth $h) => $h->needsRebuild()));
-
-        if ($stale === []) {
-            return;
-        }
-
-        $this->newLine();
-        $this->warn('⚠️  '.__('search.index.stale_after_update', ['count' => count($stale)]));
-
-        foreach ($stale as $health) {
-            $this->line('   - '.$health->identifier);
-        }
-
-        $this->line('   '.__('search.index.stale_hint'));
+        return $report;
     }
 
     /**

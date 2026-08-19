@@ -23,6 +23,8 @@ test_files:
   - plugins/_bundled/sirsoft-pay_nicepayments/tests/Unit/Upgrades/BackfillEasyPayPgProviderTest.php
   - plugins/_bundled/sirsoft-pay_kginicis/tests/Unit/Listeners/RegisterEasyPayMethodsListenerTest.php
   - plugins/_bundled/sirsoft-pay_kginicis/tests/Unit/Upgrades/BackfillEasyPayPgProviderTest.php
+  - plugins/_bundled/sirsoft-tosspayments/tests/Feature/Listeners/RegisterTossPaymentMethodsListenerTest.php
+  - plugins/_bundled/sirsoft-tosspayments/tests/Unit/Upgrade/BackfillTossPgProviderTest.php
 
 # 입력 axis — 능력 해석에 영향을 주는 변수
 axes:
@@ -32,6 +34,8 @@ axes:
   capability_declared: [declared, undeclared]
   # 능력별 판정 표면
   capability: [needs_pg, label, refund_method, pg_locked, brand_mark]
+  # 지정 PG 의 생사(pg_provider_state)는 능력 해석과 직교하는 별개 관심사다 —
+  # payment-method-dead-pg.yaml 이 그 축을 소유한다.
 
 exclusions:
   - method_kind: builtin
