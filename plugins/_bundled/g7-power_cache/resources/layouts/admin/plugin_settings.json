@@ -1,0 +1,317 @@
+{
+    "version": "1.0.0",
+    "layout_name": "plugin_settings",
+    "permissions": ["core.plugins.update"],
+    "extends": "_admin_base",
+    "meta": {
+        "title": "$t:g7-power_cache.settings.title",
+        "description": "$t:g7-power_cache.settings.description"
+    },
+    "data_sources": [
+        {
+            "id": "settings",
+            "type": "api",
+            "endpoint": "/api/admin/plugins/{{route.identifier}}/settings",
+            "method": "GET",
+            "auto_fetch": true,
+            "auth_required": true,
+            "initLocal": "form",
+            "refetchOnMount": true
+        }
+    ],
+    "slots": {
+        "content": [
+            {
+                "id": "power_cache_settings_content",
+                "type": "basic",
+                "name": "Div",
+                "dataKey": "form",
+                "trackChanges": true,
+                "props": { "className": "admin-page-content-responsive" },
+                "children": [
+                    {
+                        "type": "composite",
+                        "name": "PageHeader",
+                        "props": {
+                            "title": "$t:g7-power_cache.settings.title",
+                            "description": "$t:g7-power_cache.settings.description",
+                            "backPath": "/admin/plugins",
+                            "backLabel": "$t:admin.plugins.back_to_list"
+                        }
+                    },
+                    {
+                        "type": "basic",
+                        "name": "Div",
+                        "props": { "className": "mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100" },
+                        "text": "$t:g7-power_cache.settings.safety_notice"
+                    },
+                    {
+                        "type": "basic",
+                        "name": "Div",
+                        "props": { "className": "mt-6 space-y-6" },
+                        "children": [
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": { "className": "rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" },
+                                "children": [
+                                    {
+                                        "type": "basic",
+                                        "name": "H2",
+                                        "props": { "className": "mb-5 text-lg font-semibold" },
+                                        "text": "$t:g7-power_cache.settings.sections.operation"
+                                    },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": { "className": "grid gap-5 lg:grid-cols-2" },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.mode" },
+                                                    {
+                                                        "type": "composite",
+                                                        "name": "Select",
+                                                        "props": {
+                                                            "name": "mode",
+                                                            "className": "w-full",
+                                                            "options": [
+                                                                { "value": "observe", "label": "observe" },
+                                                                { "value": "active", "label": "active" },
+                                                                { "value": "bypass", "label": "bypass" }
+                                                            ]
+                                                        }
+                                                    },
+                                                    { "type": "basic", "name": "P", "props": { "className": "form-hint" }, "text": "$t:g7-power_cache.settings.fields.mode_hint" }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.store_driver" },
+                                                    {
+                                                        "type": "composite",
+                                                        "name": "Select",
+                                                        "props": {
+                                                            "name": "store_driver",
+                                                            "className": "w-full",
+                                                            "options": [
+                                                                { "value": "file", "label": "file" },
+                                                                { "value": "redis", "label": "redis" }
+                                                            ]
+                                                        }
+                                                    },
+                                                    { "type": "basic", "name": "P", "props": { "className": "form-hint" }, "text": "$t:g7-power_cache.settings.fields.store_driver_hint" }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": { "className": "rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" },
+                                "children": [
+                                    { "type": "basic", "name": "H2", "props": { "className": "mb-5 text-lg font-semibold" }, "text": "$t:g7-power_cache.settings.sections.routes" },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": { "className": "space-y-4" },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "cache_public_pages", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.cache_public_pages" }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "cache_public_categories", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.cache_public_categories" }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": { "className": "rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" },
+                                "children": [
+                                    { "type": "basic", "name": "H2", "props": { "className": "mb-5 text-lg font-semibold" }, "text": "$t:g7-power_cache.settings.sections.safety" },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": { "className": "space-y-4" },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "automatic_recovery", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.automatic_recovery" }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "metrics_enabled", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.metrics_enabled" }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "debug_headers", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.debug_headers" }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "basic",
+                                "name": "Div",
+                                "props": { "className": "rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" },
+                                "children": [
+                                    { "type": "basic", "name": "H2", "props": { "className": "mb-5 text-lg font-semibold" }, "text": "$t:g7-power_cache.settings.sections.limits" },
+                                    {
+                                        "type": "basic",
+                                        "name": "Div",
+                                        "props": { "className": "grid gap-5 md:grid-cols-2 xl:grid-cols-3" },
+                                        "children": [
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.max_response_kb" },
+                                                    { "type": "basic", "name": "Input", "props": { "type": "number", "name": "max_response_kb", "min": 16, "max": 4096, "className": "w-full" } }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.retention_seconds" },
+                                                    { "type": "basic", "name": "Input", "props": { "type": "number", "name": "retention_seconds", "min": 3600, "max": 2592000, "className": "w-full" } },
+                                                    { "type": "basic", "name": "P", "props": { "className": "form-hint" }, "text": "$t:g7-power_cache.settings.fields.retention_hint" }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.lock_wait_ms" },
+                                                    { "type": "basic", "name": "Input", "props": { "type": "number", "name": "lock_wait_ms", "min": 0, "max": 5000, "className": "w-full" } }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.lock_lease_seconds" },
+                                                    { "type": "basic", "name": "Input", "props": { "type": "number", "name": "lock_lease_seconds", "min": 1, "max": 120, "className": "w-full" } }
+                                                ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Div",
+                                                "children": [
+                                                    { "type": "basic", "name": "Label", "props": { "className": "form-label" }, "text": "$t:g7-power_cache.settings.fields.recovery_batch" },
+                                                    { "type": "basic", "name": "Input", "props": { "type": "number", "name": "recovery_batch", "min": 1, "max": 1000, "className": "w-full" } }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "footer_buttons",
+                        "type": "basic",
+                        "name": "Div",
+                        "props": { "className": "sticky-footer-buttons" },
+                        "children": [
+                            {
+                                "type": "basic",
+                                "name": "Button",
+                                "props": { "type": "button", "className": "btn btn-secondary" },
+                                "actions": [{ "type": "click", "handler": "navigate", "params": { "path": "/admin/plugins" } }],
+                                "text": "$t:common.cancel"
+                            },
+                            {
+                                "type": "basic",
+                                "name": "Button",
+                                "props": {
+                                    "type": "button",
+                                    "disabled": "{{!_local.hasChanges || _local.isSaving}}",
+                                    "className": "btn btn-primary"
+                                },
+                                "actions": [
+                                    {
+                                        "type": "click",
+                                        "handler": "sequence",
+                                        "actions": [
+                                            { "handler": "setState", "params": { "target": "local", "isSaving": true, "errors": null } },
+                                            {
+                                                "handler": "apiCall",
+                                                "auth_required": true,
+                                                "target": "/api/admin/plugins/{{route.identifier}}/settings",
+                                                "params": { "method": "PUT", "body": "{{_local.form}}" },
+                                                "onSuccess": [
+                                                    { "handler": "setState", "params": { "target": "local", "isSaving": false, "hasChanges": false } },
+                                                    { "handler": "toast", "params": { "type": "success", "message": "$t:admin.plugins.settings.save_success" } },
+                                                    { "handler": "refetchDataSource", "params": { "dataSourceId": "settings" } }
+                                                ],
+                                                "onError": [
+                                                    { "handler": "setState", "params": { "target": "local", "isSaving": false, "errors": "{{error.errors}}" } },
+                                                    { "handler": "toast", "params": { "type": "error", "message": "{{error.message ?? '$t:admin.plugins.settings.save_error'}}" } }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "children": [
+                                    { "type": "basic", "name": "Span", "if": "{{!_local.isSaving}}", "text": "$t:common.save" },
+                                    { "type": "basic", "name": "Span", "if": "{{_local.isSaving}}", "text": "$t:common.saving" }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "schema": {
+        "mode": { "type": "enum", "options": ["observe", "active", "bypass"], "default": "observe" },
+        "store_driver": { "type": "enum", "options": ["file", "redis"], "default": "file" },
+        "cache_public_pages": { "type": "boolean", "default": true },
+        "cache_public_categories": { "type": "boolean", "default": true },
+        "automatic_recovery": { "type": "boolean", "default": true },
+        "metrics_enabled": { "type": "boolean", "default": true },
+        "debug_headers": { "type": "boolean", "default": false },
+        "max_response_kb": { "type": "integer", "min": 16, "max": 4096, "default": 512 },
+        "retention_seconds": { "type": "integer", "min": 3600, "max": 2592000, "default": 604800 },
+        "lock_wait_ms": { "type": "integer", "min": 0, "max": 5000, "default": 500 },
+        "lock_lease_seconds": { "type": "integer", "min": 1, "max": 120, "default": 15 },
+        "recovery_batch": { "type": "integer", "min": 1, "max": 1000, "default": 100 }
+    }
+}

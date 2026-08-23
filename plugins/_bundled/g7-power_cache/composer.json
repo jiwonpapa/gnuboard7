@@ -1,0 +1,15 @@
+{
+    "name": "plugins/g7-power_cache",
+    "description": "Generation-safe guest response cache for Gnuboard7",
+    "type": "library",
+    "version": "0.1.0",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Plugins\\G7\\PowerCache\\": ["src/", "./"]
+        }
+    },
+    "require": {
+        "php": "^8.2"
+    }
+}

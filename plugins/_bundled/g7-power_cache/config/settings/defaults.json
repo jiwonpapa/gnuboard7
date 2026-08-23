@@ -1,0 +1,34 @@
+{
+    "_meta": {
+        "version": "1.0.0",
+        "description": "G7PowerCache 환경설정"
+    },
+    "defaults": {
+        "mode": "observe",
+        "store_driver": "file",
+        "cache_public_pages": true,
+        "cache_public_categories": true,
+        "automatic_recovery": true,
+        "metrics_enabled": true,
+        "debug_headers": false,
+        "max_response_kb": 512,
+        "retention_seconds": 604800,
+        "lock_wait_ms": 500,
+        "lock_lease_seconds": 15,
+        "recovery_batch": 100
+    },
+    "frontend_schema": {
+        "mode": { "expose": false },
+        "store_driver": { "expose": false },
+        "cache_public_pages": { "expose": false },
+        "cache_public_categories": { "expose": false },
+        "automatic_recovery": { "expose": false },
+        "metrics_enabled": { "expose": false },
+        "debug_headers": { "expose": false },
+        "max_response_kb": { "expose": false },
+        "retention_seconds": { "expose": false },
+        "lock_wait_ms": { "expose": false },
+        "lock_lease_seconds": { "expose": false },
+        "recovery_batch": { "expose": false }
+    }
+}

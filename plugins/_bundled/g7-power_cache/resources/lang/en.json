@@ -1,0 +1,30 @@
+{
+    "settings": {
+        "title": "G7PowerCache Settings",
+        "description": "Caches only verified guest public APIs with generation invalidation. Start in observe mode.",
+        "safety_notice": "Run php artisan power-cache:doctor before active mode. The file store requires an explicit single-node environment acknowledgement.",
+        "sections": {
+            "operation": "Operation",
+            "routes": "Allowed routes",
+            "safety": "Consistency and observability",
+            "limits": "Storage and lock limits"
+        },
+        "fields": {
+            "mode": "Mode",
+            "mode_hint": "Observe records eligibility without storing or serving HITs; only active serves cache.",
+            "store_driver": "Cache store",
+            "store_driver_hint": "Use file on one node and a dedicated Redis connection for multi-node production.",
+            "cache_public_pages": "Public page details",
+            "cache_public_categories": "Public ecommerce category tree and details",
+            "automatic_recovery": "Automatically recover pending outbox events",
+            "metrics_enabled": "Record cache state metrics",
+            "debug_headers": "X-G7-Power-Cache debug header",
+            "max_response_kb": "Maximum stored response (KB)",
+            "retention_seconds": "Backend retention (seconds)",
+            "retention_hint": "This is garbage-collection retention, not a freshness TTL.",
+            "lock_wait_ms": "Concurrent MISS wait (ms)",
+            "lock_lease_seconds": "Fill lock lease (seconds)",
+            "recovery_batch": "Automatic recovery batch"
+        }
+    }
+}
