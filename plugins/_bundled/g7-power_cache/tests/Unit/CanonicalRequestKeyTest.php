@@ -36,4 +36,34 @@ final class CanonicalRequestKeyTest extends PowerCacheTestCase
         self::assertNotSame($first, $english);
         self::assertNotSame($first, $newEpoch);
     }
+
+    public function test_board_policy_separates_mobile_and_desktop_variants(): void
+    {
+        $policy = new RoutePolicy(
+            'board-public-hot-list-v1',
+            'api.modules.sirsoft-board.boards.posts.index',
+            ['site', 'board:all'],
+            ['page'],
+            ['api'],
+            varyByDeviceClass: true,
+        );
+        $snapshot = new RuntimeSnapshot('site-a', 'epoch-a', 0);
+        $keys = new CanonicalRequestKey;
+        $desktop = $keys->build(
+            $this->request(headers: ['User-Agent' => 'Mozilla/5.0 Macintosh']),
+            $policy,
+            $snapshot,
+            'ko',
+            'Asia/Seoul',
+        );
+        $mobile = $keys->build(
+            $this->request(headers: ['User-Agent' => 'Mozilla/5.0 iPhone Mobile']),
+            $policy,
+            $snapshot,
+            'ko',
+            'Asia/Seoul',
+        );
+
+        self::assertNotSame($desktop, $mobile);
+    }
 }

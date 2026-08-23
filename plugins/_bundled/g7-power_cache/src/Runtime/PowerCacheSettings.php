@@ -37,6 +37,11 @@ final class PowerCacheSettings
         return (bool) $this->value('cache_public_categories', true);
     }
 
+    public function publicBoardListsEnabled(): bool
+    {
+        return (bool) $this->value('cache_public_board_lists', true);
+    }
+
     public function automaticRecovery(): bool
     {
         return (bool) $this->value('automatic_recovery', true);

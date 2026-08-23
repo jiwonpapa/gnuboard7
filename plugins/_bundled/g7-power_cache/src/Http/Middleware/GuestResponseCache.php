@@ -166,7 +166,9 @@ final class GuestResponseCache
                 'scopes' => $policy->scopes,
                 'generations' => $after,
                 'stored_at' => time(),
-            ], $this->settings->retentionSeconds());
+            ], $policy->retentionSeconds === null
+                ? $this->settings->retentionSeconds()
+                : min($this->settings->retentionSeconds(), $policy->retentionSeconds));
             $this->metric('stored.'.$policy->id);
 
             return $this->debug($response, 'MISS-STORED', 'cacheable');

@@ -16,6 +16,7 @@
             "store_driver_hint": "Use file on one node and a dedicated Redis connection for multi-node production.",
             "cache_public_pages": "Public page details",
             "cache_public_categories": "Public ecommerce category tree and details",
+            "cache_public_board_lists": "Public guest board lists (pages 1-3)",
             "automatic_recovery": "Automatically recover pending outbox events",
             "metrics_enabled": "Record cache state metrics",
             "debug_headers": "X-G7-Power-Cache debug header",

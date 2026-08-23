@@ -52,6 +52,34 @@ final class ContentInvalidationListener implements HookListenerInterface
             $hooks[$hook] = ['method' => 'handleProductMutation', 'type' => 'action', 'sync' => true];
         }
 
+        foreach ([
+            'sirsoft-board.board.after_create',
+            'sirsoft-board.board.after_update',
+            'sirsoft-board.board.after_delete',
+            'sirsoft-board.board.posts.before_force_delete',
+            'sirsoft-board.permissions.after_create',
+            'sirsoft-board.permissions.after_update',
+            'sirsoft-board.permissions.after_delete',
+            'sirsoft-board.roles.after_create',
+            'sirsoft-board.roles.after_delete',
+            'sirsoft-board.post.after_create',
+            'sirsoft-board.post.after_update',
+            'sirsoft-board.post.after_delete',
+            'sirsoft-board.post.after_blind',
+            'sirsoft-board.post.after_restore',
+            'sirsoft-board.comment.after_create',
+            'sirsoft-board.comment.after_update',
+            'sirsoft-board.comment.after_delete',
+            'sirsoft-board.comment.after_blind',
+            'sirsoft-board.comment.after_restore',
+            'sirsoft-board.attachment.after_upload',
+            'sirsoft-board.attachment.after_link',
+            'sirsoft-board.attachment.after_delete',
+            'sirsoft-board.attachment.after_reorder',
+        ] as $hook) {
+            $hooks[$hook] = ['method' => 'handleBoardMutation', 'type' => 'action', 'sync' => true];
+        }
+
         return $hooks;
     }
 
@@ -74,5 +102,10 @@ final class ContentInvalidationListener implements HookListenerInterface
     {
         // 카테고리 트리는 공개 상품 수를 포함하므로 상품 변경도 트리 세대를 회전합니다.
         $this->coordinator->invalidate(['category:tree'], 'product-category-count-mutation');
+    }
+
+    public function handleBoardMutation(...$args): void
+    {
+        $this->coordinator->invalidate(['board:all'], 'board-list-mutation');
     }
 }

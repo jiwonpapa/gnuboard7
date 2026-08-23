@@ -83,6 +83,25 @@ final class CoreInvalidationListener implements HookListenerInterface
             $hooks[$hook] = ['method' => 'handleSiteMutation', 'type' => 'action', 'sync' => true];
         }
 
+        foreach ([
+            'core.role.after_create',
+            'core.role.after_update',
+            'core.role.after_delete',
+            'core.role.after_sync_permissions',
+            'core.role.after_toggle_status',
+            'core.user.after_create',
+            'core.user.after_update',
+            'core.user.after_withdraw',
+            'core.user.after_delete',
+            'sirsoft-core.user.after_bulk_update',
+            'core.attachment.after_upload',
+            'core.attachment.after_delete',
+            'core.attachment.after_reorder',
+            'core.attachment.after_bulk_delete',
+        ] as $hook) {
+            $hooks[$hook] = ['method' => 'handleBoardPresentationMutation', 'type' => 'action', 'sync' => true];
+        }
+
         return $hooks;
     }
 
@@ -94,6 +113,11 @@ final class CoreInvalidationListener implements HookListenerInterface
     public function handleSiteMutation(...$args): void
     {
         $this->coordinator->invalidate(['site'], 'core-presentation-mutation');
+    }
+
+    public function handleBoardPresentationMutation(...$args): void
+    {
+        $this->coordinator->invalidate(['board:all'], 'board-presentation-mutation');
     }
 
     public function handlePluginSettings(string $identifier, ...$args): void

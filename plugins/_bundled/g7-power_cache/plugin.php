@@ -27,6 +27,7 @@ final class Plugin extends AbstractPlugin
                 'api.modules.sirsoft-page.pages.show',
                 'api.modules.sirsoft-ecommerce.categories.index',
                 'api.modules.sirsoft-ecommerce.categories.show',
+                'api.modules.sirsoft-board.boards.posts.index',
             ],
         ]];
     }
@@ -76,6 +77,7 @@ final class Plugin extends AbstractPlugin
             'store_driver' => $this->enumSetting('저장소', 'Store driver', ['file', 'redis'], 'file'),
             'cache_public_pages' => $this->booleanSetting('공개 페이지 캐시', 'Cache public pages', true),
             'cache_public_categories' => $this->booleanSetting('공개 카테고리 캐시', 'Cache public categories', true),
+            'cache_public_board_lists' => $this->booleanSetting('공개 게시판 목록 캐시', 'Cache public board lists', true),
             'automatic_recovery' => $this->booleanSetting('자동 아웃박스 복구', 'Automatic outbox recovery', true),
             'metrics_enabled' => $this->booleanSetting('메트릭 기록', 'Record metrics', true),
             'debug_headers' => $this->booleanSetting('디버그 응답 헤더', 'Debug response headers', false),
@@ -94,6 +96,7 @@ final class Plugin extends AbstractPlugin
             'store_driver' => 'file',
             'cache_public_pages' => true,
             'cache_public_categories' => true,
+            'cache_public_board_lists' => true,
             'automatic_recovery' => true,
             'metrics_enabled' => true,
             'debug_headers' => false,

@@ -12,7 +12,7 @@ use Throwable;
 final class PurgeCommand extends Command
 {
     protected $signature = 'power-cache:purge
-        {--scope=site : site|page|category}
+        {--scope=site : site|page|category|board}
         {--reason=manual : 감사 로그용 사유}
         {--json : JSON 형식으로 출력}';
 
@@ -29,11 +29,12 @@ final class PurgeCommand extends Command
             'site' => 'site',
             'page' => 'page:all',
             'category' => 'category:tree',
+            'board' => 'board:all',
             default => null,
         };
 
         if ($generationScope === null) {
-            $this->error('scope은 site, page, category 중 하나여야 합니다.');
+            $this->error('scope은 site, page, category, board 중 하나여야 합니다.');
 
             return self::INVALID;
         }

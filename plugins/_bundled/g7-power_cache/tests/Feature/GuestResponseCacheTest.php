@@ -3,6 +3,9 @@
 namespace Plugins\G7\PowerCache\Tests\Feature;
 
 use App\Contracts\Extension\ExtensionMiddlewareRegistryInterface;
+use App\Enums\PermissionType;
+use App\Models\Permission;
+use App\Models\Role;
 use Illuminate\Support\Facades\DB;
 use Plugins\G7\PowerCache\Eligibility\GuestEligibility;
 use Plugins\G7\PowerCache\Http\Middleware\GuestResponseCache;
@@ -19,6 +22,80 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 
 final class GuestResponseCacheTest extends PowerCacheTestCase
 {
+    public function test_public_board_list_hits_and_board_generation_invalidates_it(): void
+    {
+        $settings = new PowerCacheSettings([
+            'mode' => 'active',
+            'store_driver' => 'array',
+            'cache_public_board_lists' => true,
+            'automatic_recovery' => true,
+            'metrics_enabled' => false,
+            'debug_headers' => true,
+        ]);
+        $repository = $this->repository();
+        $store = $this->arrayStore();
+        $applier = new InvalidationApplier($repository, $store);
+        $reconciler = new OutboxReconciler($repository, $store, $applier);
+        $middleware = new GuestResponseCache(
+            $settings,
+            new RoutePolicyRegistry($settings),
+            new GuestEligibility(new class implements ExtensionMiddlewareRegistryInterface
+            {
+                public function resolveForRoute(string $routeName, string $path, string $group, string $timing): array
+                {
+                    return $timing === 'after_core' ? [GuestResponseCache::class] : [];
+                }
+            }),
+            new CanonicalRequestKey,
+            new ResponsePolicy,
+            $store,
+            new RecoveryBarrier($repository, $store, $reconciler, $settings),
+        );
+        $makeRequest = function () {
+            $request = $this->request(
+                routeName: 'api.modules.sirsoft-board.boards.posts.index',
+                middleware: [
+                    'api',
+                    'optional.sanctum',
+                    'throttle:600,1',
+                    'permission:user,sirsoft-board.{slug}.posts.read',
+                ],
+                uri: '/api/modules/sirsoft-board/boards/freebd/posts',
+                query: ['page' => '1'],
+                headers: ['User-Agent' => 'Mozilla/5.0 Macintosh'],
+                routePattern: 'api/modules/sirsoft-board/boards/{slug}/posts',
+            );
+            $role = new Role(['identifier' => 'guest']);
+            $role->setRelation('permissions', collect([
+                new Permission([
+                    'identifier' => 'sirsoft-board.freebd.posts.read',
+                    'type' => PermissionType::User,
+                ]),
+            ]));
+            $request->attributes->set('_guest_role_cache', $role);
+
+            return $request;
+        };
+        $originCalls = 0;
+        $origin = function () use (&$originCalls): JsonResponse {
+            $originCalls++;
+
+            return new JsonResponse(['origin_call' => $originCalls]);
+        };
+
+        $first = $middleware->handle($makeRequest(), $origin);
+        $second = $middleware->handle($makeRequest(), $origin);
+        self::assertSame(1, $originCalls);
+        self::assertStringStartsWith('MISS-STORED', (string) $first->headers->get('X-G7-Power-Cache'));
+        self::assertStringStartsWith('HIT', (string) $second->headers->get('X-G7-Power-Cache'));
+
+        $coordinator = new InvalidationCoordinator($repository, $store, $applier);
+        self::assertNotNull($coordinator->invalidate(['board:all'], 'test-board-update'));
+        $third = $middleware->handle($makeRequest(), $origin);
+        self::assertSame(2, $originCalls);
+        self::assertStringStartsWith('MISS-STORED', (string) $third->headers->get('X-G7-Power-Cache'));
+    }
+
     public function test_miss_hit_and_generation_invalidation_flow(): void
     {
         $settings = new PowerCacheSettings([

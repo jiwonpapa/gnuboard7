@@ -16,6 +16,7 @@
             "store_driver_hint": "단일 노드는 file, 다중 노드·운영은 전용 Redis를 권장합니다.",
             "cache_public_pages": "공개 페이지 상세",
             "cache_public_categories": "쇼핑몰 공개 카테고리 트리·상세",
+            "cache_public_board_lists": "공개 게시판 비회원 목록(1~3페이지)",
             "automatic_recovery": "미적용 아웃박스 자동 복구",
             "metrics_enabled": "캐시 상태 메트릭 기록",
             "debug_headers": "X-G7-Power-Cache 디버그 헤더",

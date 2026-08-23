@@ -2,7 +2,7 @@
 
 G7PowerCache는 **검증된 비회원 공개 JSON API**를 세대 기반 무효화로 가속하는 Gnuboard7 플러그인입니다. 데이터 신선도를 TTL에 맡기지 않고, 변경 훅이 실행되면 내구성 있는 outbox를 기록한 뒤 캐시 세대를 회전합니다.
 
-현재 버전은 `0.1.0 Technical Preview`입니다. 독립 저장소 분리는 보류하고 Gnuboard7 저장소의 `plugins/_bundled/g7-power_cache`에서 개발합니다. 플러그인 디렉터리 밖의 코어 수정 없이 동작하므로 나중에 이 디렉터리를 그대로 분리할 수 있습니다.
+현재 버전은 `0.2.0 Technical Preview`입니다. 독립 저장소 분리는 보류하고 Gnuboard7 저장소의 `plugins/_bundled/g7-power_cache`에서 개발합니다. 플러그인 디렉터리 밖의 코어 수정 없이 동작하므로 나중에 이 디렉터리를 그대로 분리할 수 있습니다.
 
 ## 현재 지원 범위
 
@@ -10,13 +10,16 @@ G7PowerCache는 **검증된 비회원 공개 JSON API**를 세대 기반 무효�
 |---|---|
 | 공개 페이지 상세 | `api.modules.sirsoft-page.pages.show` |
 | 쇼핑몰 공개 카테고리 | `categories.index`, `categories.show` |
+| 공개 게시판 목록 | 비회원 read 권한 게시판의 1~3페이지, `per_page` 최대 50 |
 | 인증 요청 | 항상 BYPASS |
 | 쿠키·미등록 query·미등록 route middleware | 항상 BYPASS |
-| 게시판·상품·검색·장바구니·주문 | 현재 캐시하지 않음 |
+| 게시글 상세·상품·검색·장바구니·주문 | 현재 캐시하지 않음 |
 | 응답 형식 | 200 JSON, 크기 상한 이내 |
 | 저장 금지 | Set-Cookie, no-store, redirect, 인증/다운로드 헤더, 미지원 Vary |
 
 카테고리 트리에 공개 상품 수가 포함되므로 카테고리뿐 아니라 상품 생성·수정·삭제·일괄 변경도 `category:tree` 세대를 회전합니다.
+
+게시판 목록은 원본 `permission:user,sirsoft-board.{slug}.posts.read`와 같은 `GuestRoleResolver`로 비회원 권한을 먼저 확인합니다. 글·댓글·첨부·게시판 설정·권한·작성자 표시가 바뀌면 `board:all` 세대를 즉시 회전합니다. `created_at_formatted`, `is_new`, 조회수처럼 DB 쓰기 없이도 표시가 변하는 값만 60초 시계 버킷으로 제한하며, 콘텐츠 신선도는 계속 변경 훅 무효화가 담당합니다. PC/모바일 `per_page` 차이는 별도 키로 격리합니다.
 
 ## 정합성 모델
 
@@ -29,7 +32,7 @@ G7PowerCache는 **검증된 비회원 공개 JSON API**를 세대 기반 무효�
 
 변경 감지 시 DB 커밋 전에 전용 저장소의 비상 장벽을 먼저 세우고, 커밋 후 세대 적용·outbox 완료·clean snapshot 반영이 모두 끝난 뒤 장벽을 내립니다. 이 때문에 평상시 HIT는 파워캐시 자체 DB 질의를 만들지 않으면서도, 커밋 직후 프로세스 종료나 저장소 적용 실패 때는 이전 응답을 제공하지 않습니다. 트랜잭션 rollback 뒤 남은 fail-closed 장벽은 운영자가 `power-cache:purge --scope=site`로 확인·회복합니다.
 
-현재 코어의 일부 after 훅은 콘텐츠 트랜잭션이 이미 커밋된 뒤 발행됩니다. 그 경로는 콘텐츠 커밋과 outbox 기록 사이의 프로세스 강제 종료 구간을 플러그인만으로 원자화할 수 없습니다. 따라서 `0.1.0`은 Technical Preview이며, 절대 정합성이 필요한 운영 활성화는 동일 트랜잭션 mutation seam 또는 해당 쓰기 경로 어댑터가 추가된 뒤 판정해야 합니다.
+현재 코어의 일부 after 훅은 콘텐츠 트랜잭션이 이미 커밋된 뒤 발행됩니다. 그 경로는 콘텐츠 커밋과 outbox 기록 사이의 프로세스 강제 종료 구간을 플러그인만으로 원자화할 수 없습니다. 따라서 `0.2.0`은 Technical Preview이며, 절대 정합성이 필요한 운영 활성화는 동일 트랜잭션 mutation seam 또는 해당 쓰기 경로 어댑터가 추가된 뒤 판정해야 합니다.
 
 `retention_seconds`는 오래된 물리 엔트리를 회수하기 위한 백엔드 보존시간입니다. 데이터 신선도 TTL이 아닙니다. 세대가 바뀐 엔트리는 보존시간이 남아도 즉시 MISS입니다.
 
@@ -79,6 +82,7 @@ php artisan power-cache:mode active
 php artisan power-cache:purge --scope=site --reason=deploy
 php artisan power-cache:purge --scope=page --reason=page-import
 php artisan power-cache:purge --scope=category --reason=product-import
+php artisan power-cache:purge --scope=board --reason=board-import
 php artisan power-cache:reconcile --limit=100
 php artisan power-cache:gc --days=7
 ```
@@ -86,7 +90,7 @@ php artisan power-cache:gc --days=7
 - `doctor`: 저장소 read/write, DB state/outbox, route·middleware 계약, Redis DB 격리를 검사합니다.
 - `status`: 현재 모드와 dirty/outbox 상태를 조회합니다.
 - `mode`: `bypass`(OFF), `observe`(저장 없이 판정), `active`(ON)를 전환합니다. `active`는 doctor가 실패하면 전환 자체를 차단합니다.
-- `purge`: key 삭제 없이 `site`, `page:all`, `category:tree` 세대를 회전합니다.
+- `purge`: key 삭제 없이 `site`, `page:all`, `category:tree`, `board:all` 세대를 회전합니다.
 - `reconcile`: 중복·역순 실행에도 안전하게 미적용 outbox를 재생합니다.
 - `gc`: 적용 완료된 오래된 outbox 감사 이력과 file 저장소의 만료 물리 파일을 정리합니다. 미적용 행과 캐시 신선도에는 영향을 주지 않습니다. Redis 물리 만료는 Redis 자체 TTL이 담당합니다.
 
@@ -100,6 +104,8 @@ php artisan power-cache:gc --days=7
 - Authorization/Proxy-Authorization와 민감 토큰 헤더가 있으면 BYPASS
 - 사용자 객체나 쿠키가 하나라도 있으면 BYPASS
 - route 정책에 없는 query/middleware가 있으면 BYPASS
+- 게시판 목록은 원본과 같은 guest read 권한 선검증 실패 시 BYPASS
+- 게시판 목록은 1~3페이지·`per_page` 최대 50만 허용하고 PC/모바일 키를 분리
 - 같은 route에 다른 before_core/after_core 확장 미들웨어가 겹치면 BYPASS
 - 공개 응답을 변형하는 origin filter hook이 등록되어 있으면 BYPASS
 - 저장 전후 세대가 다르면 미저장
@@ -111,9 +117,9 @@ php artisan power-cache:gc --days=7
 
 ## 알려진 제한
 
-- 현재 실제 HIT 지원은 페이지 상세와 카테고리 API뿐입니다.
+- 현재 실제 HIT 지원은 페이지 상세, 카테고리 API, 공개 비회원 게시판 hot-list입니다.
 - 캐시 HIT는 extension `api, after_core` 지점에서 반환되므로 해당 route의 `optional.sanctum`·throttle을 실행하지 않습니다. 이를 허용한 세 route만 정확한 middleware 계약으로 고정합니다.
-- `after_core` 앞에서 실행되는 코어 API 미들웨어 비용은 남습니다. 파워캐시 HIT 자체는 정상 상태에서 DB를 읽지 않지만, 현재 코어의 캐시·설정·IDV·locale 계층 때문에 전체 HTTP 요청이 0-query가 되지는 않습니다. 이를 제거하려면 인증·권한·IDV 뒤/컨트롤러 앞의 공식 코어 seam 또는 PHP 부팅 전 서버 어댑터가 필요합니다.
+- `after_core` 앞에서 실행되는 코어 API 미들웨어 비용은 남습니다. runtime barrier와 페이지·카테고리 HIT는 플러그인 DB를 읽지 않지만, 게시판은 뒤쪽 route permission을 안전하게 대체하기 위해 guest role/permission을 요청당 한 번 읽습니다. 전체 HTTP 요청을 0-query로 만들려면 인증·권한·IDV 뒤/컨트롤러 앞의 공식 코어 seam 또는 PHP 부팅 전 서버 어댑터가 필요합니다.
 - 직접 SQL 변경을 자동 감지할 수 없습니다.
 - 코어가 콘텐츠 커밋 뒤 after 훅을 발행하는 경로에는 커밋과 outbox 사이의 프로세스 종료 공백이 남습니다.
 - 다중 노드 file 저장소는 지원하지 않습니다.
@@ -130,6 +136,6 @@ vendor/bin/phpunit --no-configuration \
   plugins/_bundled/g7-power_cache/tests
 ```
 
-현재 독립 테스트는 **28 tests / 254 assertions**이며 guest 격리, query/key 변형, 응답 저장 금지, 변조·구형 저장물 거부, 운영설정 비노출, 관리자 레이아웃 규칙, 세대 단조성, 정상 HIT의 플러그인 DB query 0, MISS→HIT, 변경 후 MISS, commit/rollback, 저장소 장애 뒤 outbox 재생을 검증합니다.
+현재 독립 테스트는 **33 tests / 352 assertions**이며 guest 격리, 게시판 read 권한·페이지 범위·PC/모바일 변형, 변경 훅 커버리지, 응답 저장 금지, 변조·구형 저장물 거부, 운영설정 비노출, 관리자 레이아웃 규칙, 세대 단조성, 페이지/카테고리 정상 HIT의 플러그인 DB query 0, MISS→HIT, 변경 후 MISS, commit/rollback, 저장소 장애 뒤 outbox 재생을 검증합니다.
 
 실서버 ON/OFF 결과는 [온라인 ON/OFF 실측 보고서](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.8-performance-lab/docs/benchmark/g7-power-cache-live-ab-report-2026-08-23.md)에 기록합니다.

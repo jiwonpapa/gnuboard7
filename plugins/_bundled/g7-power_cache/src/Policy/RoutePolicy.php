@@ -17,5 +17,11 @@ final readonly class RoutePolicy
         public array $allowedQueryKeys,
         public array $allowedRouteMiddleware,
         public array $originFilterHooks = [],
+        public ?string $guestPermission = null,
+        public bool $varyByDeviceClass = false,
+        public ?int $clockBucketSeconds = null,
+        public ?int $maxPage = null,
+        public ?int $maxPerPage = null,
+        public ?int $retentionSeconds = null,
     ) {}
 }

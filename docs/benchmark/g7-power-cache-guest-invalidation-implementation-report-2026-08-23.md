@@ -2,13 +2,13 @@
 
 > 감사 기준: Gnuboard7 7.0.8 성능 워크트리 `codex/7.0.8-performance-lab`, 기준 커밋 `7f127797473df1620d26490d4699d52a98951b3e`, 2026-08-23. 정적 소스·라우트·훅 감사 뒤 온라인 테스트 서버 배포와 런타임 A/B까지 갱신했습니다.
 
-> 구현 갱신: 같은 날 `plugins/_bundled/g7-power_cache`에 `0.1.0 Technical Preview`를 구현·배포했습니다. 식별자는 그누7 `vendor-plugin_name` 규약에 맞춘 `g7-power_cache`이며, 독립 저장소 분리는 형님 지시에 따라 보류했습니다. 독립 PHPUnit 결과는 **28 tests / 254 assertions 통과**입니다. 실제 수치는 [온라인 ON/OFF 실측 보고서](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.8-performance-lab/docs/benchmark/g7-power-cache-live-ab-report-2026-08-23.md)에 분리했습니다.
+> 구현 갱신: 같은 날 `plugins/_bundled/g7-power_cache`에 `0.2.0 Technical Preview`를 구현·배포했습니다. 식별자는 그누7 `vendor-plugin_name` 규약에 맞춘 `g7-power_cache`이며, 독립 저장소 분리는 형님 지시에 따라 보류했습니다. 독립 PHPUnit 결과는 **33 tests / 352 assertions 통과**입니다. 실제 수치는 [온라인 ON/OFF 실측 보고서](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.8-performance-lab/docs/benchmark/g7-power-cache-live-ab-report-2026-08-23.md)에 분리했습니다.
 
 ## Executive Summary — 결론
 
-온라인 테스트 서버의 동일 플러그인 `bypass` 대비 Redis warm `active` 실측에서 카테고리 목록 p95는 225→155ms(-31.1%), 카테고리 상세은 232→142ms(-38.8%), 페이지 상세는 141→135ms(-4.3%)였습니다. 카테고리 목록 PHP-FPM CPU는 37.0% 줄었고, 카테고리 상세·페이지 상세 MySQL Questions는 각각 31.3%·22.1% 줄었습니다. 즉 무거운 공개 API에는 ROI가 있고 가벼운 페이지에는 제한적입니다.
+온라인 테스트 서버의 동일 플러그인 `bypass` 대비 Redis warm `active` 실측에서 50,002건 게시판 목록 p95는 350→256ms(-26.9%), 처리량은 40.0%, PHP-FPM CPU는 24.1%, MySQL Questions는 54.7% 개선됐습니다. 카테고리 목록 p95는 225→155ms(-31.1%), 카테고리 상세은 232→142ms(-38.8%), 페이지 상세는 141→135ms(-4.3%)였습니다. 즉 게시판·무거운 공개 API에는 ROI가 있고 가벼운 페이지에는 제한적입니다.
 
-실측 중 HIT마다 DB state를 읽던 초기 장벽이 오히려 DB 질의를 늘리는 결함을 발견해, **커밋 전 emergency barrier + 전용 Redis clean runtime snapshot + 세대 검증**으로 교체했습니다. 정상 HIT의 플러그인 자체 DB query는 독립 테스트에서 0으로 고정했습니다. 다만 `after_core` 앞의 그누7 코어 미들웨어 비용 약 7 Questions/request는 남으므로 전체 요청 0-query를 주장하지 않습니다.
+실측 중 HIT마다 DB state를 읽던 초기 장벽이 오히려 DB 질의를 늘리는 결함을 발견해, **커밋 전 emergency barrier + 전용 Redis clean runtime snapshot + 세대 검증**으로 교체했습니다. runtime barrier의 DB query는 0이며 페이지·카테고리 HIT도 플러그인 DB query 0으로 고정했습니다. 다만 `after_core` 앞의 코어 비용 약 7 Questions/request가 남고, 게시판은 route permission을 대신하는 guest role 선검증까지 포함해 9.1 Questions/request가 실측됐으므로 전체 요청 0-query를 주장하지 않습니다.
 
 **TTL 중심 캐시는 채택하지 않습니다.** TTL은 데이터 변경을 알지 못하므로 신선도 보장 수단이 될 수 없습니다. G7PowerCache의 주 무효화 방식은 **동기 변경 감지 → 내구성 outbox 기록 → 커밋 후 세대 토큰 갱신 → 캐시 HIT 시 세대 벡터 검증**입니다. 훅이 기존 콘텐츠 트랜잭션 안에서 발행될 때만 outbox도 그 트랜잭션에 원자적으로 결합됩니다.
 
@@ -29,13 +29,13 @@
 
 출시는 다음 두 트랙으로 나눕니다.
 
-1. **제품 트랙:** 현재 Gnuboard7 저장소의 번들 플러그인 경계 안에서 G7PowerCache를 개발하고, 제품 계약이 안정된 뒤 독립 저장소로 분리합니다. 초기 버전은 `observe`가 기본이고, doctor를 통과한 페이지·카테고리만 선택적으로 HIT를 허용합니다. 게시판 목록과 상품 카탈로그는 모든 관련 변경 경로가 훅·observer·명시적 invalidate 계약 중 하나로 닫힌 뒤 활성화합니다.
+1. **제품 트랙:** 현재 Gnuboard7 저장소의 번들 플러그인 경계 안에서 G7PowerCache를 개발하고, 제품 계약이 안정된 뒤 독립 저장소로 분리합니다. 초기 설치는 `observe`가 기본이고, doctor를 통과한 페이지·카테고리·비회원 공개 게시판 1~3페이지만 선택적으로 HIT를 허용합니다. 상품 카탈로그는 모든 관련 변경 경로가 훅·observer·명시적 invalidate 계약 중 하나로 닫힌 뒤 활성화합니다.
 2. **코어 트랙:** 아래 3개 개선안을 서로 독립된 RFC/이슈와 실패 재현 테스트로 제안합니다. 코어 반영은 제품 출시 조건이 아니라 지원 범위 확대 조건입니다. 수용 전에는 관련 경로를 BYPASS하거나 넓은 세대를 회전합니다.
 
 출시 단계의 명칭과 약속도 분리해야 합니다.
 
 - **Technical Preview:** observe/doctor, 페이지·카테고리, generation/outbox, Redis 장애 fail-open을 검증합니다.
-- **Beta:** 게시판 공개 목록·상품 카탈로그를 추가하되 활성 route별 mutation coverage가 완결된 경우에만 켭니다.
+- **Beta:** 현재 게시판 공개 목록의 장시간 혼합부하·동시 쓰기·장애주입을 통과시키고, 상품 카탈로그는 활성 route별 mutation coverage가 완결된 경우에만 추가합니다.
 - **GA:** 활성 route에서 회원 데이터 누출 0, 커밋 뒤 구세대 HIT 0, rollback 오무효화 0, 장애 복구 전 HIT 0을 자동 시험으로 증명한 범위만 지원합니다.
 
 마케팅 문구는 ‘그누보드7 전체 자동 캐시’가 아니라 **‘검증된 비회원 공개 API를 변경 즉시 무효화하는 성능 플러그인’**이 정확합니다. 코어 훅이 늘어나면 새 버전에서 지원 route와 정밀 무효화 범위를 넓히면 됩니다.
@@ -49,7 +49,7 @@
 | 모듈+플러그인 | v1 기각 | 설치·버전·의존·장애 지점만 늘어남 |
 | 플러그인+서버 어댑터 | 선택 | Laravel 부팅 전 Nginx/CDN HIT가 필요한 운영판에서만 제공 |
 
-현재 소스는 `plugins/_bundled/g7-power_cache`에 두고 플러그인 디렉터리 밖의 코어는 수정하지 않습니다. 나중에 독립 저장소로 옮길 때 이 디렉터리를 그대로 추출할 수 있는 경계를 유지합니다. `plugin.json`의 코어 요구 버전은 7.0.8 이상이며 게시판·페이지·쇼핑몰은 하드 의존성으로 묶지 않습니다. 활성 route가 없으면 doctor에 경고하고 요청은 매칭되지 않아 안전하게 BYPASS합니다.
+현재 소스는 `plugins/_bundled/g7-power_cache`에 두고 플러그인 디렉터리 밖의 코어는 수정하지 않습니다. 나중에 독립 저장소로 옮길 때 이 디렉터리를 그대로 추출할 수 있는 경계를 유지합니다. `plugin.json`의 코어 요구 버전은 7.0.8 이상이며 게시판 공개 route·권한·mutation hook 계약을 소비하므로 `sirsoft-board >=1.0.5`를 명시합니다. 활성 route가 없거나 middleware 계약이 다르면 doctor/BYPASS로 닫습니다.
 
 ## TTL의 역할 재정의
 
@@ -75,6 +75,8 @@ TTL은 세 가지에만 씁니다.
 ## 초기 적용 범위 해석
 
 ‘즉시 허용 후보’는 설치 직후 자동 활성화라는 뜻이 아닙니다. 설치는 `observe` 모드로 시작하고 doctor·변형 검사·무효화 시뮬레이션을 통과한 뒤 관리자가 켭니다. 게시판과 상품은 현재 플러그인 캐시 게이트 뒤에 `optional.sanctum`과 `permission`이 남기 때문에 명시적 게스트 권한 프리플라이트 없이는 HIT를 반환하면 안 됩니다.
+
+0.2.0에서는 아래 7번 게시글 목록만 추가 검증을 마쳐 활성화했습니다. 원본과 같은 guest read 권한 선검증, page 1~3, `per_page` 최대 50, 검색·분류·임의 정렬 BYPASS, PC/모바일 키 분리, 60초 시계 버킷, 게시판·글·댓글·첨부·권한·작성자 변경의 `board:all` 세대 회전을 함께 적용했습니다. 게시글 상세와 나머지 게시판 API는 계속 제외합니다.
 
 ## 라우트 그룹별 v1 정책
 
@@ -169,7 +171,7 @@ Action 훅은 기본 큐이므로 G7PowerCache 무효화 리스너는 전부 `sy
 6. 적용·DB clean 확인·전용 저장소 runtime snapshot 반영이 모두 끝난 뒤 emergency barrier 해제
 7. 정상 HIT는 전용 저장소 snapshot·emergency·세대만 읽고, dirty/snapshot 소실 때만 DB outbox 복구 경로 실행
 
-단순 `afterCommit()` 콜백만 쓰면 DB 커밋 직후 프로세스가 죽는 작은 유실 구간이 남으므로 현재 구현은 DB outbox와 dirty 장벽을 함께 둡니다. 다만 일부 서비스가 콘텐츠 커밋 뒤에야 after 훅을 발행하므로 콘텐츠 commit과 outbox 기록 사이의 극소 구간은 코어 무수정으로 완전히 제거할 수 없습니다. 현재 `0.1.0`에는 모델 observer가 없으며, 후속 단계에서 observer·쓰기 경로 어댑터를 보조로 검토하고 최종적으로는 공식 mutation/outbox seam을 상위에 보완해야 합니다.
+단순 `afterCommit()` 콜백만 쓰면 DB 커밋 직후 프로세스가 죽는 작은 유실 구간이 남으므로 현재 구현은 DB outbox와 dirty 장벽을 함께 둡니다. 다만 일부 서비스가 콘텐츠 커밋 뒤에야 after 훅을 발행하므로 콘텐츠 commit과 outbox 기록 사이의 극소 구간은 코어 무수정으로 완전히 제거할 수 없습니다. 현재 `0.2.0`에는 모델 observer가 없으며, 후속 단계에서 observer·쓰기 경로 어댑터를 보조로 검토하고 최종적으로는 공식 mutation/outbox seam을 상위에 보완해야 합니다.
 
 ## 확인된 무효화 공백
 
@@ -185,17 +187,17 @@ Action 훅은 기본 큐이므로 G7PowerCache 무효화 리스너는 전부 `sy
 
 Redis는 최종 request key별 분산락을 사용합니다. winner만 origin을 렌더하고, follower는 50~150ms jitter로 총 약 500ms 안에서 재조회한 뒤 데이터가 없으면 origin passthrough하되 저장 경쟁에는 참여하지 않습니다. lock lease는 관측된 origin p99를 기준으로 잡고 owner token으로 안전 해제합니다.
 
-후속 버전에서 SWR을 추가하더라도 soft-expire 뒤 hard retention 전의 **같은 세대** stale만 제공할 수 있습니다. 세대가 바뀌면 stale 금지입니다. 0.1.0은 SWR을 구현하지 않고 MISS로 처리합니다. File 드라이버는 Laravel FileStore lock을 쓰는 단일 노드 전용이며, `G7_POWER_CACHE_FILE_SINGLE_NODE=true` 확인이 없으면 active HIT를 차단합니다.
+후속 버전에서 SWR을 추가하더라도 soft-expire 뒤 hard retention 전의 **같은 세대** stale만 제공할 수 있습니다. 세대가 바뀌면 stale 금지입니다. 0.2.0은 SWR을 구현하지 않고 MISS로 처리합니다. File 드라이버는 Laravel FileStore lock을 쓰는 단일 노드 전용이며, `G7_POWER_CACHE_FILE_SINGLE_NODE=true` 확인이 없으면 active HIT를 차단합니다.
 
 Redis 오류는 origin fail-open으로 처리해 캐시 때문에 5xx가 생기지 않게 합니다. 세대를 확인할 수 없으면 L1 stale도 금지합니다. 복구 때는 DB outbox replay와 dirty 해제가 완료된 뒤에만 HIT를 다시 허용합니다. Redis는 세션·큐·기본 캐시와 별도 connection/DB를 써야 하며 FLUSHDB를 금지합니다.
 
 ## 설정과 코드 불변식
 
-0.1.0 구현값은 다음과 같습니다.
+0.2.0 구현값은 다음과 같습니다.
 
 1. **mode:** 기본 `observe`; `observe | active | bypass`.
 2. **store_driver:** 기본 `file`; `file | redis`. array는 독립 테스트에서만 허용.
-3. **cache_public_pages/cache_public_categories:** 기본 true지만 observe이므로 설치 직후 HIT는 없음.
+3. **cache_public_pages/cache_public_categories/cache_public_board_lists:** 기본 true지만 observe이므로 설치 직후 HIT는 없음. 게시판은 1~3페이지·`per_page` 최대 50만 허용.
 4. **automatic_recovery:** 기본 true. dirty outbox를 요청 장벽에서 제한된 batch로 재생.
 5. **metrics_enabled/debug_headers:** 각각 기본 true/false. 디버그 헤더는 운영자가 명시적으로 켬.
 6. **max_response_kb:** 기본 512, 범위 16~4096.
@@ -208,13 +210,13 @@ Redis 오류는 origin fail-open으로 처리해 캐시 때문에 5xx가 생기�
 13. **코드 불변식:** guest-only, GET/HEAD-only, exact route allowlist, unknown cookie/query/middleware BYPASS.
 14. **응답 불변식:** Set-Cookie/no-store/stream/redirect/error 미저장. `private, no-cache`는 외부 헤더를 보존하며 내부 origin cache에는 저장 가능.
 
-아직 구현하지 않은 설정은 `policy_preset`, 상품·게시판 route 토글, SWR, warming입니다. 안전 범위가 검증되기 전 UI에 노출하지 않습니다.
+아직 구현하지 않은 설정은 `policy_preset`, 상품 route 토글, SWR, warming입니다. 안전 범위가 검증되기 전 UI에 노출하지 않습니다.
 
 ## 관리자 화면·명령
 
 관리자 화면은 TTL 슬라이더가 중심이 아니라 안전 상태와 ROI가 중심이어야 합니다. 표시할 항목은 현재 mode, store health, dirty/recovery barrier, route별 HIT/MISS/BYPASS·사유, origin 시간과 DB query 절감, lock wait, outbox 지연·실패, 엔트리 용량·eviction, warming 상태입니다.
 
-0.1.0은 `power-cache:doctor`, `status`, `mode`, `purge`, `reconcile`, `gc`를 구현했습니다. `mode`는 `bypass | observe | active`를 전환하며 doctor 실패 시 active 진입을 차단합니다. purge scope는 현재 실제 캐시 범위와 일치하는 `site | page | category`만 받습니다. GC는 매일 적용 완료된 오래된 outbox 이력과 file 저장소의 만료 물리 파일만 정리하며 미적용 이벤트와 신선도에는 관여하지 않습니다. Redis 물리 만료는 Redis TTL이 담당합니다. `invalidate` 세분화와 `warm`은 게시판·상품 정책과 운영 메트릭이 추가되는 후속 단계입니다. 비활성화·업데이트는 수백만 키 SCAN/DELETE 대신 runtime epoch를 회전하고, 기존 body는 retention으로 회수합니다.
+0.2.0은 `power-cache:doctor`, `status`, `mode`, `purge`, `reconcile`, `gc`를 구현했습니다. `mode`는 `bypass | observe | active`를 전환하며 doctor 실패 시 active 진입을 차단합니다. purge scope는 현재 실제 캐시 범위와 일치하는 `site | page | category | board`만 받습니다. GC는 매일 적용 완료된 오래된 outbox 이력과 file 저장소의 만료 물리 파일만 정리하며 미적용 이벤트와 신선도에는 관여하지 않습니다. Redis 물리 만료는 Redis TTL이 담당합니다. `invalidate` 세분화와 `warm`은 상품 정책과 운영 메트릭이 추가되는 후속 단계입니다. 비활성화·업데이트는 수백만 키 SCAN/DELETE 대신 runtime epoch를 회전하고, 기존 body는 retention으로 회수합니다.
 
 ## 권장 코드 구조
 
@@ -293,7 +295,7 @@ plugins/_bundled/g7-power_cache/
 
 **만들 수 있습니다. 그리고 플러그인이 맞습니다.** 단, 이름은 ‘자동 전체 페이지 캐시’가 아니라 **‘그누보드7 비회원 공개 API를 검증된 허용목록과 트랜잭션 안전 세대 무효화로 가속하는 플러그인’**이어야 정확합니다.
 
-첫 구현 우선순위는 TTL UI가 아니라 `observe/doctor`, guest eligibility, route policy registry, generation/outbox, 페이지·카테고리 두 안전 후보입니다. 그 뒤 권한 프리플라이트와 무효화 공백을 닫으면서 게시판 목록·상품 카탈로그를 확장하는 순서가 가장 안전하고 ROI가 높습니다.
+현재 구현은 `observe/doctor`, guest eligibility, route policy registry, generation/outbox, 페이지·카테고리, 게시판 권한 프리플라이트와 hot-list 무효화까지 닫았습니다. 다음 우선순위는 장시간 혼합부하·동시 쓰기/장애주입과 상품 카탈로그의 mutation coverage입니다.
 
 ## 근거 소스
 
@@ -318,7 +320,7 @@ plugins/_bundled/g7-power_cache/
 ## 증거 경계
 
 - 확인됨: 위 커밋의 소스 구조, 라우트 선언, 훅 발행 위치, 미들웨어 등록 순서, 플러그인 확장 표면.
-- 구현·독립 테스트 확인: `g7-power_cache` 골격과 전용 DI 바인딩, guest default-deny, route/확장 middleware 및 origin filter 계약, 공개 운영설정 비노출, 관리자 레이아웃 구조·endpoint 규칙, canonical key, 응답 필터와 저장물 재검증, 세대 단조성, 정상 HIT의 플러그인 DB query 0, outbox commit/rollback, MISS→HIT→무효화, 장애 후 replay, 적용 완료 outbox 및 안전 루트 제한 만료 file 캐시 GC. 28 tests / 254 assertions.
-- 온라인 smoke 확인: MySQL·Redis 설치/활성화, route middleware doctor PASS, mode OFF→ON, 세 라우트 MISS→HIT, page/category scope purge 격리, 80건·동시 4 ON/OFF p50/p95/p99·FPM CPU·MySQL Questions, Redis key/메모리 표본. 상세 수치는 별도 실측 보고서에 기록.
-- 정적 추론: 상용 범위 확대에 필요한 upstream seam과 아직 활성화하지 않은 게시판·상품 정책.
+- 구현·독립 테스트 확인: `g7-power_cache` 골격과 전용 DI 바인딩, guest default-deny, 게시판 read 권한·페이지 범위·PC/모바일 변형, route/확장 middleware 및 origin filter 계약, 공개 운영설정 비노출, 관리자 레이아웃 구조·endpoint 규칙, canonical key, 응답 필터와 저장물 재검증, 세대 단조성, 페이지·카테고리 정상 HIT의 플러그인 DB query 0, outbox commit/rollback, MISS→HIT→무효화, 장애 후 replay, 적용 완료 outbox 및 안전 루트 제한 만료 file 캐시 GC. 33 tests / 352 assertions.
+- 온라인 smoke 확인: MySQL·Redis 설치/활성화, route middleware doctor PASS, mode OFF→ON, 네 라우트 MISS→HIT, page/category/board scope purge 격리, 게시판 active/bypass 응답 SHA-256 동일, 80건·동시 4 ON/OFF p50/p95/p99·FPM CPU·MySQL Questions, Redis key/메모리 표본. 상세 수치는 별도 실측 보고서에 기록.
+- 정적 추론: 상용 범위 확대에 필요한 upstream seam과 아직 활성화하지 않은 상품 정책.
 - 아직 미측정: 장시간 혼합 트래픽, exact 세션별 SQL profile, 동시 쓰기·cold stampede 100개, Redis 장애 주입·복구, 반복 실험의 신뢰구간, 장기 RSS/swap와 Redis ops/network 비용. Technical Preview를 Beta로 올리기 전에 같은 하네스로 별도 검증해야 합니다.

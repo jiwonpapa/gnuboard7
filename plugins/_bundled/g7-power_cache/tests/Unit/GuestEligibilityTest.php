@@ -3,7 +3,10 @@
 namespace Plugins\G7\PowerCache\Tests\Unit;
 
 use App\Contracts\Extension\ExtensionMiddlewareRegistryInterface;
+use App\Enums\PermissionType;
 use App\Extension\HookManager;
+use App\Models\Permission;
+use App\Models\Role;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Plugins\G7\PowerCache\Eligibility\GuestEligibility;
 use Plugins\G7\PowerCache\Http\Middleware\GuestResponseCache;
@@ -75,6 +78,114 @@ final class GuestEligibilityTest extends PowerCacheTestCase
 
         self::assertFalse($result->eligible);
         self::assertSame('origin_filter', $result->reason);
+    }
+
+    public function test_public_board_hot_list_requires_matching_guest_permission_and_query_bounds(): void
+    {
+        $policy = new RoutePolicy(
+            'board-public-hot-list-v1',
+            'api.modules.sirsoft-board.boards.posts.index',
+            ['site', 'board:all'],
+            ['page', 'per_page'],
+            [
+                'api',
+                'optional.sanctum',
+                'throttle:600,1',
+                'permission:user,sirsoft-board.{slug}.posts.read',
+            ],
+            [],
+            'sirsoft-board.{slug}.posts.read',
+            true,
+            60,
+            3,
+            50,
+            600,
+        );
+        $registry = new class implements ExtensionMiddlewareRegistryInterface
+        {
+            public function resolveForRoute(string $routeName, string $path, string $group, string $timing): array
+            {
+                return $timing === 'after_core' ? [GuestResponseCache::class] : [];
+            }
+        };
+        $request = $this->request(
+            routeName: 'api.modules.sirsoft-board.boards.posts.index',
+            middleware: [
+                'api',
+                'optional.sanctum',
+                'throttle:600,1',
+                'permission:user,sirsoft-board.{slug}.posts.read',
+            ],
+            uri: '/api/modules/sirsoft-board/boards/freebd/posts',
+            query: ['page' => '3', 'per_page' => '50'],
+            routePattern: 'api/modules/sirsoft-board/boards/{slug}/posts',
+        );
+        $role = new Role(['identifier' => 'guest']);
+        $role->setRelation('permissions', collect([
+            new Permission([
+                'identifier' => 'sirsoft-board.freebd.posts.read',
+                'type' => PermissionType::User,
+            ]),
+        ]));
+        $request->attributes->set('_guest_role_cache', $role);
+
+        $eligible = (new GuestEligibility($registry))->evaluate($request, $policy);
+        self::assertTrue($eligible->eligible);
+
+        $tooDeep = $this->request(
+            routeName: 'api.modules.sirsoft-board.boards.posts.index',
+            middleware: [
+                'api',
+                'optional.sanctum',
+                'throttle:600,1',
+                'permission:user,sirsoft-board.{slug}.posts.read',
+            ],
+            uri: '/api/modules/sirsoft-board/boards/freebd/posts',
+            query: ['page' => '4'],
+            routePattern: 'api/modules/sirsoft-board/boards/{slug}/posts',
+        );
+        $tooDeep->attributes->set('_guest_role_cache', $role);
+        $result = (new GuestEligibility($registry))->evaluate($tooDeep, $policy);
+        self::assertFalse($result->eligible);
+        self::assertSame('query_range', $result->reason);
+    }
+
+    public function test_public_board_hot_list_bypasses_when_guest_read_permission_is_missing(): void
+    {
+        $policy = new RoutePolicy(
+            'board-public-hot-list-v1',
+            'api.modules.sirsoft-board.boards.posts.index',
+            ['site', 'board:all'],
+            ['page'],
+            [
+                'api',
+                'optional.sanctum',
+                'throttle:600,1',
+                'permission:user,sirsoft-board.{slug}.posts.read',
+            ],
+            guestPermission: 'sirsoft-board.{slug}.posts.read',
+            maxPage: 3,
+        );
+        $registry = new class implements ExtensionMiddlewareRegistryInterface
+        {
+            public function resolveForRoute(string $routeName, string $path, string $group, string $timing): array
+            {
+                return $timing === 'after_core' ? [GuestResponseCache::class] : [];
+            }
+        };
+        $request = $this->request(
+            routeName: 'api.modules.sirsoft-board.boards.posts.index',
+            middleware: $policy->allowedRouteMiddleware,
+            uri: '/api/modules/sirsoft-board/boards/private/posts',
+            routePattern: 'api/modules/sirsoft-board/boards/{slug}/posts',
+        );
+        $role = new Role(['identifier' => 'guest']);
+        $role->setRelation('permissions', collect());
+        $request->attributes->set('_guest_role_cache', $role);
+
+        $result = (new GuestEligibility($registry))->evaluate($request, $policy);
+        self::assertFalse($result->eligible);
+        self::assertSame('guest_permission', $result->reason);
     }
 
     #[DataProvider('unsafeRequestProvider')]

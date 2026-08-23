@@ -2,23 +2,26 @@
 
 > 측정일: 2026-08-23 KST
 > 대상: `https://www.g7devops.com` 온라인 테스트 서버
-> 결론: 캐시 비용이 큰 카테고리 API에는 즉시 효과가 있었고, 작은 페이지 API에는 효과가 제한적이었습니다. Technical Preview 범위로 계속 운영하되 전체 사이트 캐시로 확대해서는 안 됩니다.
+> 결론: 50,002건 공개 게시판 목록과 카테고리 API에는 명확한 효과가 있었고, 작은 페이지 API에는 효과가 제한적이었습니다. Technical Preview 범위로 계속 운영하되 전체 사이트 캐시로 확대해서는 안 됩니다.
 
 ## 결론 먼저
 
 | 라우트 | OFF p95 | ON p95 | p95 개선 | 처리량 개선 | PHP-FPM CPU 개선 | MySQL Questions 개선 |
 |---|---:|---:|---:|---:|---:|---:|
+| 게시판 `freebd` 목록, 50,002건/25.6KB | 350ms | 256ms | **26.9%** | **40.0%** | **24.1%** | **54.7%** |
 | 카테고리 목록, 39.9KB | 225ms | 155ms | **31.1%** | **32.2%** | **37.0%** | 0.0% |
 | 카테고리 상세, 1.1KB | 232ms | 142ms | **38.8%** | **41.3%** | 12.9% | **31.3%** |
 | 페이지 `about`, 3.3KB | 141ms | 135ms | 4.3% | 6.0% | 4.2% | **22.1%** |
 
-오류는 세 라우트 모두 OFF/ON 각각 80건 중 0건이었습니다. 큰 카테고리 목록은 DB 질의 수가 줄지 않아도 트리 조립·Resource 변환·JSON 직렬화를 생략해 PHP CPU와 지연시간이 크게 줄었습니다. 작은 페이지는 원본 자체가 가벼워 응답시간 ROI가 작습니다.
+오류는 네 라우트 모두 OFF/ON 각각 80건 중 0건이었습니다. 게시판은 요청당 Questions가 20.10→9.10으로 줄었고, 목록 조회·권한/Resource 조립을 생략해 처리량이 40.0% 늘었습니다. 큰 카테고리 목록은 DB 질의 수가 줄지 않아도 트리 조립·Resource 변환·JSON 직렬화를 생략해 PHP CPU와 지연시간이 크게 줄었습니다. 작은 페이지는 원본 자체가 가벼워 응답시간 ROI가 작습니다.
+
+0.1.0에서 게시판이 정책 대상이 아니었던 상태를 먼저 재면 p95 246→237ms(-3.7%), Questions 1,629→1,608(-1.3%)로 측정 오차 수준이었습니다. 즉 게시판을 실제 HIT에 포함한 0.2.0 결과와 단순 모드 전환 잡음을 구분했습니다.
 
 ## 배포·운영 상태
 
 | 항목 | 값 |
 |---|---|
-| 플러그인 | `g7-power_cache` 0.1.0 Technical Preview |
+| 플러그인 | `g7-power_cache` 0.2.0 Technical Preview |
 | 서버 선언 버전 | Gnuboard7 7.0.8 |
 | PHP | 8.5.9 FPM |
 | 서버 | 2 vCPU, RAM 1.9GiB, swap 1.9GiB |
@@ -26,7 +29,7 @@
 | 현재 모드 | `active` |
 | doctor | PASS |
 | dirty / pending outbox / emergency | 0 / 0 / no |
-| 플러그인 Redis 사용량 | 18 keys, 136,784 bytes |
+| 플러그인 Redis 사용량 | 39 keys, 345,976 bytes |
 
 서버 Git 기준점은 `7.0.3-dirty`로 표시되지만 런타임 `APP_VERSION`은 7.0.8이고, 7.0.8의 확장 미들웨어·동기 훅 계약이 실제 서버 코드에 존재함을 설치 전 확인했습니다. 재현 시에는 이 서버의 파일 업데이트 이력과 Git ancestry가 다르다는 점을 함께 봐야 합니다.
 
@@ -67,6 +70,8 @@ OFF도 같은 플러그인과 확장 게이트를 통과하므로, 플러그인 
 
 | 라우트 | 모드 | p50 | p95 | p99 | req/s | FPM CPU / 80건 | Questions / 80건 | 건당 Questions |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
+| 게시판 `freebd` 목록 | OFF | 284ms | 350ms | 361ms | 13.59 | 9,565ms | 1,608 | 20.10 |
+| 게시판 `freebd` 목록 | ON | 201ms | 256ms | 270ms | 19.03 | 7,262ms | 728 | 9.10 |
 | 카테고리 목록 | OFF | 161ms | 225ms | 240ms | 23.47 | 5,273ms | 564 | 7.05 |
 | 카테고리 목록 | ON | 121ms | 155ms | 173ms | 31.03 | 3,324ms | 564 | 7.05 |
 | 카테고리 상세 | OFF | 143ms | 232ms | 265ms | 24.59 | 3,740ms | 821 | 10.26 |
@@ -89,7 +94,7 @@ MySQL `Questions`는 전역 카운터라 측정용 조회와 같은 시각의 �
 5. 정상 HIT는 Redis snapshot·emergency·generation만 확인하고 플러그인 DB 조회는 0
 6. dirty, 저장소 장애, snapshot 소실 때만 DB outbox 복구 경로 실행
 
-독립 회귀 테스트에서 정상 HIT의 플러그인 DB query 0을 고정했고 전체 **28 tests / 254 assertions**가 통과했습니다.
+독립 회귀 테스트에서 페이지·카테고리 정상 HIT의 플러그인 DB query 0을 고정했고 전체 **33 tests / 352 assertions**가 통과했습니다. 게시판 HIT는 캐시 게이트 뒤에 남은 route permission을 안전하게 대체하기 위해 원본과 같은 guest role/permission 선검증을 실행하므로 전체 요청당 약 2 Questions가 추가로 필요합니다.
 
 ## 무효화 실서버 확인
 
@@ -99,16 +104,17 @@ MySQL `Questions`는 전역 카운터라 측정용 조회와 같은 시각의 �
 |---|---|---|---|
 | `purge --scope=page` | 페이지가 `MISS-STORED → HIT` | 카테고리는 계속 HIT | 통과 |
 | `purge --scope=category` | 카테고리가 `MISS-STORED → HIT` | 페이지는 계속 HIT | 통과 |
+| `purge --scope=board` | 게시판이 `MISS-STORED → HIT` | 페이지·카테고리는 계속 HIT | 통과 |
 
 두 경우 모두 종료 뒤 `dirty=0`, `pending=0`, `emergency=no`, doctor PASS였습니다.
 
 ## 남은 병목과 제품 판단
 
-정상 HIT에도 약 7 Questions/request가 남습니다. G7PowerCache가 `api, after_core`에서 동작하므로, 캐시보다 먼저 실행되는 그누7 코어 미들웨어·확장 부팅 비용은 코어 수정 없이 생략할 수 없습니다. `before_core`로 옮기면 인증·IDV·locale 처리를 우회할 수 있어 보안상 채택하지 않았습니다.
+페이지·카테고리 정상 HIT에도 약 7 Questions/request가 남고, 게시판은 guest permission 선검증을 포함해 약 9.1 Questions/request가 남습니다. G7PowerCache가 `api, after_core`에서 동작하므로, 캐시보다 먼저 실행되는 그누7 코어 미들웨어·확장 부팅 비용은 코어 수정 없이 생략할 수 없습니다. 게시판 route permission은 이 지점보다 뒤라 동일 `GuestRoleResolver`로 선검증해야 합니다. `before_core`로 옮기면 인증·IDV·locale 처리를 우회할 수 있어 보안상 채택하지 않았습니다.
 
 따라서 판정은 다음과 같습니다.
 
-- **출시 가치 있음:** 비회원 공개 API 중 원본 조립·직렬화·DB 조회 비용이 큰 라우트
+- **출시 가치 있음:** 비회원 공개 게시판 hot-list와 원본 조립·직렬화·DB 조회 비용이 큰 공개 API
 - **효과 제한:** 이미 100ms 안팎인 작은 JSON, 사용자별·검색·쓰기·파일 라우트
 - **현재 금지:** “그누보드7 전체를 무조건 가속하는 0-query 캐시”라는 표현
 - **코어 개선 ROI:** 인증·권한·IDV가 끝난 뒤 컨트롤러 직전에 실행되는 공식 `after_route_guards` seam

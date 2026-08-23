@@ -139,6 +139,15 @@
                                                     { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "cache_public_categories", "className": "h-4 w-4 rounded text-blue-600" } },
                                                     { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.cache_public_categories" }
                                                 ]
+                                            },
+                                            {
+                                                "type": "basic",
+                                                "name": "Label",
+                                                "props": { "className": "flex items-center gap-3" },
+                                                "children": [
+                                                    { "type": "basic", "name": "Input", "props": { "type": "checkbox", "name": "cache_public_board_lists", "className": "h-4 w-4 rounded text-blue-600" } },
+                                                    { "type": "basic", "name": "Span", "text": "$t:g7-power_cache.settings.fields.cache_public_board_lists" }
+                                                ]
                                             }
                                         ]
                                     }

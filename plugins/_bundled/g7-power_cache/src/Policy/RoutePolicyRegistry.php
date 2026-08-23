@@ -36,6 +36,27 @@ final class RoutePolicyRegistry
                         : 'sirsoft-ecommerce.category.filter_public_show_result'],
                 )
                 : null,
+            'api.modules.sirsoft-board.boards.posts.index' => $this->settings->publicBoardListsEnabled()
+                ? new RoutePolicy(
+                    'board-public-hot-list-v1',
+                    $routeName,
+                    ['site', 'board:all'],
+                    ['page', 'per_page'],
+                    [
+                        'api',
+                        'optional.sanctum',
+                        'throttle:600,1',
+                        'permission:user,sirsoft-board.{slug}.posts.read',
+                    ],
+                    originFilterHooks: [],
+                    guestPermission: 'sirsoft-board.{slug}.posts.read',
+                    varyByDeviceClass: true,
+                    clockBucketSeconds: 60,
+                    maxPage: 3,
+                    maxPerPage: 50,
+                    retentionSeconds: 600,
+                )
+                : null,
             default => null,
         };
     }
@@ -47,6 +68,7 @@ final class RoutePolicyRegistry
             'api.modules.sirsoft-page.pages.show',
             'api.modules.sirsoft-ecommerce.categories.index',
             'api.modules.sirsoft-ecommerce.categories.show',
+            'api.modules.sirsoft-board.boards.posts.index',
         ];
     }
 
@@ -57,6 +79,12 @@ final class RoutePolicyRegistry
             'api.modules.sirsoft-page.pages.show' => ['api', 'optional.sanctum', 'throttle:600,1'],
             'api.modules.sirsoft-ecommerce.categories.index',
             'api.modules.sirsoft-ecommerce.categories.show' => ['api'],
+            'api.modules.sirsoft-board.boards.posts.index' => [
+                'api',
+                'optional.sanctum',
+                'throttle:600,1',
+                'permission:user,sirsoft-board.{slug}.posts.read',
+            ],
             default => [],
         };
     }

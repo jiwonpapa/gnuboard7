@@ -3,7 +3,9 @@
 namespace Plugins\G7\PowerCache\Eligibility;
 
 use App\Contracts\Extension\ExtensionMiddlewareRegistryInterface;
+use App\Enums\PermissionType;
 use App\Extension\HookManager;
+use App\Support\GuestRoleResolver;
 use Closure;
 use Illuminate\Http\Request;
 use Plugins\G7\PowerCache\Http\Middleware\GuestResponseCache;
@@ -53,6 +55,10 @@ final class GuestEligibility
             return EligibilityResult::bypass('unknown_query');
         }
 
+        if (! $this->queryRangeIsSafe($request, $policy)) {
+            return EligibilityResult::bypass('query_range');
+        }
+
         $registeredFilters = HookManager::getFilters();
         foreach ($policy->originFilterHooks as $filterHook) {
             if (($registeredFilters[$filterHook] ?? []) !== []) {
@@ -68,6 +74,14 @@ final class GuestEligibility
         $extensionMiddlewareResult = $this->extensionMiddlewareIsSafe($request);
         if ($extensionMiddlewareResult !== null) {
             return EligibilityResult::bypass($extensionMiddlewareResult);
+        }
+
+        if ($policy->guestPermission !== null) {
+            $permission = $this->resolvePermission($request, $policy->guestPermission);
+            if ($permission === null
+                || ! GuestRoleResolver::hasPermission($permission, PermissionType::User)) {
+                return EligibilityResult::bypass('guest_permission');
+            }
         }
 
         return EligibilityResult::allow();
@@ -109,5 +123,48 @@ final class GuestEligibility
         }
 
         return null;
+    }
+
+    private function queryRangeIsSafe(Request $request, RoutePolicy $policy): bool
+    {
+        if ($policy->maxPage !== null
+            && ! $this->boundedPositiveInteger($request->query('page'), $policy->maxPage)) {
+            return false;
+        }
+
+        return $policy->maxPerPage === null
+            || $this->boundedPositiveInteger($request->query('per_page'), $policy->maxPerPage);
+    }
+
+    private function boundedPositiveInteger(mixed $value, int $maximum): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_array($value) || filter_var($value, FILTER_VALIDATE_INT) === false) {
+            return false;
+        }
+
+        $integer = (int) $value;
+
+        return $integer >= 1 && $integer <= $maximum;
+    }
+
+    private function resolvePermission(Request $request, string $template): ?string
+    {
+        $missing = false;
+        $resolved = preg_replace_callback('/\{(\w+)\}/', function (array $matches) use ($request, &$missing): string {
+            $value = $request->route($matches[1]);
+            if (! is_scalar($value) || (string) $value === '') {
+                $missing = true;
+
+                return '';
+            }
+
+            return (string) $value;
+        }, $template);
+
+        return $missing || ! is_string($resolved) || $resolved === '' ? null : $resolved;
     }
 }

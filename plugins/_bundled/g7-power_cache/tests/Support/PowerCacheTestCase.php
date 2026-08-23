@@ -78,6 +78,7 @@ abstract class PowerCacheTestCase extends TestCase
         array $query = [],
         array $cookies = [],
         array $headers = [],
+        ?string $routePattern = null,
     ): Request {
         $server = [];
         foreach ($headers as $name => $value) {
@@ -85,12 +86,17 @@ abstract class PowerCacheTestCase extends TestCase
         }
 
         $request = Request::create($uri, 'GET', $query, $cookies, [], $server);
-        $route = new Route(['GET', 'HEAD'], 'api/modules/sirsoft-page/pages/{slug}', fn () => null);
+        $route = new Route(
+            ['GET', 'HEAD'],
+            $routePattern ?? 'api/modules/sirsoft-page/pages/{slug}',
+            fn () => null,
+        );
         $route->name($routeName);
         $route->middleware($middleware);
         $route->bind($request);
         $request->setRouteResolver(fn () => $route);
         $request->setUserResolver(fn () => null);
+        $this->app->instance('request', $request);
 
         return $request;
     }

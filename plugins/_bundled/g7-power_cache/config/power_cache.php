@@ -3,8 +3,8 @@
 use Illuminate\Support\Str;
 
 return [
-    'format_version' => 1,
-    'policy_version' => 'guest-api-v1',
+    'format_version' => 2,
+    'policy_version' => 'guest-api-v2',
     'outbox_retention_days' => (int) env('G7_POWER_CACHE_OUTBOX_RETENTION_DAYS', 7),
 
     'stores' => [

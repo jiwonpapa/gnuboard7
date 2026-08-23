@@ -44,6 +44,10 @@ final class CanonicalRequestKey
             'query' => $query,
             'locale' => $locale,
             'timezone' => $timezone,
+            'device_class' => $policy->varyByDeviceClass ? $this->deviceClass($request) : null,
+            'clock_bucket' => $policy->clockBucketSeconds !== null
+                ? intdiv(time(), max(1, $policy->clockBucketSeconds))
+                : null,
         ];
 
         return hash('sha256', json_encode(
@@ -71,6 +75,14 @@ final class CanonicalRequestKey
         }
 
         return hash('sha256', serialize($value));
+    }
+
+    private function deviceClass(Request $request): string
+    {
+        return preg_match(
+            '/Mobile|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i',
+            (string) $request->userAgent(),
+        ) === 1 ? 'mobile' : 'desktop';
     }
 
     /** @return array<string|int, mixed> */
