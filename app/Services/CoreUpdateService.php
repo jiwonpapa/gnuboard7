@@ -1339,11 +1339,55 @@ class CoreUpdateService
     }
 
     /**
-     * 데이터베이스 마이그레이션을 실행합니다.
+     * 데이터베이스 마이그레이션을 새 PHP 프로세스에서 실행합니다.
+     *
+     * 코어 업데이트 부모는 파일 교체 전 프레임워크로 이미 부팅되어 있습니다. 같은
+     * 프로세스에서 새 프레임워크의 Migrator를 lazy-load 하면 구버전 Connection 객체와
+     * 신버전 Migrator가 섞일 수 있으므로, 디스크 교체 후에는 반드시 fresh process가
+     * 새 vendor 전체를 다시 로드하도록 합니다.
      */
     public function runMigrations(): void
     {
-        Artisan::call('migrate', ['--force' => true]);
+        if (! function_exists('proc_open')) {
+            throw new CoreUpdateOperationException('settings.core_update.migration_process_unavailable');
+        }
+
+        $phpBinary = config('process.php_binary', PHP_BINARY);
+        $command = escapeshellarg($phpBinary).' '.escapeshellarg(base_path('artisan')).' migrate --force 2>&1';
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $environment = array_merge(getenv(), $_ENV, [
+            'APP_VERSION' => (string) config('app.version'),
+            'G7_UPDATE_IN_PROGRESS' => '1',
+        ]);
+
+        $process = proc_open($command, $descriptors, $pipes, base_path(), $environment);
+        if (! is_resource($process)) {
+            throw new CoreUpdateOperationException('settings.core_update.migration_process_unavailable');
+        }
+
+        fclose($pipes[0]);
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $errorOutput = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($process);
+
+        Log::channel('upgrade')->info('코어 업데이트: fresh process migration 완료', [
+            'exit_code' => $exitCode,
+            'output' => $output,
+            'error_output' => $errorOutput,
+        ]);
+
+        if ($exitCode !== 0) {
+            throw new CoreUpdateOperationException('settings.core_update.migration_failed_with_output', [
+                'output' => "\n".$output.$errorOutput,
+            ]);
+        }
     }
 
     /**

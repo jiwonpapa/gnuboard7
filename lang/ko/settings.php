@@ -147,6 +147,8 @@ return [
         'invalid_package' => '다운로드된 패키지가 유효하지 않습니다.',
         'invalid_package_not_g7' => '지정된 디렉토리가 그누보드7 프로젝트가 아닙니다. config/app.php 파일과 version 설정이 필요합니다.',
         'composer_failed' => 'composer install 실행에 실패했습니다.',
+        'migration_process_unavailable' => '새 PHP 프로세스에서 마이그레이션을 실행할 수 없습니다.',
+        'migration_failed_with_output' => '새 PHP 프로세스의 마이그레이션 실행에 실패했습니다.:output',
         'pending_path_create_failed' => '_pending 디렉토리(:path) 생성에 실패했습니다: :error',
         'pending_path_not_writable' => '_pending 디렉토리(:path)에 쓰기 권한이 없습니다.',
         'downloading' => '업데이트 다운로드 중...',

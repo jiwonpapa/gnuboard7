@@ -147,6 +147,8 @@ return [
         'invalid_package' => 'Downloaded package is invalid.',
         'invalid_package_not_g7' => 'The specified directory is not a Gnuboard7 project. config/app.php file with version setting is required.',
         'composer_failed' => 'composer install failed.',
+        'migration_process_unavailable' => 'Unable to run migrations in a fresh PHP process.',
+        'migration_failed_with_output' => 'Migration failed in the fresh PHP process.:output',
         'pending_path_create_failed' => 'Failed to create pending directory (:path): :error',
         'pending_path_not_writable' => 'Pending directory (:path) is not writable.',
         'downloading' => 'Downloading update...',

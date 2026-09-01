@@ -22,6 +22,22 @@ use Tests\TestCase;
  */
 class CoreUpdateServiceReloadResyncTest extends TestCase
 {
+    public function test_core_migrations_run_in_a_fresh_php_process(): void
+    {
+        $content = file_get_contents(base_path('app/Services/CoreUpdateService.php'));
+        $this->assertNotFalse($content);
+
+        $start = strpos($content, 'public function runMigrations(): void');
+        $end = strpos($content, 'public function syncCoreRolesAndPermissions(): void', $start);
+        $this->assertNotFalse($start);
+        $this->assertNotFalse($end);
+
+        $body = substr($content, $start, $end - $start);
+        $this->assertStringContainsString('proc_open(', $body);
+        $this->assertStringContainsString("' migrate --force 2>&1'", $body);
+        $this->assertStringNotContainsString("Artisan::call('migrate'", $body);
+    }
+
     /**
      * stale 메모리 config 가 reloadCoreConfigAndResync() 호출 후 디스크 값으로 복원되는지 검증.
      *
