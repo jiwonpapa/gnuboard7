@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Laravel 13의 새 CSRF 미들웨어 이름을 사용하도록 갱신했습니다.
-- 코어 최소 요구 버전을 8.0.0으로 상향했습니다.
+- 이 변경은 Laravel 13 호환성 실험 브랜치에만 적용되며, 공식 G7 코어 최소 버전은 기존 값을 유지합니다.
 
 ## [1.0.4] - 2026-08-22
 

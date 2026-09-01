@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-8.0.0-blue" alt="Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/version-7.0.9-blue" alt="Version"></a>
   <a href="#"><img src="https://img.shields.io/badge/PHP-8.3%2B-777BB4?logo=php&logoColor=white" alt="PHP"></a>
   <a href="#"><img src="https://img.shields.io/badge/Laravel-13.x-FF2D20?logo=laravel&logoColor=white" alt="Laravel"></a>
   <a href="#"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/badge/status-Stable-brightgreen" alt="Status"></a>
+  <a href="#"><img src="https://img.shields.io/badge/status-Experimental-f59e0b" alt="Status"></a>
 </p>
 
 <p align="center">
