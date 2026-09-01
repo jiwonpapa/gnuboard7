@@ -103,6 +103,7 @@ class PageService
                 );
             }
 
+            HookManager::doTransactionalAction('sirsoft-page.page.after_create', $page, $data);
             HookManager::doAction('sirsoft-page.page.after_create', $page, $data);
 
             return $page;
@@ -156,6 +157,7 @@ class PageService
                 );
             }
 
+            HookManager::doTransactionalAction('sirsoft-page.page.after_update', $page, $data, $snapshot);
             HookManager::doAction('sirsoft-page.page.after_update', $page, $data, $snapshot);
 
             return $page;
@@ -187,6 +189,7 @@ class PageService
 
             $result = $this->pageRepository->delete($page);
 
+            HookManager::doTransactionalAction('sirsoft-page.page.after_delete', $page);
             HookManager::doAction('sirsoft-page.page.after_delete', $page);
 
             return $result;
@@ -218,7 +221,12 @@ class PageService
             $updateData['published_at'] = now();
         }
 
-        $page = $this->pageRepository->update($page, $updateData);
+        $page = DB::transaction(function () use ($page, $updateData, $published) {
+            $page = $this->pageRepository->update($page, $updateData);
+            HookManager::doTransactionalAction('sirsoft-page.page.after_publish', $page, $published);
+
+            return $page;
+        });
 
         HookManager::doAction('sirsoft-page.page.after_publish', $page, $published);
 
@@ -270,6 +278,7 @@ class PageService
                 $page = $this->pageRepository->update($page, $updateData);
 
                 // 페이지별 after_publish 발화 → 활동로그 per-item 기록
+                HookManager::doTransactionalAction('sirsoft-page.page.after_publish', $page, $published);
                 HookManager::doAction('sirsoft-page.page.after_publish', $page, $published);
 
                 $count++;
@@ -319,6 +328,7 @@ class PageService
             // 복원 버전 스냅샷 저장 (복원 원본 버전 번호 전달)
             $this->saveVersionSnapshot($page, $userId, $version->version);
 
+            HookManager::doTransactionalAction('sirsoft-page.page.after_restore', $page, $version);
             HookManager::doAction('sirsoft-page.page.after_restore', $page, $version);
 
             return $page;

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Ecommerce\Enums\ProductImageCollection;
@@ -188,40 +189,64 @@ class ProductImageService
     public function linkTempImages(string $tempKey, int $productId, string $productCode): int
     {
         $tempImages = $this->repository->getByTempKey($tempKey);
-        $linkedCount = 0;
 
         // 기존 이미지의 최대 sort_order 조회 (복사 이미지 뒤에 배치)
         $maxSortOrder = $this->repository->getMaxSortOrder($productId, 'main');
+        $moves = [];
 
-        foreach ($tempImages as $index => $image) {
-            // 새 경로 생성: products/{productCode}/{filename}
+        foreach ($tempImages as $image) {
+            $oldPath = $image->path;
             $newPath = "products/{$productCode}/{$image->stored_filename}";
 
-            // 파일 이동 (get + put + delete) — 행 disk 기준 (이동 후에도 행 disk 불변)
+            // 새 경로에 먼저 복사하고 원본은 최종 커밋 뒤에 제거합니다.
             $rowStorage = $this->storageForRow($image->disk);
-            $content = $rowStorage->get('images', $image->path);
+            $content = $rowStorage->get('images', $oldPath);
             if ($content) {
                 $rowStorage->put('images', $newPath, $content);
-                $rowStorage->delete('images', $image->path);
+                $moves[(int) $image->id] = ['disk' => $image->disk, 'old' => $oldPath, 'new' => $newPath];
+            } else {
+                $moves[(int) $image->id] = ['disk' => $image->disk, 'old' => $oldPath, 'new' => $oldPath];
+            }
+        }
+
+        $linkedCount = DB::transaction(function () use ($tempImages, $moves, $productId, $maxSortOrder) {
+            $linkedCount = 0;
+
+            foreach ($tempImages as $index => $image) {
+                $newPath = $moves[(int) $image->id]['new'];
+
+                // DB 업데이트: product_id 설정, temp_key 제거, path 변경, sort_order 재배치, is_thumbnail 해제
+                $this->repository->update($image->id, [
+                    'product_id' => $productId,
+                    'temp_key' => null,
+                    'path' => $newPath,
+                    'sort_order' => $maxSortOrder + $index + 1,
+                    'is_thumbnail' => false,
+                ]);
+
+                $linkedCount++;
             }
 
-            // DB 업데이트: product_id 설정, temp_key 제거, path 변경, sort_order 재배치, is_thumbnail 해제
-            $this->repository->update($image->id, [
-                'product_id' => $productId,
-                'temp_key' => null,
-                'path' => $newPath,
-                'sort_order' => $maxSortOrder + $index + 1,
-                'is_thumbnail' => false,
-            ]);
+            return $linkedCount;
+        });
 
-            $linkedCount++;
-        }
+        $this->afterCommit(function () use ($moves, $tempImages, $tempKey) {
+            foreach ($moves as $move) {
+                if ($move['old'] !== $move['new']) {
+                    $this->storageForRow($move['disk'])->delete('images', $move['old']);
+                }
+            }
 
-        // 빈 임시 디렉토리 정리 — 임시 행이 여러 disk 에 걸칠 수 있어 disk 별로 정리
-        foreach ($tempImages->pluck('disk')->filter()->unique() as $tempDisk) {
-            $this->storageForRow($tempDisk)->deleteDirectory('images', "products/temp/{$tempKey}");
-        }
-        $this->storage->deleteDirectory('images', "products/temp/{$tempKey}");
+            if (! collect($moves)->every(fn (array $move) => $move['old'] !== $move['new'])) {
+                return;
+            }
+
+            // 빈 임시 디렉토리 정리 — 임시 행이 여러 disk 에 걸릴 수 있어 disk 별로 정리합니다.
+            foreach ($tempImages->pluck('disk')->filter()->unique() as $tempDisk) {
+                $this->storageForRow($tempDisk)->deleteDirectory('images', "products/temp/{$tempKey}");
+            }
+            $this->storage->deleteDirectory('images', "products/temp/{$tempKey}");
+        });
 
         return $linkedCount;
     }
@@ -624,5 +649,16 @@ class ProductImageService
         if (! empty($orders)) {
             $this->repository->reorder($orders);
         }
+    }
+
+    private function afterCommit(callable $callback): void
+    {
+        if (DB::connection()->transactionLevel() > 0) {
+            DB::afterCommit($callback);
+
+            return;
+        }
+
+        $callback();
     }
 }

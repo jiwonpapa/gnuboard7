@@ -108,20 +108,35 @@ class HookListenerRegistrar
             $priority = $config['priority'] ?? 10;
             $type = $config['type'] ?? 'action';
             $forceSync = ! empty($config['sync']);
+            $transactional = ! empty($config['transactional']);
+
+            if ($transactional && ($type !== 'action' || ! $forceSync)) {
+                Log::error('transactional 훅 리스너는 action + sync: true 선언이 필요합니다.', [
+                    'listener' => $listenerClass,
+                    'hook' => $hookName,
+                    'source' => $source,
+                ]);
+
+                continue;
+            }
+
+            $registrationHookName = $transactional
+                ? HookManager::transactionalHookName($hookName)
+                : $hookName;
 
             if ($type === 'filter') {
                 // Filter: 항상 동기 실행 (반환값 체인이므로 큐 불가)
-                HookManager::addFilter($hookName, function ($value, ...$args) use ($listenerClass, $method) {
+                HookManager::addFilter($registrationHookName, function ($value, ...$args) use ($listenerClass, $method) {
                     return app($listenerClass)->{$method}($value, ...$args);
                 }, $priority);
             } elseif ($forceSync) {
                 // Action + sync: true → 동기 실행 (개발자가 명시적으로 opt-out)
-                HookManager::addAction($hookName, function (...$args) use ($listenerClass, $method) {
+                HookManager::addAction($registrationHookName, function (...$args) use ($listenerClass, $method) {
                     app($listenerClass)->{$method}(...$args);
                 }, $priority);
             } else {
                 // Action 기본: 큐 디스패치 (큐 드라이버가 sync 면 Laravel 이 즉시 실행 → 하위호환)
-                self::addQueuedAction($hookName, $listenerClass, $method, $priority);
+                self::addQueuedAction($registrationHookName, $listenerClass, $method, $priority);
             }
 
             // 등록 성공은 로그로 남기지 않는다. 리스너 112개 × 구독 400건이 요청마다 부팅되므로

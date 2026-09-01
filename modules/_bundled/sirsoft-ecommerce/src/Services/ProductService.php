@@ -285,7 +285,10 @@ class ProductService
             // 상품정보제공고시 동기화 (템플릿은 UI용, 저장하지 않음)
             $this->syncNotice($product, $data['notice_items'] ?? null);
 
-            return $product->load(['activeOptions', 'categories', 'images', 'additionalOptions']);
+            $product = $product->load(['activeOptions', 'categories', 'images', 'additionalOptions']);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.product.after_create', $product);
+
+            return $product;
         });
 
         // 생성 후 훅
@@ -325,7 +328,7 @@ class ProductService
         // 수정자 정보 추가
         $data['updated_by'] = Auth::id();
 
-        $product = DB::transaction(function () use ($product, $data) {
+        $product = DB::transaction(function () use ($product, $data, $snapshot) {
             $productData = collect($data)->except([
                 'options', 'category_ids', 'images', 'label_assignments',
                 'notice_items', 'additional_options',
@@ -362,7 +365,10 @@ class ProductService
                 $this->syncNotice($product, $data['notice_items'] ?? null);
             }
 
-            return $product->load(['activeOptions', 'categories', 'images', 'additionalOptions']);
+            $product = $product->load(['activeOptions', 'categories', 'images', 'additionalOptions']);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.product.after_update', $product, $snapshot);
+
+            return $product;
         });
 
         // 수정 후 훅 (스냅샷 전달)
@@ -468,6 +474,8 @@ class ProductService
             // 모든 연관 데이터가 완전 삭제되었으므로 상품도 완전 삭제합니다.
             $result = $this->repository->forceDelete($product);
 
+            HookManager::doTransactionalAction('sirsoft-ecommerce.product.after_delete', $product);
+
             // 삭제 후 훅
             HookManager::doAction('sirsoft-ecommerce.product.after_delete', $product);
 
@@ -510,7 +518,17 @@ class ProductService
             'value' => $value,
         ]);
 
-        $updatedCount = $this->repository->bulkUpdateStatus($ids, $field, $value);
+        $updatedCount = DB::transaction(function () use ($ids, $field, $value, $snapshots) {
+            $updatedCount = $this->repository->bulkUpdateStatus($ids, $field, $value);
+            HookManager::doTransactionalAction(
+                'sirsoft-ecommerce.product.after_bulk_update',
+                $ids,
+                $updatedCount,
+                $snapshots,
+            );
+
+            return $updatedCount;
+        });
 
         // 일괄 수정 후 훅 (스냅샷 전달)
         HookManager::doAction('sirsoft-ecommerce.product.after_bulk_update', $ids, $updatedCount, $snapshots);
@@ -545,7 +563,17 @@ class ProductService
             'unit' => $unit,
         ]);
 
-        $updatedCount = $this->repository->bulkUpdatePrice($ids, $method, $value, $unit);
+        $updatedCount = DB::transaction(function () use ($ids, $method, $value, $unit, $snapshots) {
+            $updatedCount = $this->repository->bulkUpdatePrice($ids, $method, $value, $unit);
+            HookManager::doTransactionalAction(
+                'sirsoft-ecommerce.product.after_bulk_price_update',
+                $ids,
+                $updatedCount,
+                $snapshots,
+            );
+
+            return $updatedCount;
+        });
 
         // 스냅샷 전달
         HookManager::doAction('sirsoft-ecommerce.product.after_bulk_price_update', $ids, $updatedCount, $snapshots);
@@ -578,7 +606,17 @@ class ProductService
             'value' => $value,
         ]);
 
-        $updatedCount = $this->repository->bulkUpdateStock($ids, $method, $value);
+        $updatedCount = DB::transaction(function () use ($ids, $method, $value, $snapshots) {
+            $updatedCount = $this->repository->bulkUpdateStock($ids, $method, $value);
+            HookManager::doTransactionalAction(
+                'sirsoft-ecommerce.product.after_bulk_stock_update',
+                $ids,
+                $updatedCount,
+                $snapshots,
+            );
+
+            return $updatedCount;
+        });
 
         // 스냅샷 전달
         HookManager::doAction('sirsoft-ecommerce.product.after_bulk_stock_update', $ids, $updatedCount, $snapshots);
@@ -615,7 +653,7 @@ class ProductService
         $productsUpdated = 0;
         $optionsUpdated = 0;
 
-        $result = DB::transaction(function () use ($data, &$productsUpdated, &$optionsUpdated) {
+        $result = DB::transaction(function () use ($data, $snapshots, &$productsUpdated, &$optionsUpdated) {
             $ids = $data['ids'] ?? [];
             $bulkChanges = $data['bulk_changes'] ?? [];
             $items = $data['items'] ?? [];
@@ -663,10 +701,14 @@ class ProductService
                 $optionsUpdated = $optionResult['options_updated'] ?? 0;
             }
 
-            return [
+            $result = [
                 'products_updated' => $productsUpdated,
                 'options_updated' => $optionsUpdated,
             ];
+
+            HookManager::doTransactionalAction('sirsoft-ecommerce.product.after_bulk_update', $result, $data, $snapshots);
+
+            return $result;
         });
 
         // 6. after 훅 실행 (스냅샷 전달)

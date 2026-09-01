@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Board\Exceptions\AttachmentLimitExceededException;
@@ -162,22 +163,40 @@ class AttachmentService
             $boardId = $board?->id ?? 0;
         }
 
-        // DB에 저장 (hash는 모델에서 자동 생성)
-        $attachment = $this->repository->create($slug, [
-            'board_id' => $boardId,
-            'post_id' => $postId,
-            'temp_key' => $postId ? null : $tempKey,
-            'original_filename' => $file->getClientOriginalName(),
-            'stored_filename' => $storedFilename,
-            'disk' => $disk,
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'size' => $file->getSize(),
-            'collection' => $collection,
-            'order' => $maxOrder + 1,
-            'meta' => ! empty($meta) ? $meta : null,
-            'created_by' => Auth::id(),
-        ]);
+        $attachment = DB::transaction(function () use (
+            $slug,
+            $boardId,
+            $postId,
+            $tempKey,
+            $file,
+            $storedFilename,
+            $disk,
+            $path,
+            $collection,
+            $maxOrder,
+            $meta,
+        ) {
+            // DB에 저장 (hash는 모델에서 자동 생성)
+            $attachment = $this->repository->create($slug, [
+                'board_id' => $boardId,
+                'post_id' => $postId,
+                'temp_key' => $postId ? null : $tempKey,
+                'original_filename' => $file->getClientOriginalName(),
+                'stored_filename' => $storedFilename,
+                'disk' => $disk,
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'size' => $file->getSize(),
+                'collection' => $collection,
+                'order' => $maxOrder + 1,
+                'meta' => ! empty($meta) ? $meta : null,
+                'created_by' => Auth::id(),
+            ]);
+
+            HookManager::doTransactionalAction('sirsoft-board.attachment.after_upload', $attachment);
+
+            return $attachment;
+        });
 
         Log::info('게시판 첨부파일 업로드 완료', [
             'board_slug' => $slug,
@@ -208,14 +227,23 @@ class AttachmentService
         // (getByTempKey → linkTempAttachments → findById 순)
         $tempAttachments = $this->repository->getByTempKey($slug, $tempKey);
 
-        $linkedCount = $this->repository->linkTempAttachments($slug, $tempKey, $postId);
+        [$linkedCount, $linkedAttachments] = DB::transaction(function () use ($slug, $tempKey, $postId, $tempAttachments) {
+            $linkedCount = $this->repository->linkTempAttachments($slug, $tempKey, $postId);
+            $linkedAttachments = [];
 
-        // 각 첨부에 대해 after_link 훅 발화 → 카운트 리스너가 post_id 기준으로 동기화 가능
-        foreach ($tempAttachments as $tempAttachment) {
-            $linked = $this->repository->findById($slug, $tempAttachment->id);
-            if ($linked && $linked->post_id === $postId) {
-                HookManager::doAction('sirsoft-board.attachment.after_link', $linked);
+            foreach ($tempAttachments as $tempAttachment) {
+                $linked = $this->repository->findById($slug, $tempAttachment->id);
+                if ($linked && $linked->post_id === $postId) {
+                    HookManager::doTransactionalAction('sirsoft-board.attachment.after_link', $linked);
+                    $linkedAttachments[] = $linked;
+                }
             }
+
+            return [$linkedCount, $linkedAttachments];
+        });
+
+        foreach ($linkedAttachments as $linked) {
+            HookManager::doAction('sirsoft-board.attachment.after_link', $linked);
         }
 
         return $linkedCount;
@@ -250,32 +278,57 @@ class AttachmentService
         // 이미 연결된 첨부와 합산해 판정한다 (수정 시 기존 첨부 + 신규 임시첨부).
         $this->assertAttachmentCountWithin($slug, $postId, $tempAttachments->count());
 
-        $linkedCount = 0;
-
+        // 새 경로에 먼저 복사하되 원본은 커밋 전까지 보존합니다. 트랜잭션 리스너가
+        // 실패해 DB가 롤백되어도 기존 경로의 파일은 계속 유효해야 합니다.
+        $moves = [];
         foreach ($tempAttachments as $attachment) {
-            // 최종 경로 생성 (기존 경로 규칙 유지)
+            $oldPath = $attachment->path;
             $newPath = "{$slug}/".date('Y/m/d')."/{$attachment->stored_filename}";
+            $content = $this->storage->get('attachments', $oldPath);
 
-            // 파일 물리적 이동 (StorageInterface: get + put + delete)
-            $content = $this->storage->get('attachments', $attachment->path);
             if ($content) {
                 $this->storage->put('attachments', $newPath, $content);
-                $this->storage->delete('attachments', $attachment->path);
+                $moves[(int) $attachment->id] = ['old' => $oldPath, 'new' => $newPath];
+            } else {
+                $moves[(int) $attachment->id] = ['old' => $oldPath, 'new' => $oldPath];
             }
-
-            // DB 업데이트: board_id 이동, post_id 설정, temp_key 제거, path 변경
-            // 임시 첨부파일(board_id=0)을 직접 업데이트 (repository->update()는 board_id=$board->id로 조회하므로 사용 불가)
-            $attachment->update([
-                'board_id' => $board->id,
-                'post_id' => $postId,
-                'temp_key' => null,
-                'path' => $newPath,
-            ]);
-            $linkedCount++;
         }
 
-        // 임시 디렉토리 정리
-        $this->storage->deleteDirectory('attachments', "{$slug}/temp/{$tempKey}");
+        $linkedCount = DB::transaction(function () use ($postId, $board, $tempAttachments, $moves) {
+            $linkedCount = 0;
+
+            foreach ($tempAttachments as $attachment) {
+                $newPath = $moves[(int) $attachment->id]['new'];
+
+                // DB 업데이트: board_id 이동, post_id 설정, temp_key 제거, path 변경
+                // 임시 첨부파일(board_id=0)을 직접 업데이트 (repository->update()는 board_id=$board->id로 조회하므로 사용 불가)
+                $attachment->update([
+                    'board_id' => $board->id,
+                    'post_id' => $postId,
+                    'temp_key' => null,
+                    'path' => $newPath,
+                ]);
+                HookManager::doTransactionalAction('sirsoft-board.attachment.after_link', $attachment);
+                $linkedCount++;
+            }
+
+            return $linkedCount;
+        });
+
+        // 가장 바깥 DB 트랜잭션과 transactional 리스너가 모두 커밋된 뒤에만
+        // 이전 파일과 임시 디렉토리를 제거합니다.
+        $this->afterCommit(function () use ($moves, $slug, $tempKey) {
+            foreach ($moves as $move) {
+                if ($move['old'] !== $move['new']) {
+                    $this->storage->delete('attachments', $move['old']);
+                }
+            }
+
+            // 원본 경로를 유지한 행이 있으면 그 파일이 든 임시 디렉토리는 보존합니다.
+            if (collect($moves)->every(fn (array $move) => $move['old'] !== $move['new'])) {
+                $this->storage->deleteDirectory('attachments', "{$slug}/temp/{$tempKey}");
+            }
+        });
 
         Log::info('게시판 임시 첨부파일 연결 완료', [
             'board_slug' => $slug,
@@ -445,19 +498,23 @@ class AttachmentService
         // 보존기간이 지난 뒤의 파일·기록 파기는 `sirsoft-board:prune-attachments` 가
         // 담당한다 (purgeSoftDeleted). 운영자가 설정에서 켰을 때만 동작한다.
 
-        // DB에서 소프트 삭제
-        $result = $this->repository->delete($slug, $id);
+        $result = DB::transaction(function () use ($slug, $id, $attachment, $postId, $collection) {
+            $result = $this->repository->delete($slug, $id);
+
+            if ($result && $postId) {
+                $this->reorderAfterDelete($slug, $postId, $collection);
+            }
+
+            HookManager::doTransactionalAction('sirsoft-board.attachment.after_delete', $attachment);
+
+            return $result;
+        });
 
         Log::info('게시판 첨부파일 삭제 완료', [
             'board_slug' => $slug,
             'attachment_id' => $id,
             'post_id' => $postId,
         ]);
-
-        // 삭제 후 남은 파일들의 순서 재정렬
-        if ($result && $postId) {
-            $this->reorderAfterDelete($slug, $postId, $collection);
-        }
 
         // After 훅
         HookManager::doAction('sirsoft-board.attachment.after_delete', $attachment);
@@ -610,6 +667,17 @@ class AttachmentService
         return $this->storage->withDisk($disk);
     }
 
+    private function afterCommit(callable $callback): void
+    {
+        if (DB::connection()->transactionLevel() > 0) {
+            DB::afterCommit($callback);
+
+            return;
+        }
+
+        $callback();
+    }
+
     /**
      * 순서 변경
      *
@@ -625,7 +693,12 @@ class AttachmentService
         // Before 훅
         HookManager::doAction('sirsoft-board.attachment.before_reorder', $slug, $orders);
 
-        $result = $this->repository->reorder($slug, $orders);
+        $result = DB::transaction(function () use ($slug, $orders) {
+            $result = $this->repository->reorder($slug, $orders);
+            HookManager::doTransactionalAction('sirsoft-board.attachment.after_reorder', $slug, $orders);
+
+            return $result;
+        });
 
         // After 훅
         HookManager::doAction('sirsoft-board.attachment.after_reorder', $slug, $orders);

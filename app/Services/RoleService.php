@@ -120,13 +120,19 @@ class RoleService
         // 훅: 생성 데이터 필터
         $data = HookManager::applyFilters('core.role.filter_create_data', $data);
 
-        // 역할 생성
-        $role = $this->roleRepository->create($data);
+        $role = DB::transaction(function () use ($data, $permissions) {
+            // 역할 생성
+            $role = $this->roleRepository->create($data);
 
-        // 권한 할당
-        if (! empty($permissions)) {
-            $this->syncPermissions($role, $permissions);
-        }
+            // 권한 할당
+            if (! empty($permissions)) {
+                $this->syncPermissions($role, $permissions);
+            }
+
+            HookManager::doTransactionalAction('core.role.after_create', $role);
+
+            return $role;
+        });
 
         // 훅: 생성 후
         HookManager::doAction('core.role.after_create', $role);
@@ -166,15 +172,18 @@ class RoleService
         // 훅: 업데이트 데이터 필터
         $data = HookManager::applyFilters('core.role.filter_update_data', $data, $role);
 
-        // 역할 정보 업데이트
-        $this->roleRepository->update($role, $data);
+        DB::transaction(function () use ($role, $data, $permissions, $snapshot) {
+            // 역할 정보 업데이트
+            $this->roleRepository->update($role, $data);
 
-        // 권한 동기화 (null이 아닌 경우에만)
-        if ($permissions !== null) {
-            $this->syncPermissions($role, $permissions);
-        }
+            // 권한 동기화 (null이 아닌 경우에만)
+            if ($permissions !== null) {
+                $this->syncPermissions($role, $permissions);
+            }
 
-        $role->refresh();
+            $role->refresh();
+            HookManager::doTransactionalAction('core.role.after_update', $role, $snapshot);
+        });
 
         // 훅: 업데이트 후 (스냅샷 전달)
         HookManager::doAction('core.role.after_update', $role, $snapshot);
@@ -215,7 +224,10 @@ class RoleService
             $role->users()->detach();
 
             // 역할 삭제
-            return $this->roleRepository->delete($role);
+            $result = $this->roleRepository->delete($role);
+            HookManager::doTransactionalAction('core.role.after_delete', $role->id);
+
+            return $result;
         });
 
         // 훅: 삭제 후
@@ -255,10 +267,20 @@ class RoleService
             ];
         }
 
-        $role->permissions()->sync($pivotData);
+        $currentPermIdentifiers = DB::transaction(function () use ($role, $pivotData, $previousPermIdentifiers) {
+            $role->permissions()->sync($pivotData);
 
-        // 동기화 후 현재 권한 식별자
-        $currentPermIdentifiers = $role->permissions()->pluck('identifier')->toArray();
+            // 동기화 후 현재 권한 식별자
+            $currentPermIdentifiers = $role->permissions()->pluck('identifier')->toArray();
+            HookManager::doTransactionalAction(
+                'core.role.after_sync_permissions',
+                $role,
+                $previousPermIdentifiers,
+                $currentPermIdentifiers,
+            );
+
+            return $currentPermIdentifiers;
+        });
 
         // 훅: 권한 동기화 후 (이전/이후 식별자 모두 전달)
         HookManager::doAction('core.role.after_sync_permissions', $role, $previousPermIdentifiers, $currentPermIdentifiers);
@@ -280,9 +302,14 @@ class RoleService
         // 훅: 상태 변경 전
         HookManager::doAction('core.role.before_toggle_status', $role, $newStatus);
 
-        $result = $this->roleRepository->update($role, [
-            'is_active' => $newStatus,
-        ]);
+        $result = DB::transaction(function () use ($role, $newStatus) {
+            $result = $this->roleRepository->update($role, [
+                'is_active' => $newStatus,
+            ]);
+            HookManager::doTransactionalAction('core.role.after_toggle_status', $role);
+
+            return $result;
+        });
 
         // 훅: 상태 변경 후
         HookManager::doAction('core.role.after_toggle_status', $role);

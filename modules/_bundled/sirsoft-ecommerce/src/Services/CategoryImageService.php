@@ -8,6 +8,7 @@ use App\Support\ImageResizer;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Ecommerce\Models\CategoryImage;
@@ -96,23 +97,41 @@ class CategoryImageService
             }
         }
 
-        // DB에 저장 (hash는 모델에서 자동 생성)
-        $image = $this->repository->create([
-            'category_id' => $categoryId,
-            'temp_key' => $categoryId ? null : $tempKey,
-            'original_filename' => $file->getClientOriginalName(),
-            'stored_filename' => $storedFilename,
-            'disk' => $disk,
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'file_size' => $file->getSize(),
-            'width' => $width,
-            'height' => $height,
-            'alt_text' => $altText,
-            'collection' => $collection,
-            'sort_order' => $maxSortOrder + 1,
-            'created_by' => Auth::id(),
-        ]);
+        $image = DB::transaction(function () use (
+            $categoryId,
+            $tempKey,
+            $file,
+            $storedFilename,
+            $disk,
+            $path,
+            $width,
+            $height,
+            $altText,
+            $collection,
+            $maxSortOrder,
+        ) {
+            // DB에 저장 (hash는 모델에서 자동 생성)
+            $image = $this->repository->create([
+                'category_id' => $categoryId,
+                'temp_key' => $categoryId ? null : $tempKey,
+                'original_filename' => $file->getClientOriginalName(),
+                'stored_filename' => $storedFilename,
+                'disk' => $disk,
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'file_size' => $file->getSize(),
+                'width' => $width,
+                'height' => $height,
+                'alt_text' => $altText,
+                'collection' => $collection,
+                'sort_order' => $maxSortOrder + 1,
+                'created_by' => Auth::id(),
+            ]);
+
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category-image.after_upload', $image);
+
+            return $image;
+        });
 
         Log::info('카테고리 이미지 업로드 완료', [
             'image_id' => $image->id,
@@ -221,26 +240,30 @@ class CategoryImageService
         // Before 훅
         HookManager::doAction('sirsoft-ecommerce.category-image.before_delete', $image);
 
-        // 스토리지에서 파일 삭제 — 행 disk 기준
-        // DB에 저장된 경로: category/{date}/{filename}
-        // storage->exists/delete에 category를 전달하면 자동으로 images/ 추가됨
-        $rowStorage = $this->storageForRow($image->disk);
-        if ($rowStorage->exists('images', $image->path)) {
-            $rowStorage->delete('images', $image->path);
-        }
+        $result = DB::transaction(function () use ($id, $image, $categoryId, $collection) {
+            $result = $this->repository->delete($id);
 
-        // DB에서 삭제
-        $result = $this->repository->delete($id);
+            if ($result && $categoryId) {
+                $this->reorderAfterDelete($categoryId, $collection);
+            }
+
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category-image.after_delete', $image);
+
+            return $result;
+        });
+
+        // 중첩 호출이면 가장 바깥 트랜잭션 커밋 뒤에 물리 파일을 지웁니다.
+        $this->afterCommit(function () use ($image) {
+            $rowStorage = $this->storageForRow($image->disk);
+            if ($rowStorage->exists('images', $image->path)) {
+                $rowStorage->delete('images', $image->path);
+            }
+        });
 
         Log::info('카테고리 이미지 삭제 완료', [
             'image_id' => $id,
             'category_id' => $categoryId,
         ]);
-
-        // 삭제 후 남은 이미지들의 순서 재정렬
-        if ($result && $categoryId) {
-            $this->reorderAfterDelete($categoryId, $collection);
-        }
 
         // After 훅
         HookManager::doAction('sirsoft-ecommerce.category-image.after_delete', $image);
@@ -269,15 +292,26 @@ class CategoryImageService
 
         foreach ($images as $image) {
             HookManager::doAction('sirsoft-ecommerce.category-image.before_delete', $image);
-
-            $rowStorage = $this->storageForRow($image->disk);
-
-            if ($rowStorage->exists('images', $image->path)) {
-                $rowStorage->delete('images', $image->path);
-            }
         }
 
-        $deleted = $this->repository->deleteByCategoryId($categoryId);
+        $deleted = DB::transaction(function () use ($categoryId, $images) {
+            $deleted = $this->repository->deleteByCategoryId($categoryId);
+
+            foreach ($images as $image) {
+                HookManager::doTransactionalAction('sirsoft-ecommerce.category-image.after_delete', $image);
+            }
+
+            return $deleted;
+        });
+
+        $this->afterCommit(function () use ($images) {
+            foreach ($images as $image) {
+                $rowStorage = $this->storageForRow($image->disk);
+                if ($rowStorage->exists('images', $image->path)) {
+                    $rowStorage->delete('images', $image->path);
+                }
+            }
+        });
 
         Log::info('카테고리 이미지 일괄 삭제 완료', [
             'category_id' => $categoryId,
@@ -302,7 +336,12 @@ class CategoryImageService
         // Before 훅
         HookManager::doAction('sirsoft-ecommerce.category-image.before_reorder', $orders);
 
-        $result = $this->repository->reorder($orders);
+        $result = DB::transaction(function () use ($orders) {
+            $result = $this->repository->reorder($orders);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category-image.after_reorder', $orders);
+
+            return $result;
+        });
 
         // After 훅
         HookManager::doAction('sirsoft-ecommerce.category-image.after_reorder', $orders);
@@ -371,7 +410,12 @@ class CategoryImageService
         // 필터 훅 - 데이터 변형
         $data = HookManager::applyFilters('sirsoft-ecommerce.category-image.filter_update_data', $data);
 
-        $image = $this->repository->update($id, $data);
+        $image = DB::transaction(function () use ($id, $data) {
+            $image = $this->repository->update($id, $data);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category-image.after_update', $image);
+
+            return $image;
+        });
 
         Log::info('카테고리 이미지 업데이트 완료', [
             'image_id' => $id,
@@ -382,5 +426,16 @@ class CategoryImageService
         HookManager::doAction('sirsoft-ecommerce.category-image.after_update', $image);
 
         return $image;
+    }
+
+    private function afterCommit(callable $callback): void
+    {
+        if (DB::connection()->transactionLevel() > 0) {
+            DB::afterCommit($callback);
+
+            return;
+        }
+
+        $callback();
     }
 }

@@ -169,7 +169,10 @@ class CategoryService
                 $this->imageRepository->linkTempImages($data['temp_key'], $category->id);
             }
 
-            return $category->fresh(['images']);
+            $category = $category->fresh(['images']);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category.after_create', $category, $data);
+
+            return $category;
         });
 
         // After 훅 - 후처리, 알림, 캐시 등
@@ -203,7 +206,7 @@ class CategoryService
         // 필터 훅 - 데이터 변형
         $data = HookManager::applyFilters('sirsoft-ecommerce.category.filter_update_data', $data, $id);
 
-        $category = DB::transaction(function () use ($category, $data) {
+        $category = DB::transaction(function () use ($category, $data, $snapshot) {
             // parent_id가 변경되었으면 depth/path 재계산
             // 루트로 이동(parent_id = null)도 변경이므로 array_key_exists 사용 (isset 은 null 을 미설정으로 취급)
             if (array_key_exists('parent_id', $data) && $data['parent_id'] !== $category->parent_id) {
@@ -228,7 +231,10 @@ class CategoryService
                 $this->imageRepository->linkTempImages($data['temp_key'], $category->id);
             }
 
-            return $category->fresh(['images']);
+            $category = $category->fresh(['images']);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category.after_update', $category, $data, $snapshot);
+
+            return $category;
         });
 
         // After 훅
@@ -281,6 +287,8 @@ class CategoryService
 
             // 카테고리 삭제
             $this->repository->delete($category->id);
+
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category.after_delete', $category->id);
         });
 
         // After 훅
@@ -378,9 +386,14 @@ class CategoryService
         // Before 훅
         HookManager::doAction('sirsoft-ecommerce.category.before_toggle_status', $category);
 
-        $category = $this->repository->update($id, [
-            'is_active' => ! $category->is_active,
-        ]);
+        $category = DB::transaction(function () use ($id, $category) {
+            $category = $this->repository->update($id, [
+                'is_active' => ! $category->is_active,
+            ]);
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category.after_toggle_status', $category);
+
+            return $category;
+        });
 
         // After 훅
         HookManager::doAction('sirsoft-ecommerce.category.after_toggle_status', $category);
@@ -432,6 +445,8 @@ class CategoryService
                     $this->updateDescendantsPaths($updatedCategory);
                 }
             }
+
+            HookManager::doTransactionalAction('sirsoft-ecommerce.category.after_reorder', $orders);
         });
 
         // After 훅

@@ -258,6 +258,8 @@ class PostService
             // 첨부파일 연결 처리
             $this->linkAttachments($slug, $post->id, $attachmentIds, $tempKey, $files, '생성');
 
+            HookManager::doTransactionalAction('sirsoft-board.post.after_create', $post, $slug, $options);
+
             DB::commit();
         } catch (\Exception $e) {
             DB::rollBack();
@@ -333,6 +335,8 @@ class PostService
 
             // 첨부파일 연결 처리
             $this->linkAttachments($slug, $updatedPost->id, $attachmentIds, $tempKey, [], '수정');
+
+            HookManager::doTransactionalAction('sirsoft-board.post.after_update', $updatedPost, $slug, $snapshot);
 
             DB::commit();
         } catch (\Exception $e) {
@@ -429,7 +433,7 @@ class PostService
         $actionLog = $this->buildActionLog('delete', null);
 
         // 게시글 + 하위 데이터(답글/댓글/첨부) 연쇄 소프트 삭제를 단일 트랜잭션으로 처리
-        $deletedPost = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType) {
+        $deletedPost = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType, $options) {
             // ① 상태 변경 (deleted로 변경하고 소프트 삭제)
             $deletedPost = $this->postRepository->updateStatus($slug, $id, 'deleted', $actionLog, $triggerType);
             $deletedPost->delete();
@@ -449,6 +453,8 @@ class PostService
                 $this->commentRepository->softDeleteByPostIds($slug, $descendantIds);
                 $this->attachmentRepository->softDeleteByPostIds($slug, $descendantIds);
             }
+
+            HookManager::doTransactionalAction('sirsoft-board.post.after_delete', $deletedPost, $slug, $options);
 
             return $deletedPost;
         });
@@ -493,8 +499,12 @@ class PostService
         // 작업 이력 생성
         $actionLog = $this->buildActionLog('blind', $reason);
 
-        // 상태 변경
-        $blindedPost = $this->postRepository->updateStatus($slug, $id, 'blinded', $actionLog, $triggerType);
+        $blindedPost = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType) {
+            $blindedPost = $this->postRepository->updateStatus($slug, $id, 'blinded', $actionLog, $triggerType);
+            HookManager::doTransactionalAction('sirsoft-board.post.after_blind', $blindedPost, $slug);
+
+            return $blindedPost;
+        });
 
         // 훅: after_blind
         HookManager::doAction('sirsoft-board.post.after_blind', $blindedPost, $slug);
@@ -556,6 +566,8 @@ class PostService
                 $this->commentRepository->restoreCascadedByPostIds($slug, $restoredIds);
                 $this->attachmentRepository->restoreCascadedByPostIds($slug, $restoredIds);
             }
+
+            HookManager::doTransactionalAction('sirsoft-board.post.after_restore', $restoredPost, $slug);
 
             return $restoredPost;
         });

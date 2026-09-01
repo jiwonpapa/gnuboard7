@@ -8,11 +8,20 @@ use App\Models\PermissionHook;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use LogicException;
 
 class HookManager implements HookManagerInterface
 {
+    /**
+     * 외부 확장이 동일 트랜잭션 훅 지원 여부를 확인하는 공개 capability 버전입니다.
+     */
+    public const TRANSACTIONAL_ACTIONS_VERSION = 1;
+
+    private const TRANSACTIONAL_HOOK_PREFIX = 'transactional.';
+
     private static array $hooks = [];
 
     private static array $filters = [];
@@ -67,6 +76,32 @@ class HookManager implements HookManagerInterface
             array_pop(self::$runningHookStack);
             unset(self::$dispatching[$hookName]);
         }
+    }
+
+    /**
+     * 동일 DB 트랜잭션 참여를 선언한 리스너만 실행합니다.
+     *
+     * 이 메서드는 반드시 열린 DB 트랜잭션 안에서 호출해야 합니다. 기존 Action 리스너는
+     * 실행하지 않으므로, 호출자는 종전 위치에서 doAction()을 별도로 호출해 기존 계약을
+     * 유지해야 합니다.
+     *
+     * @throws LogicException 열린 DB 트랜잭션 밖에서 호출한 경우
+     */
+    public static function doTransactionalAction(string $hookName, ...$args): void
+    {
+        if (DB::connection()->transactionLevel() < 1) {
+            throw new LogicException("Transactional action [{$hookName}] requires an open database transaction.");
+        }
+
+        self::doAction(self::transactionalHookName($hookName), ...$args);
+    }
+
+    /**
+     * Registrar와 dispatcher가 공유하는 내부 transactional 훅 이름을 반환합니다.
+     */
+    public static function transactionalHookName(string $hookName): string
+    {
+        return self::TRANSACTIONAL_HOOK_PREFIX.$hookName;
     }
 
     /**

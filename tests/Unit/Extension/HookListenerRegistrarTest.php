@@ -6,7 +6,12 @@ use App\Contracts\Extension\HookListenerInterface;
 use App\Extension\HookListenerRegistrar;
 use App\Extension\HookManager;
 use App\Jobs\DispatchHookListenerJob;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -59,11 +64,11 @@ class HookListenerRegistrarTest extends TestCase
     {
         Queue::fake();
 
-        $user = \App\Models\User::factory()->create();
-        \Illuminate\Support\Facades\Auth::login($user);
-        \Illuminate\Support\Facades\App::setLocale('ko');
+        $user = User::factory()->create();
+        Auth::login($user);
+        App::setLocale('ko');
 
-        $request = \Illuminate\Http\Request::create('/api/admin/users', 'GET', [], [], [], [
+        $request = Request::create('/api/admin/users', 'GET', [], [], [], [
             'REMOTE_ADDR' => '203.0.113.10',
             'HTTP_USER_AGENT' => 'TestAgent/1.0',
         ]);
@@ -95,6 +100,23 @@ class HookListenerRegistrarTest extends TestCase
         Queue::assertNotPushed(DispatchHookListenerJob::class);
         // 동기 실행 확인
         $this->assertTrue(StubSyncListener::$executed);
+    }
+
+    public function test_transactional_listener_only_executes_through_transactional_action(): void
+    {
+        Queue::fake();
+        StubTransactionalListener::$executed = false;
+
+        HookListenerRegistrar::register(StubTransactionalListener::class);
+        HookManager::doAction('test.registrar.transactional');
+        $this->assertFalse(StubTransactionalListener::$executed);
+
+        DB::transaction(
+            fn () => HookManager::doTransactionalAction('test.registrar.transactional')
+        );
+
+        $this->assertTrue(StubTransactionalListener::$executed);
+        Queue::assertNotPushed(DispatchHookListenerJob::class);
     }
 
     /**
@@ -279,6 +301,30 @@ class StubFilterListener implements HookListenerInterface
     public function handleFilter(string $value): string
     {
         return $value.'_filtered';
+    }
+}
+
+class StubTransactionalListener implements HookListenerInterface
+{
+    public static bool $executed = false;
+
+    public static function getSubscribedHooks(): array
+    {
+        return [
+            'test.registrar.transactional' => [
+                'method' => 'handleTransactional',
+                'type' => 'action',
+                'sync' => true,
+                'transactional' => true,
+            ],
+        ];
+    }
+
+    public function handle(...$args): void {}
+
+    public function handleTransactional(): void
+    {
+        self::$executed = true;
     }
 }
 

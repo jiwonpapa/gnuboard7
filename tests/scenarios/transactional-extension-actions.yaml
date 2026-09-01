@@ -1,0 +1,22 @@
+feature: transactional-extension-actions
+description: 외부 확장이 호출자 DB 변경과 동일한 트랜잭션에 원자적으로 참여하는 Action 훅 계약
+axes:
+  invocation:
+    - open_transaction
+    - no_transaction
+  listener:
+    - transactional_sync
+    - existing_sync
+    - existing_queued
+  outcome:
+    - success
+    - listener_exception
+effects:
+  - transactional 리스너는 열린 트랜잭션 안에서만 실행된다
+  - transactional 리스너 예외는 호출자 DB 변경까지 롤백시킨다
+  - 기존 sync 및 queued 리스너는 별도 doAction 호출 위치의 계약을 유지한다
+  - 열린 트랜잭션 밖 호출은 즉시 실패한다
+coverage:
+  - tests/Unit/Extension/HookManagerTest.php
+  - tests/Unit/Extension/HookListenerRegistrarTest.php
+  - tests/Feature/Extension/TransactionalActionRollbackTest.php

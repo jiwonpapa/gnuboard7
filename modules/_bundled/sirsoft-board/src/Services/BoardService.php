@@ -402,56 +402,62 @@ class BoardService
         $addToMenu = (bool) ($data['add_to_menu'] ?? false);
         unset($data['permissions'], $data['board_manager_ids'], $data['board_step_ids'], $data['add_to_menu']);
 
-        // 게시판 생성
-        $board = $this->boardRepository->create($data);
+        $board = DB::transaction(function () use ($data, $permissions, $boardManagerIds, $boardStepIds) {
+            // 게시판 생성
+            $board = $this->boardRepository->create($data);
 
-        // 게시판별 관리자/스텝 역할 생성
-        try {
-            $this->createBoardRoles($board);
-            HookManager::doAction('sirsoft-board.roles.after_create', $board);
-        } catch (\Exception $e) {
-            Log::error('Board role creation failed', [
-                'board_id' => $board->id,
-                'slug' => $board->slug,
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id(),
-            ]);
+            // 게시판별 관리자/스텝 역할 생성
+            try {
+                $this->createBoardRoles($board);
+                HookManager::doAction('sirsoft-board.roles.after_create', $board);
+            } catch (\Exception $e) {
+                Log::error('Board role creation failed', [
+                    'board_id' => $board->id,
+                    'slug' => $board->slug,
+                    'error' => $e->getMessage(),
+                    'user_id' => Auth::id(),
+                ]);
 
-            // 역할 생성 실패 시 게시판 삭제 (롤백)
-            $this->boardRepository->delete($board->id);
-            throw $e;
-        }
+                // 역할 생성 실패 시 게시판 삭제 (롤백)
+                $this->boardRepository->delete($board->id);
+                throw $e;
+            }
 
-        // 게시판 권한 생성 (9개 권한 동적 생성)
-        try {
-            // 역할 생성 후, Manager/Step 역할을 permissions에 자동 추가
-            $permissions = $this->injectBoardRolesToPermissions($permissions, $board->slug);
+            // 게시판 권한 생성 (9개 권한 동적 생성)
+            try {
+                // 역할 생성 후, Manager/Step 역할을 permissions에 자동 추가
+                $permissions = $this->injectBoardRolesToPermissions($permissions, $board->slug);
 
-            $this->permissionService->ensureBoardPermissions($board, $permissions);
-            HookManager::doAction('sirsoft-board.permissions.after_create', $board);
-        } catch (\Exception $e) {
-            Log::error('Board permission creation failed', [
-                'board_id' => $board->id,
-                'slug' => $board->slug,
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id(),
-            ]);
+                $this->permissionService->ensureBoardPermissions($board, $permissions);
+                HookManager::doAction('sirsoft-board.permissions.after_create', $board);
+            } catch (\Exception $e) {
+                Log::error('Board permission creation failed', [
+                    'board_id' => $board->id,
+                    'slug' => $board->slug,
+                    'error' => $e->getMessage(),
+                    'user_id' => Auth::id(),
+                ]);
 
-            // 권한 생성 실패 시 역할 및 게시판 삭제 (롤백)
-            $this->deleteBoardRoles($board);
-            $this->boardRepository->delete($board->id);
-            throw $e;
-        }
+                // 권한 생성 실패 시 역할 및 게시판 삭제 (롤백)
+                $this->deleteBoardRoles($board);
+                $this->boardRepository->delete($board->id);
+                throw $e;
+            }
 
-        // 게시판 관리자/스텝 사용자 역할 동기화
-        $syncData = [];
-        if ($boardManagerIds !== null) {
-            $syncData['board_manager_ids'] = $boardManagerIds;
-        }
-        if ($boardStepIds !== null) {
-            $syncData['board_step_ids'] = $boardStepIds;
-        }
-        $this->syncBoardRoleUsers($board, $syncData);
+            // 게시판 관리자/스텝 사용자 역할 동기화
+            $syncData = [];
+            if ($boardManagerIds !== null) {
+                $syncData['board_manager_ids'] = $boardManagerIds;
+            }
+            if ($boardStepIds !== null) {
+                $syncData['board_step_ids'] = $boardStepIds;
+            }
+            $this->syncBoardRoleUsers($board, $syncData);
+
+            HookManager::doTransactionalAction('sirsoft-board.board.after_create', $board, $data);
+
+            return $board;
+        });
 
         // After 훅 - 후처리, 알림, 캐시 등
         HookManager::doAction('sirsoft-board.board.after_create', $board, $data);
@@ -513,31 +519,37 @@ class BoardService
             ];
         }
 
-        // 게시판 수정
-        $updatedBoard = $this->boardRepository->update($id, $data);
+        $updatedBoard = DB::transaction(function () use ($id, $data, $snapshot) {
+            // 게시판 수정
+            $updatedBoard = $this->boardRepository->update($id, $data);
 
-        // 권한 업데이트 (permissions 테이블은 유지, role_permissions만 동기화)
-        if (isset($data['permissions']) && is_array($data['permissions'])) {
-            try {
-                $this->permissionService->updateBoardPermissions($updatedBoard, $data['permissions']);
-                HookManager::doAction('sirsoft-board.permissions.after_update', $updatedBoard);
-            } catch (\Exception $e) {
-                Log::error('게시판 권한 업데이트 실패', [
-                    'board_id' => $updatedBoard->id,
-                    'slug' => $updatedBoard->slug,
-                    'error' => $e->getMessage(),
-                ]);
-                // 권한 업데이트 실패 시에도 게시판 수정은 완료된 상태
+            // 권한 업데이트 (permissions 테이블은 유지, role_permissions만 동기화)
+            if (isset($data['permissions']) && is_array($data['permissions'])) {
+                try {
+                    $this->permissionService->updateBoardPermissions($updatedBoard, $data['permissions']);
+                    HookManager::doAction('sirsoft-board.permissions.after_update', $updatedBoard);
+                } catch (\Exception $e) {
+                    Log::error('게시판 권한 업데이트 실패', [
+                        'board_id' => $updatedBoard->id,
+                        'slug' => $updatedBoard->slug,
+                        'error' => $e->getMessage(),
+                    ]);
+                    // 권한 업데이트 실패 시에도 게시판 수정은 완료된 상태
+                }
             }
-        }
 
-        // 게시판 이름 변경 시 연관 역할명 동기화
-        if (isset($data['name'])) {
-            $this->syncBoardRoleNames($updatedBoard);
-        }
+            // 게시판 이름 변경 시 연관 역할명 동기화
+            if (isset($data['name'])) {
+                $this->syncBoardRoleNames($updatedBoard);
+            }
 
-        // 게시판 관리자/스텝 사용자 역할 동기화
-        $this->syncBoardRoleUsers($updatedBoard, $data);
+            // 게시판 관리자/스텝 사용자 역할 동기화
+            $this->syncBoardRoleUsers($updatedBoard, $data);
+
+            HookManager::doTransactionalAction('sirsoft-board.board.after_update', $updatedBoard, $data, $snapshot);
+
+            return $updatedBoard;
+        });
 
         // After 훅 - 후처리, 알림, 캐시 등
         HookManager::doAction('sirsoft-board.board.after_update', $updatedBoard, $data, $snapshot);
@@ -611,6 +623,8 @@ class BoardService
 
             // 6. 게시판 영구 삭제
             $this->boardRepository->forceDelete($board->id);
+
+            HookManager::doTransactionalAction('sirsoft-board.board.after_delete', $board);
         });
 
         Log::info('Board deleted', [

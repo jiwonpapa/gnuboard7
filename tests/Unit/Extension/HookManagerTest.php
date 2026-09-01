@@ -3,7 +3,9 @@
 namespace Tests\Unit\Extension;
 
 use App\Extension\HookManager;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use LogicException;
 use Tests\TestCase;
 
 /**
@@ -154,6 +156,37 @@ class HookManagerTest extends TestCase
         HookManager::doAction('test.args', 'hello', 42);
 
         $this->assertEquals(['hello', 42], $received);
+    }
+
+    public function test_transactional_action_requires_open_transaction(): void
+    {
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('requires an open database transaction');
+
+        HookManager::doTransactionalAction('test.transaction.outside');
+    }
+
+    public function test_transactional_action_only_runs_transaction_listener(): void
+    {
+        $order = [];
+
+        HookManager::addAction(
+            HookManager::transactionalHookName('test.transaction.order'),
+            function () use (&$order) {
+                $this->assertGreaterThan(0, DB::connection()->transactionLevel());
+                $order[] = 'transactional';
+            }
+        );
+        HookManager::addAction('test.transaction.order', function () use (&$order) {
+            $order[] = 'existing';
+        });
+
+        DB::transaction(function () {
+            HookManager::doTransactionalAction('test.transaction.order');
+            HookManager::doAction('test.transaction.order');
+        });
+
+        $this->assertSame(['transactional', 'existing'], $order);
     }
 
     /**

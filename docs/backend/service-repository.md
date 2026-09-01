@@ -9,7 +9,7 @@
 ```text
 1. RepositoryInterface 주입 필수 (구체 클래스 직접 주입 금지)
 2. CoreServiceProvider에서 Interface-구현체 바인딩
-3. Service에서 훅 실행: before_create → applyFilters → create → after_create
+3. Service에서 훅 실행: before_create → applyFilters → 트랜잭션(create → transactional) → after_create
 4. 검증 로직은 FormRequest에서 (Service에 검증 금지)
 5. 다중 검색은 HasMultipleSearchFilters Trait 사용
 6. Service 에서 Model 직접 인스턴스화 금지 — Repository 의 build/factory 메서드 위임 (가상 모델 합성 포함)
@@ -564,7 +564,7 @@ public function bulkUpdateStatus(array $ids, string $status): int
         return $count;
     });
 
-    // 트랜잭션 외부에서 훅 실행 (실패 시 롤백 방지)
+    // 일반 after 훅은 트랜잭션 외부에서 실행
     HookManager::doAction('core.user.after_bulk_update', $ids, $status, $updatedCount);
 
     return $updatedCount;
@@ -578,8 +578,31 @@ public function bulkUpdateStatus(array $ids, string $status): int
 | **CASCADE 금지** | DB 외래키 CASCADE 대신 Service에서 명시적 삭제 |
 | **원본 데이터 보관** | 삭제 전 `toArray()`로 캡처 → after 훅에서 사용 |
 | **관계 유형별 처리** | `detach()` (다대다), `delete()` (일대다), Service 호출 (복합) |
-| **트랜잭션 내 훅 금지** | 훅은 트랜잭션 **외부**에서 실행 (롤백 시 훅 부작용 방지) |
+| **일반 훅은 트랜잭션 밖** | `doAction()`은 종전처럼 트랜잭션 외부에서 실행 |
+| **원자적 확장은 전용 훅** | 원본 DB 변경과 같은 커밋이 필요한 확장만 `doTransactionalAction()`을 트랜잭션 안에서 실행 |
 | **AttachmentService 사용** | 파일 삭제는 직접 DB 삭제 대신 AttachmentService 통해 처리 |
+
+### 동일 트랜잭션 확장 패턴
+
+캐시 무효화 아웃박스처럼 원본 변경과 반드시 함께 커밋되어야 하는 확장은 전용 Action을 사용한다.
+
+```php
+$user = DB::transaction(function () use ($data) {
+    $user = $this->userRepository->create($data);
+
+    HookManager::doTransactionalAction('core.user.after_create', $user, $data);
+
+    return $user;
+});
+
+// 알림·활동 로그 등 기존 리스너의 실행 위치와 실패 계약은 유지한다.
+HookManager::doAction('core.user.after_create', $user, $data);
+```
+
+- `doTransactionalAction()`은 열린 기본 DB 트랜잭션이 없으면 `LogicException`을 던진다.
+- 전용 리스너는 `sync: true, transactional: true`를 함께 선언한다.
+- 리스너 예외가 원본 변경을 롤백해야 하므로 네트워크 호출·메일 발송·파일 삭제 같은 비가역 부작용은 넣지 않는다.
+- 일반 `doAction()`은 별도로 유지해 기존 확장의 동작 계약을 바꾸지 않는다.
 
 ---
 

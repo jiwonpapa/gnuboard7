@@ -98,13 +98,19 @@ class UserService
                 $this->escalationGuard->assertRoleAssignmentWithinActorCeiling($roleIds);
             }
 
-            $user = $this->userRepository->create($data);
+            $user = DB::transaction(function () use ($data, $roleIds, $originalData) {
+                $user = $this->userRepository->create($data);
 
-            // 역할 동기화
-            if ($roleIds !== null && count($roleIds) > 0) {
-                $user->roles()->sync($roleIds);
-                $user->flushPermissionCaches();
-            }
+                // 역할 동기화
+                if ($roleIds !== null && count($roleIds) > 0) {
+                    $user->roles()->sync($roleIds);
+                    $user->flushPermissionCaches();
+                }
+
+                HookManager::doTransactionalAction('core.user.after_create', $user, $originalData);
+
+                return $user;
+            });
 
             // After 훅: 사용자 객체와 원본 데이터 전달
             HookManager::doAction('core.user.after_create', $user, $originalData);
@@ -258,7 +264,16 @@ class UserService
             // 상태 변경 경유 탈퇴는 **탈퇴까지 같은 트랜잭션**에 넣는다 — 프로필 갱신을
             // 먼저 커밋하고 탈퇴를 따로 커밋하면, 탈퇴가 실패했을 때 이름·이메일 변경만
             // 남아 "전부 성공하거나 전부 취소" 가 그 경로에서만 깨진다.
-            DB::transaction(function () use ($user, $data, $newStatus, $oldStatus, $roleIds, $withdrawViaStatus) {
+            DB::transaction(function () use (
+                $user,
+                $data,
+                $newStatus,
+                $oldStatus,
+                $roleIds,
+                $withdrawViaStatus,
+                $originalData,
+                $snapshot,
+            ) {
                 $this->userRepository->update($user, $data);
 
                 // 상태가 Active 외로 변경되었으면 토큰 삭제 (즉시 로그아웃)
@@ -275,6 +290,8 @@ class UserService
                 if ($withdrawViaStatus) {
                     $this->performWithdrawWrites($user);
                 }
+
+                HookManager::doTransactionalAction('core.user.after_update', $user, $originalData, $snapshot);
             });
 
             // 커밋 후 부수효과 (캐시는 롤백 대상이 아니다)
@@ -367,7 +384,13 @@ class UserService
         $user->tokens()->delete();
 
         // 탈퇴 처리 (suffix 추가 및 상태 변경)
-        return $user->withdraw();
+        $result = $user->withdraw();
+
+        if ($result) {
+            HookManager::doTransactionalAction('core.user.after_withdraw', $user);
+        }
+
+        return $result;
     }
 
     /**
@@ -474,7 +497,7 @@ class UserService
 
             // 마지막 delete 가 FK 등으로 실패하면 역할·동의·토큰만 사라지고 계정은 남는
             // 껍데기 활성 계정이 된다 (실회귀 이력 존재). 전 단계를 하나로 묶는다.
-            $result = DB::transaction(function () use ($user) {
+            $result = DB::transaction(function () use ($user, $userData) {
                 // Before 훅
                 HookManager::doAction('core.user.before_delete', $user);
 
@@ -487,7 +510,10 @@ class UserService
                 // API 토큰 삭제
                 $user->tokens()->delete();
 
-                return $this->userRepository->delete($user);
+                $result = $this->userRepository->delete($user);
+                HookManager::doTransactionalAction('core.user.after_delete', $userData);
+
+                return $result;
             });
 
             // 커밋 성공 후 부수효과
@@ -768,7 +794,7 @@ class UserService
         }
 
         // DB 트랜잭션으로 일괄 업데이트
-        $updatedCount = DB::transaction(function () use ($userIds, $statusEnum) {
+        $updatedCount = DB::transaction(function () use ($userIds, $statusEnum, $uuids, $status) {
             // 타임스탬프 자동 설정
             $updateData = ['status' => $statusEnum->value];
             $updateData = match ($statusEnum) {
@@ -785,6 +811,8 @@ class UserService
             if ($statusEnum !== UserStatus::Active) {
                 $this->userRepository->deleteTokensByUserIds($userIds);
             }
+
+            HookManager::doTransactionalAction('sirsoft-core.user.after_bulk_update', $uuids, $status, $count);
 
             return $count;
         });

@@ -11,7 +11,8 @@
 2. Filter 훅: applyFilters() - 데이터 변형 (type => 'filter' 필수!)
 3. 네이밍: [vendor-module].[entity].[action]_[timing]
 4. 우선순위: 1-5(높음), 10(기본), 15+(낮음)
-5. Service 패턴: before_* → filter_* → 로직 → after_*
+5. 원자적 캐시/아웃박스: sync + transactional → Service 트랜잭션 안에서 실행
+6. Service 패턴: before_* → filter_* → 로직 → transactional → after_*
 ```
 
 ---
@@ -464,15 +465,15 @@ public static function getSubscribedHooks(): array
 }
 ```
 
-#### 호출자 트랜잭션 안에서 끝나야 하는 처리는 `sync` 가 필수다
+#### 호출자 트랜잭션 안에서 끝나야 하는 처리는 `transactional` 을 선언한다
 
 기본값(큐 래핑)은 `DispatchHookListenerJob` 의 `afterCommit` 정책을 탄다. 즉 **호출자 트랜잭션이 커밋된 뒤에** 실행된다 — 큐 드라이버가 `sync` 여도 마찬가지다(같은 요청 안에서, 커밋 이후에 실행된다).
 
-따라서 훅 안에서 실패했을 때 **호출자의 작업을 되돌려야 하는 처리**는 기본값으로 두면 안 된다. 되돌릴 대상이 이미 커밋된 뒤라 예외를 던져도 롤백되지 않고, 호출자는 오류 응답을 받는데 데이터는 남는다.
+따라서 훅 안에서 실패했을 때 **호출자의 작업을 되돌려야 하는 처리**는 `sync: true`와 `transactional: true`를 함께 선언해야 한다. `transactional` 리스너는 일반 `doAction()`에서는 실행되지 않고, Service가 열린 DB 트랜잭션 안에서 `doTransactionalAction()`을 호출할 때만 실행된다. 예외는 호출자까지 전파되어 원본 변경과 리스너의 DB 변경이 함께 롤백된다.
 
 | 판정 | 예 |
 |------|-----|
-| `sync` 필수 | 쿠폰 차감·복원, 적립금 차감·복원 등 실패 시 호출자 트랜잭션을 되돌려야 하는 처리 |
+| `sync + transactional` 필수 | 캐시 무효화 아웃박스처럼 원본 변경과 같은 커밋에 들어가야 하는 처리 |
 | 기본값(큐) 유지 | 활동 로그, 알림 발송, 통계 갱신 등 실패해도 호출자를 되돌리지 않는 후속 처리 |
 
 선언만으로는 검증되지 않는다 — 회귀 테스트는 리스너를 손으로 `addAction` 하지 말고 실제 등록 경로(`HookListenerRegistrar::register()`)를 태운 뒤, **호출자 트랜잭션 안에서 반영되는지**와 **예외가 호출자를 롤백시키는지**를 단언한다. 손으로 등록하면 프로덕션이 쓰지 않는 경로를 검증하게 되어, 커밋 이후 실행 문제를 그대로 통과시킨다.
@@ -485,6 +486,7 @@ public static function getSubscribedHooks(): array
 | `priority` | int | `10` | 실행 우선순위 (낮을수록 먼저) |
 | `type` | string | `'action'` | `'action'` 또는 `'filter'` |
 | `sync` | bool | `false` | `true`: 큐 드라이버 무관하게 동기 실행 |
+| `transactional` | bool | `false` | `true`: 동일 트랜잭션 전용 Action으로 등록. `sync: true` 필수 |
 
 ### 내부 구현
 
@@ -492,7 +494,10 @@ public static function getSubscribedHooks(): array
 
 - Action + `sync: false` (기본) → `DispatchHookListenerJob`으로 래핑하여 `dispatch()`
 - Action + `sync: true` → 기존 방식 동기 실행
+- Action + `sync: true, transactional: true` → 내부 전용 훅으로 등록되어 `doTransactionalAction()`에서만 실행
 - Filter → 항상 동기 실행
+
+`transactional: true`를 Filter 또는 `sync: false`와 조합하면 등록하지 않고 오류 로그를 남긴다. 외부 확장은 `HookManager::TRANSACTIONAL_ACTIONS_VERSION`으로 이 capability를 확인할 수 있다.
 
 `DispatchHookListenerJob`은 리스너 클래스명과 메서드명을 직렬화하고, 큐 워커에서 DI 컨테이너로 리스너를 재생성하여 호출합니다.
 
@@ -818,6 +823,7 @@ class Module implements ModuleInterface
 namespace Modules\Sirsoft\Ecommerce\Services;
 
 use App\Extension\HookManager;
+use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Ecommerce\Repositories\ProductRepository;
 
 class ProductService
@@ -834,8 +840,18 @@ class ProductService
         // 2. 필터 훅 - 데이터 변형
         $data = HookManager::applyFilters('sirsoft-ecommerce.product.filter_create_data', $data);
 
-        // 3. 비즈니스 로직 실행
-        $product = $this->productRepository->create($data);
+        // 3. 원본 변경 + 동일 트랜잭션 확장 작업
+        $product = DB::transaction(function () use ($data) {
+            $product = $this->productRepository->create($data);
+
+            HookManager::doTransactionalAction(
+                'sirsoft-ecommerce.product.after_create',
+                $product,
+                $data,
+            );
+
+            return $product;
+        });
 
         // 4. After 훅 - 후처리, 알림, 캐시 등
         HookManager::doAction('sirsoft-ecommerce.product.after_create', $product, $data);
@@ -858,6 +874,8 @@ class ProductService
     }
 }
 ```
+
+일반 `after_*` 리스너는 종전 위치의 `doAction()`으로 계속 실행한다. Service는 같은 이름의 `doTransactionalAction()`을 DB 변경 직후 트랜잭션 안에서 추가 호출한다. 이중 호출처럼 보이지만 리스너 등록 공간이 분리되어 같은 리스너가 중복 실행되지는 않는다.
 
 ---
 

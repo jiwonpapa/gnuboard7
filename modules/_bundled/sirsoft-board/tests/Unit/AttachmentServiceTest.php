@@ -364,6 +364,44 @@ class AttachmentServiceTest extends ModuleTestCase
     }
 
     #[Test]
+    public function test_link_temp_attachments_preserves_old_file_when_transactional_listener_fails(): void
+    {
+        $slug = 'notice';
+        $tempKey = 'temp-rollback';
+        $postId = 5;
+        $oldPath = "{$slug}/temp/{$tempKey}/uuid.pdf";
+
+        $attachment = Mockery::mock(Attachment::class)->makePartial();
+        $attachment->path = $oldPath;
+        $attachment->stored_filename = 'uuid.pdf';
+        $attachment->id = 1;
+        $attachment->shouldReceive('update')->once()->andReturn(true);
+
+        $this->repository->shouldReceive('getByTempKey')
+            ->once()
+            ->with($slug, $tempKey)
+            ->andReturn(new EloquentCollection([$attachment]));
+        $this->storage->shouldReceive('get')->once()->with('attachments', $oldPath)->andReturn('file-content');
+        $this->storage->shouldReceive('put')->once()->andReturn(true);
+        $this->storage->shouldNotReceive('delete');
+        $this->storage->shouldNotReceive('deleteDirectory');
+
+        HookManager::addAction(
+            HookManager::transactionalHookName('sirsoft-board.attachment.after_link'),
+            static fn () => throw new \RuntimeException('listener failed'),
+        );
+
+        try {
+            $this->service->linkTempAttachmentsWithMove($slug, $tempKey, $postId);
+            $this->fail('transactional 리스너 예외가 호출자에게 전파되어야 합니다.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('listener failed', $e->getMessage());
+        } finally {
+            HookManager::resetAll();
+        }
+    }
+
+    #[Test]
     public function test_link_temp_attachments_with_move_handles_empty_temp_files(): void
     {
         // Arrange

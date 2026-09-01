@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Modules\Sirsoft\Board\Enums\PostStatus;
 use Modules\Sirsoft\Board\Exceptions\CommentDepthExceededException;
 use Modules\Sirsoft\Board\Exceptions\PostNotCommentableException;
@@ -368,8 +369,12 @@ class CommentService
             $data['depth'] = 0;
         }
 
-        // 댓글 생성
-        $comment = $this->commentRepository->create($slug, $data);
+        $comment = DB::transaction(function () use ($slug, $data) {
+            $comment = $this->commentRepository->create($slug, $data);
+            HookManager::doTransactionalAction('sirsoft-board.comment.after_create', $comment, $slug);
+
+            return $comment;
+        });
 
         // 훅: after_create
         HookManager::doAction('sirsoft-board.comment.after_create', $comment, $slug);
@@ -403,8 +408,12 @@ class CommentService
         // 훅: filter_update_data
         $data = HookManager::applyFilters('sirsoft-board.comment.filter_update_data', $data, $comment, $slug);
 
-        // 댓글 수정
-        $updatedComment = $this->commentRepository->update($slug, $id, $data);
+        $updatedComment = DB::transaction(function () use ($slug, $id, $data, $snapshot) {
+            $updatedComment = $this->commentRepository->update($slug, $id, $data);
+            HookManager::doTransactionalAction('sirsoft-board.comment.after_update', $updatedComment, $slug, $snapshot);
+
+            return $updatedComment;
+        });
 
         // 훅: after_update
         HookManager::doAction('sirsoft-board.comment.after_update', $updatedComment, $slug, $snapshot);
@@ -433,9 +442,13 @@ class CommentService
         // 작업 이력 생성
         $actionLog = $this->buildActionLog('delete', null);
 
-        // 상태 변경 (deleted로 변경, trigger_type 기록) 후 소프트 삭제
-        $deletedComment = $this->commentRepository->updateStatus($slug, $id, 'deleted', $actionLog, $triggerType);
-        $deletedComment->delete();
+        $deletedComment = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType) {
+            $deletedComment = $this->commentRepository->updateStatus($slug, $id, 'deleted', $actionLog, $triggerType);
+            $deletedComment->delete();
+            HookManager::doTransactionalAction('sirsoft-board.comment.after_delete', $deletedComment, $slug);
+
+            return $deletedComment;
+        });
 
         // 훅: after_delete
         HookManager::doAction('sirsoft-board.comment.after_delete', $deletedComment, $slug);
@@ -473,8 +486,12 @@ class CommentService
         // 작업 이력 생성
         $actionLog = $this->buildActionLog('blind', $reason);
 
-        // 상태 변경
-        $blindedComment = $this->commentRepository->updateStatus($slug, $id, 'blinded', $actionLog, $triggerType);
+        $blindedComment = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType) {
+            $blindedComment = $this->commentRepository->updateStatus($slug, $id, 'blinded', $actionLog, $triggerType);
+            HookManager::doTransactionalAction('sirsoft-board.comment.after_blind', $blindedComment, $slug);
+
+            return $blindedComment;
+        });
 
         // 훅: after_blind
         HookManager::doAction('sirsoft-board.comment.after_blind', $blindedComment, $slug);
@@ -509,8 +526,12 @@ class CommentService
         // 작업 이력 생성
         $actionLog = $this->buildActionLog('restore', $reason);
 
-        // 상태 변경 (published로 복원)
-        $restoredComment = $this->commentRepository->updateStatus($slug, $id, 'published', $actionLog, $triggerType);
+        $restoredComment = DB::transaction(function () use ($slug, $id, $actionLog, $triggerType) {
+            $restoredComment = $this->commentRepository->updateStatus($slug, $id, 'published', $actionLog, $triggerType);
+            HookManager::doTransactionalAction('sirsoft-board.comment.after_restore', $restoredComment, $slug);
+
+            return $restoredComment;
+        });
 
         // 훅: after_restore
         HookManager::doAction('sirsoft-board.comment.after_restore', $restoredComment, $slug);

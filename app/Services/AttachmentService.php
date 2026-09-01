@@ -97,23 +97,41 @@ class AttachmentService
             }
         }
 
-        // DB에 저장
-        $attachment = $this->repository->create([
-            'attachmentable_type' => $attachmentableType,
-            'attachmentable_id' => $attachmentableId,
-            'source_type' => $sourceType,
-            'source_identifier' => $sourceIdentifier,
-            'original_filename' => $file->getClientOriginalName(),
-            'stored_filename' => $storedFilename,
-            'disk' => $disk,
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'size' => $file->getSize(),
-            'collection' => $collection,
-            'order' => $maxOrder + 1,
-            'meta' => ! empty($meta) ? $meta : null,
-            'created_by' => Auth::id(),
-        ]);
+        $attachment = DB::transaction(function () use (
+            $attachmentableType,
+            $attachmentableId,
+            $sourceType,
+            $sourceIdentifier,
+            $file,
+            $storedFilename,
+            $disk,
+            $path,
+            $collection,
+            $maxOrder,
+            $meta,
+        ) {
+            // DB에 저장
+            $attachment = $this->repository->create([
+                'attachmentable_type' => $attachmentableType,
+                'attachmentable_id' => $attachmentableId,
+                'source_type' => $sourceType,
+                'source_identifier' => $sourceIdentifier,
+                'original_filename' => $file->getClientOriginalName(),
+                'stored_filename' => $storedFilename,
+                'disk' => $disk,
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'size' => $file->getSize(),
+                'collection' => $collection,
+                'order' => $maxOrder + 1,
+                'meta' => ! empty($meta) ? $meta : null,
+                'created_by' => Auth::id(),
+            ]);
+
+            HookManager::doTransactionalAction('core.attachment.after_upload', $attachment);
+
+            return $attachment;
+        });
 
         Log::info('첨부파일 업로드 완료', [
             'attachment_id' => $attachment->id,
@@ -277,20 +295,23 @@ class AttachmentService
                 $this->repository->reorderAfterDelete($attachmentableType, $attachmentableId, $collection);
             }
 
+            HookManager::doTransactionalAction('core.attachment.after_delete', $attachment);
+
             return $deleted;
         });
 
         if ($result) {
-            // 커밋 후 스토리지 파일 삭제 (실패해도 DB 는 되돌리지 않는다)
-            try {
-                $this->storage->withDisk($attachment->disk)->delete('', $attachment->path);
-            } catch (\Throwable $e) {
-                Log::warning('첨부파일 스토리지 삭제 실패 (고아 파일 잔존)', [
-                    'attachment_id' => $id,
-                    'path' => $attachment->path,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+            $this->afterCommit(function () use ($attachment, $id) {
+                try {
+                    $this->storage->withDisk($attachment->disk)->delete('', $attachment->path);
+                } catch (\Throwable $e) {
+                    Log::warning('첨부파일 스토리지 삭제 실패 (고아 파일 잔존)', [
+                        'attachment_id' => $id,
+                        'path' => $attachment->path,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            });
 
             Log::info('첨부파일 삭제 완료', [
                 'attachment_id' => $id,
@@ -316,7 +337,10 @@ class AttachmentService
         // Before 훅
         HookManager::doAction('core.attachment.before_reorder', $orderData);
 
-        $this->repository->reorder($orderData);
+        DB::transaction(function () use ($orderData) {
+            $this->repository->reorder($orderData);
+            HookManager::doTransactionalAction('core.attachment.after_reorder', $orderData);
+        });
 
         // After 훅
         HookManager::doAction('core.attachment.after_reorder', $orderData);
@@ -524,20 +548,33 @@ class AttachmentService
 
         // DB 일괄 삭제를 먼저 커밋한다 — 루프 중간에 실패하면 파일만 일부 사라지고
         // DB 행은 전부 남아 다운로드가 404 가 되기 때문이다.
-        $count = DB::transaction(fn () => $this->repository->deleteBySourceIdentifier($identifier));
+        $count = DB::transaction(function () use ($identifier, $attachmentIds, $snapshots) {
+            $count = $this->repository->deleteBySourceIdentifier($identifier);
+            HookManager::doTransactionalAction(
+                'core.attachment.after_bulk_delete',
+                $identifier,
+                $count,
+                $attachmentIds,
+                $snapshots,
+            );
 
-        // 커밋 후 파일 정리 (실패해도 DB 는 되돌리지 않는다 — 고아 파일은 비파괴)
-        foreach ($files as $file) {
-            try {
-                $this->storage->withDisk($file['disk'])->delete('', $file['path']);
-            } catch (\Throwable $e) {
-                Log::warning('첨부파일 스토리지 일괄 삭제 실패 (고아 파일 잔존)', [
-                    'source_identifier' => $identifier,
-                    'path' => $file['path'],
-                    'error' => $e->getMessage(),
-                ]);
+            return $count;
+        });
+
+        // 가장 바깥 트랜잭션 커밋 후 파일 정리 (실패해도 DB 는 되돌리지 않는다).
+        $this->afterCommit(function () use ($files, $identifier) {
+            foreach ($files as $file) {
+                try {
+                    $this->storage->withDisk($file['disk'])->delete('', $file['path']);
+                } catch (\Throwable $e) {
+                    Log::warning('첨부파일 스토리지 일괄 삭제 실패 (고아 파일 잔존)', [
+                        'source_identifier' => $identifier,
+                        'path' => $file['path'],
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
-        }
+        });
 
         Log::info('소스 식별자 기준 첨부파일 일괄 삭제', [
             'source_identifier' => $identifier,
@@ -548,5 +585,16 @@ class AttachmentService
         HookManager::doAction('core.attachment.after_bulk_delete', $identifier, $count, $attachmentIds, $snapshots);
 
         return $count;
+    }
+
+    private function afterCommit(callable $callback): void
+    {
+        if (DB::connection()->transactionLevel() > 0) {
+            DB::afterCommit($callback);
+
+            return;
+        }
+
+        $callback();
     }
 }

@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Page\Exceptions\AttachmentLimitExceededException;
@@ -121,20 +122,35 @@ class PageAttachmentService
 
         $maxOrder = $this->attachmentRepository->getMaxOrder($pageId, $tempKey);
 
-        $attachment = $this->attachmentRepository->create([
-            'page_id' => $pageId,
-            'temp_key' => $pageId ? null : $tempKey,
-            'original_filename' => $file->getClientOriginalName(),
-            'stored_filename' => $storedFilename,
-            'disk' => $this->storage->getDisk(),
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'size' => $file->getSize(),
-            'collection' => $collection,
-            'order' => $maxOrder + 1,
-            'meta' => $meta,
-            'created_by' => Auth::id(),
-        ]);
+        $attachment = DB::transaction(function () use (
+            $pageId,
+            $tempKey,
+            $file,
+            $storedFilename,
+            $path,
+            $collection,
+            $maxOrder,
+            $meta,
+        ) {
+            $attachment = $this->attachmentRepository->create([
+                'page_id' => $pageId,
+                'temp_key' => $pageId ? null : $tempKey,
+                'original_filename' => $file->getClientOriginalName(),
+                'stored_filename' => $storedFilename,
+                'disk' => $this->storage->getDisk(),
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'size' => $file->getSize(),
+                'collection' => $collection,
+                'order' => $maxOrder + 1,
+                'meta' => $meta,
+                'created_by' => Auth::id(),
+            ]);
+
+            HookManager::doTransactionalAction('sirsoft-page.attachment.after_upload', $attachment);
+
+            return $attachment;
+        });
 
         HookManager::doAction('sirsoft-page.attachment.after_upload', $attachment);
 
@@ -157,32 +173,53 @@ class PageAttachmentService
 
         // 개수 상한 최종 방어선 — FormRequest 는 단건 업로드만 보므로 temp_key 연결 경로가 그대로 뚫린다
         $this->assertAttachmentCountWithin($pageId, $tempAttachments->count());
-        $linkedCount = 0;
+        $moves = [];
 
-        foreach ($tempAttachments as $index => $attachment) {
-            // 최종 경로 생성
+        foreach ($tempAttachments as $attachment) {
+            $oldPath = $attachment->path;
             $newPath = date('Y/m/d').'/'.$attachment->stored_filename;
 
-            // 파일 물리적 이동 (get + put + delete)
-            $content = $this->storage->get('attachments', $attachment->path);
+            // 새 경로에 먼저 복사하고 원본은 최종 커밋 뒤에 제거합니다.
+            $content = $this->storage->get('attachments', $oldPath);
             if ($content) {
                 $this->storage->put('attachments', $newPath, $content);
-                $this->storage->delete('attachments', $attachment->path);
+                $moves[(int) $attachment->id] = ['old' => $oldPath, 'new' => $newPath];
+            } else {
+                $moves[(int) $attachment->id] = ['old' => $oldPath, 'new' => $oldPath];
             }
-
-            // DB 업데이트: page_id 설정, temp_key 제거, path 변경, order 재배치 (조회 순서 = 업로드 순서)
-            $this->attachmentRepository->update($attachment, [
-                'page_id' => $pageId,
-                'temp_key' => null,
-                'path' => $newPath,
-                'order' => $index + 1,
-            ]);
-
-            $linkedCount++;
         }
 
-        // 임시 디렉토리 정리
-        $this->storage->deleteDirectory('attachments', 'temp/'.$tempKey);
+        $linkedCount = DB::transaction(function () use ($tempAttachments, $moves, $pageId) {
+            $linkedCount = 0;
+
+            foreach ($tempAttachments as $index => $attachment) {
+                $newPath = $moves[(int) $attachment->id]['new'];
+
+                // DB 업데이트: page_id 설정, temp_key 제거, path 변경, order 재배치 (조회 순서 = 업로드 순서)
+                $this->attachmentRepository->update($attachment, [
+                    'page_id' => $pageId,
+                    'temp_key' => null,
+                    'path' => $newPath,
+                    'order' => $index + 1,
+                ]);
+
+                $linkedCount++;
+            }
+
+            return $linkedCount;
+        });
+
+        $this->afterCommit(function () use ($moves, $tempKey) {
+            foreach ($moves as $move) {
+                if ($move['old'] !== $move['new']) {
+                    $this->storage->delete('attachments', $move['old']);
+                }
+            }
+
+            if (collect($moves)->every(fn (array $move) => $move['old'] !== $move['new'])) {
+                $this->storage->deleteDirectory('attachments', 'temp/'.$tempKey);
+            }
+        });
 
         return $linkedCount;
     }
@@ -199,15 +236,30 @@ class PageAttachmentService
 
         HookManager::doAction('sirsoft-page.attachment.before_delete', $attachment);
 
-        // 물리 파일 삭제
-        $this->storage->delete('attachments', $attachment->path);
+        $result = DB::transaction(function () use ($attachment) {
+            $result = $this->attachmentRepository->delete($attachment);
+            HookManager::doTransactionalAction('sirsoft-page.attachment.after_delete', $attachment);
 
-        // DB 소프트 삭제
-        $result = $this->attachmentRepository->delete($attachment);
+            return $result;
+        });
+
+        // 중첩 호출이면 가장 바깥 트랜잭션 커밋 뒤에 물리 파일을 지웁니다.
+        $this->afterCommit(fn () => $this->storage->delete('attachments', $attachment->path));
 
         HookManager::doAction('sirsoft-page.attachment.after_delete', $attachment);
 
         return $result;
+    }
+
+    private function afterCommit(callable $callback): void
+    {
+        if (DB::connection()->transactionLevel() > 0) {
+            DB::afterCommit($callback);
+
+            return;
+        }
+
+        $callback();
     }
 
     /**
@@ -330,7 +382,12 @@ class PageAttachmentService
 
         HookManager::doAction('sirsoft-page.attachment.before_reorder', $orders);
 
-        $result = $this->attachmentRepository->reorder($orders);
+        $result = DB::transaction(function () use ($orders) {
+            $result = $this->attachmentRepository->reorder($orders);
+            HookManager::doTransactionalAction('sirsoft-page.attachment.after_reorder', $orders);
+
+            return $result;
+        });
 
         HookManager::doAction('sirsoft-page.attachment.after_reorder', $orders);
 
