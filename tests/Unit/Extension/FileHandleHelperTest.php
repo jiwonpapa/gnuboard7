@@ -116,11 +116,13 @@ class FileHandleHelperTest extends TestCase
 
     /**
      * releaseLocks 출력 콜백이 호출되는지 확인합니다 (잠금 있는 경우).
-     *
-     * @requires OS Windows
      */
     public function test_release_locks_calls_output_callback(): void
     {
+        if (! FileHandleHelper::isWindows()) {
+            $this->markTestSkipped('Windows 파일 잠금 감지 전용 테스트');
+        }
+
         $messages = [];
         $callback = function (string $message) use (&$messages) {
             $messages[] = $message;
@@ -135,11 +137,13 @@ class FileHandleHelperTest extends TestCase
 
     /**
      * Windows에서 파일 잠금 감지가 동작하는지 통합 테스트합니다.
-     *
-     * @requires OS Windows
      */
     public function test_detect_locked_file_on_windows(): void
     {
+        if (! FileHandleHelper::isWindows()) {
+            $this->markTestSkipped('Windows 파일 잠금 감지 전용 테스트');
+        }
+
         $filePath = $this->tempDir.DIRECTORY_SEPARATOR.'locked.txt';
         file_put_contents($filePath, 'locked content');
 

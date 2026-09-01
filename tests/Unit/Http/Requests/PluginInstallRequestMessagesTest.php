@@ -5,6 +5,7 @@ namespace Tests\Unit\Http\Requests;
 use App\Http\Requests\Plugin\InstallPluginFromFileRequest;
 use App\Http\Requests\Plugin\InstallPluginFromGithubRequest;
 use App\Http\Requests\Plugin\PreviewPluginManifestRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -74,9 +75,8 @@ class PluginInstallRequestMessagesTest extends TestCase
 
     /**
      * ko/en 양쪽에 7키가 모두 정의되어 있어야 한다 (한쪽만 있으면 로케일에 따라 회귀).
-     *
-     * @dataProvider localeProvider
      */
+    #[DataProvider('localeProvider')]
     public function test_install_validation_keys_defined_in_all_base_locales(string $locale): void
     {
         $keys = [

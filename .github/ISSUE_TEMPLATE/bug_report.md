@@ -30,7 +30,7 @@ assignees: ''
 
 - **코어 버전**: <!-- 예: 7.0.2 / config/app.php 의 APP_VERSION 또는 관리자 > 정보 화면 -->
 - **업그레이드 이슈인 경우 — 업그레이드 전 버전 → 후 버전**: <!-- 예: 7.0.0-beta.7 → 7.0.2 -->
-- **PHP 버전**: <!-- 예: 8.2.x / php -v -->
+- **PHP 버전**: <!-- 예: 8.3.x / php -v -->
 - **웹서버·실행 방식**: <!-- 예: Apache + mod_php / Nginx + PHP-FPM / 공유호스팅 -->
 - **DB**: <!-- 예: MySQL 8.0 / MariaDB 10.x -->
 - **OS**: <!-- 예: Ubuntu 24.04 / Windows 11 -->

@@ -418,7 +418,7 @@ class Module implements ModuleInterface
         }
     ],
     "require": {
-        "php": "^8.2"
+        "php": "^8.3"
     },
     "autoload": {
         "psr-4": {
@@ -436,7 +436,7 @@ class Module implements ModuleInterface
 {
     "name": "modules/sirsoft-ecommerce",
     "require": {
-        "php": "^8.2",
+        "php": "^8.3",
         "stripe/stripe-php": "^13.0",
         "intervention/image": "^3.0"
     },
@@ -483,7 +483,7 @@ Factory 또는 Seeder를 사용하는 모듈은 **반드시** composer.json에 �
         }
     },
     "require": {
-        "php": "^8.2"
+        "php": "^8.3"
     }
 }
 ```

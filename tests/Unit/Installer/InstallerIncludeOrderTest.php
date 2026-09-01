@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\Installer;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -150,11 +151,10 @@ class InstallerIncludeOrderTest extends TestCase
      * 단위 테스트는 함수를 직접 호출하므로 이 축을 잡지 못한다 — 엔드포인트의 조립
      * 계층을 재현해야만 검출된다.
      *
-     * @dataProvider endpointChainProvider
-     *
      * @param  array<int, string>  $chain  엔드포인트의 top-level require 순서
      * @param  array<int, string>  $requiredFunctions  그 엔드포인트가 호출하는 함수들
      */
+    #[DataProvider('endpointChainProvider')]
     public function test_endpoint_require_chain_defines_all_functions_it_calls(
         string $endpoint,
         array $chain,

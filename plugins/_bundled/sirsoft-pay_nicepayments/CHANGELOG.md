@@ -4,6 +4,13 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [1.0.3] - 2026-09-01
+
+### Changed
+
+- Laravel 13의 새 CSRF 미들웨어 이름을 사용하도록 갱신했습니다.
+- 코어 최소 요구 버전을 8.0.0으로 상향했습니다.
+
 ## [1.0.2] - 2026-08-19
 
 ### Security

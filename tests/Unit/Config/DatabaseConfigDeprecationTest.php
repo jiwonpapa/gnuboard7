@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\Config;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -72,9 +73,8 @@ class DatabaseConfigDeprecationTest extends TestCase
      * 미설정(null) / 빈 문자열('') / 명시값 세 케이스를 모두 검증한다. 특히 빈 문자열
      * 케이스는 config 가 `env('DB_READ_HOST', default)` (중첩 env) 로 되돌아가면
      * fallback 이 무력화되므로(env() 가 ''를 반환) 이 테스트가 그 회귀를 차단한다.
-     *
-     * @dataProvider readFallbackProvider
      */
+    #[DataProvider('readFallbackProvider')]
     public function test_read_connection_falls_back_to_write_when_read_env_empty(
         ?string $readHost,
         string $expectedHost

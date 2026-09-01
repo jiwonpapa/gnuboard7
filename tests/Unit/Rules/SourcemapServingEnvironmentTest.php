@@ -86,7 +86,7 @@ class SourcemapServingEnvironmentTest extends TestCase
      * @param  class-string  $ruleClass  규칙 클래스
      */
     #[DataProvider('ruleProvider')]
-    public function test_non_sourcemap_extensions_are_environment_independent(string $ruleClass): void
+    public function test_non_sourcemap_extensions_are_environment_independent(string $ruleClass, string $_sourcemapPath): void
     {
         $this->app->detectEnvironment(fn () => 'production');
         $production = $ruleClass::getAllowedExtensions();

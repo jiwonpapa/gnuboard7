@@ -3,7 +3,7 @@
 namespace Tests\Unit\Installer;
 
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
-use PHPUnit\Framework\Attributes\RunClassInSeparateProcess;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -24,7 +24,7 @@ use PHPUnit\Framework\TestCase;
  *  - hidden=true 매니페스트는 제외됨
  *  - 동일 디렉토리에 다수 패키지(코어 + 확장 + 동일 확장의 다중 locale)가 모두 노출됨
  */
-#[RunClassInSeparateProcess]
+#[RunTestsInSeparateProcesses]
 #[PreserveGlobalState(false)]
 class ScanLanguagePacksTest extends TestCase
 {

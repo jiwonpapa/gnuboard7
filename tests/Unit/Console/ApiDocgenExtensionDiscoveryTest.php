@@ -151,7 +151,7 @@ class ApiDocgenExtensionDiscoveryTest extends TestCase
             'uri' => 'api/modules/sirsoft-page/pages/{slug}',
             'method' => 'GET',
             'domain_group' => 'pages',
-            'path_params' => ['slug'],
+            'path_params' => [],
             'path_bindings' => [],
         ];
         $sampleMap = [

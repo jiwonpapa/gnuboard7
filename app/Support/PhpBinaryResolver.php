@@ -16,9 +16,11 @@ class PhpBinaryResolver
      * @var array<string>
      */
     private const COMMON_PHP_PATHS = [
+        '/usr/local/php85/bin/php',
         '/usr/local/php84/bin/php',
         '/usr/local/php83/bin/php',
         '/usr/local/php82/bin/php',
+        '/usr/bin/php8.5',
         '/usr/bin/php8.4',
         '/usr/bin/php8.3',
         '/usr/bin/php8.2',
@@ -31,7 +33,7 @@ class PhpBinaryResolver
      *
      * @var string
      */
-    private const MIN_PHP_VERSION = '8.2.0';
+    private const MIN_PHP_VERSION = '8.3.0';
 
     /**
      * Laravel 설정에서 PHP 바이너리 경로를 반환합니다.
@@ -141,7 +143,7 @@ class PhpBinaryResolver
             ];
         }
 
-        // 버전 파싱 (예: "PHP 8.2.15 (cli) ...")
+        // 버전 파싱 (예: "PHP 8.5.3 (cli) ...")
         $outputStr = implode("\n", $output);
         if (preg_match('/PHP\s+(\d+\.\d+\.\d+)/', $outputStr, $matches)) {
             $version = $matches[1];

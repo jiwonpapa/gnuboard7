@@ -23,11 +23,11 @@ class IdentityDomainEnumsTest extends TestCase
     // IdentityVerificationPurpose
     // ========================================================================
 
-    public function test_verification_purpose_has_four_core_cases(): void
+    public function test_verification_purpose_has_five_core_cases(): void
     {
-        $this->assertCount(4, IdentityVerificationPurpose::cases());
+        $this->assertCount(5, IdentityVerificationPurpose::cases());
         $this->assertSame(
-            ['signup', 'password_reset', 'self_update', 'sensitive_action'],
+            ['signup', 'password_reset', 'self_update', 'sensitive_action', 'login'],
             IdentityVerificationPurpose::values(),
         );
     }

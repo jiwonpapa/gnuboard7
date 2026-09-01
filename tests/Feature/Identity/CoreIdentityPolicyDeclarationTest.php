@@ -5,6 +5,7 @@ namespace Tests\Feature\Identity;
 use App\Models\IdentityPolicy;
 use Database\Seeders\IdentityPolicySeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -34,9 +35,7 @@ class CoreIdentityPolicyDeclarationTest extends TestCase
         $this->assertSame(9, $count, '코어 정책은 정확히 9건이어야 함 (config/core.php 의 identity_policies 블록)');
     }
 
-    /**
-     * @dataProvider coreDeclarationProvider
-     */
+    #[DataProvider('coreDeclarationProvider')]
     public function test_core_policy_matches_declaration(string $key, array $expected): void
     {
         $policy = IdentityPolicy::where('key', $key)->first();

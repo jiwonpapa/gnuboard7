@@ -602,7 +602,7 @@ HookManager::addFilter(
 
 ### 외부 문서
 
-- [Laravel 보안 가이드](https://laravel.com/docs/12.x/authentication)
+- [Laravel 보안 가이드](https://laravel.com/docs/13.x/authentication)
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 
 ---

@@ -74,10 +74,9 @@ class ExtensionAutoloadCacheGuardTest extends TestCase
      */
     public function test_generate_autoload_file_preserves_existing_map_when_db_reports_none_but_directories_exist(): void
     {
-        $this->assertNotEmpty(
-            $this->installedLookingExtensionDirectories(),
-            '이 테스트는 디스크에 활성 확장 디렉토리가 존재하는 저장소에서만 유효합니다.'
-        );
+        if ($this->installedLookingExtensionDirectories() === []) {
+            $this->markTestSkipped('디스크에 활성 확장 디렉토리가 있는 설치 환경에서만 검증합니다.');
+        }
 
         // RefreshDatabase 로 modules/plugins 테이블은 비어 있다 (= DB 설치 목록 0건).
         $manager = $this->managerWritingTo($this->tmpCachePath);
@@ -106,10 +105,9 @@ class ExtensionAutoloadCacheGuardTest extends TestCase
      */
     public function test_generate_autoload_file_does_not_touch_real_cache_path_in_testing_env(): void
     {
-        $this->assertNotNull(
-            $this->realCacheBackup,
-            '이 테스트는 실 오토로드 캐시가 생성된 환경에서만 유효합니다 (extension:update-autoload 선행 필요).'
-        );
+        if ($this->realCacheBackup === null) {
+            $this->markTestSkipped('실 오토로드 캐시가 생성된 설치 환경에서만 검증합니다.');
+        }
 
         app(ExtensionManager::class)->generateAutoloadFile();
 

@@ -16,6 +16,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Modules\Sirsoft\Board\Module;
 use Modules\Sirsoft\Board\Tests\ModuleTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * 게시판 모듈이 module.php::getIdentityPolicies() 로 선언한 정책이
@@ -234,9 +235,8 @@ class BoardIdentityPolicyDeclarationTest extends ModuleTestCase
 
     /**
      * 보드 4개 정책 라이프사이클 매트릭스 — Service-level (admin scope, sensitive_action purpose).
-     *
-     * @dataProvider boardLifecycleProvider
      */
+    #[DataProvider('boardLifecycleProvider')]
     public function test_board_policy_full_service_lifecycle(string $policyKey, int $graceMinutes): void
     {
         $admin = $this->adminUser();

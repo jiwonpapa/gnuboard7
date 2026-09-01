@@ -1,11 +1,11 @@
-# Gnuboard7 7.0.9 Performance Lab
+# Gnuboard7 8.0.0 Laravel 13 Lab
 
-공식 그누보드7 `7.0.9` 소스를 기준으로 더미데이터·A/B 하네스와 `7.0.5`에서 수행한 성능 실험 자료를 공개하는 비공식 연구 포크입니다.
+공식 그누보드7 `7.0.9` 소스를 기준으로 Laravel 13 전환과 더미데이터·A/B 하네스를 검증하는 비공식 연구 포크입니다.
 
 [![Upstream](https://img.shields.io/badge/upstream-Gnuboard7%207.0.9-2563eb)](https://github.com/gnuboard/g7/tree/7.0.9)
-[![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.9-performance-lab)
+[![Status](https://img.shields.io/badge/status-experimental-f59e0b)](https://github.com/jiwonpapa/gnuboard7/tree/codex/laravel13-upgrade)
 [![Benchmark](https://img.shields.io/badge/benchmark-v0.6.0-7c3aed)](https://github.com/jiwonpapa/gnuboard7/tree/codex/7.0.9-performance-lab/modules/_bundled/sirsoft-benchmark)
-[![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.9-performance-lab/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-16a34a)](https://github.com/jiwonpapa/gnuboard7/blob/codex/laravel13-upgrade/LICENSE)
 
 > [!IMPORTANT]
 > 이 저장소는 `gnuboard/g7`의 공식 배포판이나 공식 지원 채널이 아닙니다. 정식 릴리스가 아닌 성능 연구·검증용 `Experimental / Performance Lab`입니다.
@@ -29,6 +29,7 @@
 | 항목 | 상태 | 경계 |
 |---|---|---|
 | 전체 G7 7.0.9 기반 소스 | 공개 | 공식 태그 `7.0.9` 병합 |
+| Laravel 13 / PHP 8.3+ 전환 | 검증 대상 | G7 `8.0.0` 호환성 전환 |
 | 공식 보안·검색·스토리지 수정 | 업스트림 반영 | 별도 코어 패치를 중복 적용하지 않음 |
 | 확장 업데이트 검색 점검 | 명시 실행 전용 | 기본 업데이트에서 대용량 FULLTEXT 초기화 방지 |
 | 기존 7.0.5 튜닝 | 이력 보존 | 7.0.9 결과로 재표기하지 않음 |
@@ -99,11 +100,11 @@ Manticore 읽기 시험은 R 48,468건을 82.912ms, G 194,062건을 94.247ms 중
 ## 설치와 확인
 
 ```bash
-git clone --branch codex/7.0.9-performance-lab https://github.com/jiwonpapa/gnuboard7.git
+git clone --branch codex/laravel13-upgrade https://github.com/jiwonpapa/gnuboard7.git
 cd gnuboard7
 ```
 
-일반 설치 절차는 [INSTALL.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/7.0.9-performance-lab/INSTALL.md)를 따릅니다. 실환경 값은 `.env.example`을 복사한 로컬 `.env`에만 기록하고 커밋하지 마십시오.
+일반 설치 절차는 [INSTALL.md](https://github.com/jiwonpapa/gnuboard7/blob/codex/laravel13-upgrade/INSTALL.md)를 따릅니다. 실환경 값은 `.env.example`을 복사한 로컬 `.env`에만 기록하고 커밋하지 마십시오.
 
 ```bash
 scripts/benchmark/g7-performance-toggle.sh --help

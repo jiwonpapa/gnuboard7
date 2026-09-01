@@ -9,6 +9,8 @@ use App\Extension\IdentityVerification\DTO\VerificationResult;
 use App\Models\ActivityLog;
 use App\Models\IdentityVerificationLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -59,7 +61,7 @@ class CoreActivityLogListenerIdentityTest extends TestCase
             verifiedAt: now(),
         );
         $log = IdentityVerificationLog::create([
-            'id' => (string) \Illuminate\Support\Str::uuid(),
+            'id' => (string) Str::uuid(),
             'provider_id' => 'g7:core.mail',
             'purpose' => 'sensitive_action',
             'channel' => 'email',
@@ -86,7 +88,7 @@ class CoreActivityLogListenerIdentityTest extends TestCase
             failureReason: 'Wrong code',
         );
         $log = IdentityVerificationLog::create([
-            'id' => (string) \Illuminate\Support\Str::uuid(),
+            'id' => (string) Str::uuid(),
             'provider_id' => 'g7:core.mail',
             'purpose' => 'sensitive_action',
             'channel' => 'email',
@@ -105,7 +107,7 @@ class CoreActivityLogListenerIdentityTest extends TestCase
     public function test_challenge_expired_hook_creates_expired_activity_log(): void
     {
         $log = IdentityVerificationLog::create([
-            'id' => (string) \Illuminate\Support\Str::uuid(),
+            'id' => (string) Str::uuid(),
             'provider_id' => 'g7:core.mail',
             'purpose' => 'password_reset',
             'channel' => 'email',
@@ -141,9 +143,7 @@ class CoreActivityLogListenerIdentityTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider provideIdentityActionKeys
-     */
+    #[DataProvider('provideIdentityActionKeys')]
     public function test_identity_action_label_resolves_in_ko(string $action): void
     {
         app()->setLocale('ko');
@@ -155,9 +155,7 @@ class CoreActivityLogListenerIdentityTest extends TestCase
         $this->assertNotEmpty($label);
     }
 
-    /**
-     * @dataProvider provideIdentityActionKeys
-     */
+    #[DataProvider('provideIdentityActionKeys')]
     public function test_identity_action_label_resolves_in_en(string $action): void
     {
         app()->setLocale('en');

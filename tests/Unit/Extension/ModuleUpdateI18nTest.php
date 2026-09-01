@@ -3,6 +3,7 @@
 namespace Tests\Unit\Extension;
 
 use Illuminate\Support\Facades\App;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -49,9 +50,7 @@ class ModuleUpdateI18nTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider updateTranslationKeysProvider
-     */
+    #[DataProvider('updateTranslationKeysProvider')]
     public function test_ko_translation_key_exists(string $key): void
     {
         App::setLocale('ko');
@@ -66,9 +65,7 @@ class ModuleUpdateI18nTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider updateTranslationKeysProvider
-     */
+    #[DataProvider('updateTranslationKeysProvider')]
     public function test_en_translation_key_exists(string $key): void
     {
         App::setLocale('en');
@@ -84,9 +81,8 @@ class ModuleUpdateI18nTest extends TestCase
 
     /**
      * ko/en 번역이 동일하지 않은지 확인 (실제로 번역된 것인지 검증)
-     *
-     * @dataProvider updateTranslationKeysProvider
      */
+    #[DataProvider('updateTranslationKeysProvider')]
     public function test_ko_and_en_translations_differ(string $key): void
     {
         App::setLocale('ko');

@@ -8,7 +8,7 @@
 
 | 항목 | 요구사항 |
 |------|---------|
-| **PHP** | 8.2 이상 (필수 확장 16개 포함 — 기능별 선택 확장은 별도) |
+| **PHP** | 8.3 이상 (필수 확장 16개 포함 — 기능별 선택 확장은 별도) |
 | **데이터베이스** | MySQL 8.0+ 또는 MariaDB 10.3+ (utf8mb4) |
 | **Composer** | 2.x |
 | **Redis** | 6.0+ (프로덕션 권장, 선택) |
@@ -70,7 +70,7 @@ server {
     }
 
     location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         include fastcgi_params;
     }
@@ -260,7 +260,7 @@ Composer 실행이 불가능한 공유 호스팅 환경에서의 설치 방법�
 
 - SSH 접속이 허용된 Cafe24 호스팅 계정 (절약형 이상)
 - SFTP 클라이언트 (FileZilla, WinSCP, Cyberduck 등)
-- Cafe24 관리자 페이지에서 PHP 버전을 **8.2 또는 8.4**로 설정
+- Cafe24 관리자 페이지에서 PHP 버전을 **8.4**로 설정
 - Cafe24 관리자 페이지에서 생성한 MariaDB DB (utf8mb4)
 
 #### 1단계: GitHub Release에서 배포 패키지 다운로드
@@ -343,7 +343,7 @@ http://도메인/install
 |------|------|
 | 0. 환영 | 언어 선택 및 `storage` 권한 검증 — 권한 부족 시 인스톨러가 상대경로 기반 명령을 자동 안내 |
 | 1. 라이선스 | 동의 |
-| 2. 요구사항 | PHP 8.2+ 및 필수 확장 확인 |
+| 2. 요구사항 | PHP 8.3+ 및 필수 확장 확인 |
 | 3. 환경 설정 | DB 정보 + 관리자 계정 + **Vendor 설치 방식** 선택 |
 | 4. 확장 선택 | 템플릿/모듈/플러그인 선택 (의존성 자동 해결) |
 | 5. 설치 실행 | "설치 시작" 버튼 클릭 후 진행 상황 모니터링 |
@@ -359,7 +359,7 @@ http://도메인/install
 
 설치 중 문제가 발생하면 아래 항목을 확인합니다.
 
-- [ ] `php -v` 출력이 8.2 이상인가? (Cafe24 관리자에서 PHP 버전 변경 가능)
+- [ ] `php -v` 출력이 8.3 이상인가? (Cafe24 관리자에서 PHP 버전 변경 가능)
 - [ ] `php -m` 출력에 `pdo_mysql`, `mbstring`, `openssl`, `zip`이 포함되어 있는가?
 - [ ] `~/www`가 `g7/public/`를 올바르게 가리키는가? (`ls -la ~/www` 확인)
 - [ ] `vendor-bundle.zip`이 `~/g7/` 디렉토리에 존재하는가?

@@ -47,7 +47,7 @@ use Illuminate\Support\Facades\Route;
 |
 | URI 는 `_boost/browser-logs` 고정이다 — `BrowserLogger` 의 폴백 리터럴 및 이미 배포된
 | 인젝션 스크립트와 일치해야 한다. CSRF 면제는 불필요하다: `bootstrap/app.php` 가 이 파일을
-| `api` 그룹으로 감싸므로 `VerifyCsrfToken` 이 애초에 걸리지 않는다.
+| `api` 그룹으로 감싸므로 `PreventRequestForgery` 가 애초에 걸리지 않는다.
 |
 */
 

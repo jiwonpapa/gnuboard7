@@ -5,7 +5,7 @@ use App\Http\Middleware\SetTimezone;
 use App\Http\Middleware\SyncBoostWithDebugMode;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
@@ -34,14 +34,14 @@ Route::get('/payment/close', [PaymentCloseController::class, 'show'])
         AddQueuedCookiesToResponse::class,
         StartSession::class,
         ShareErrorsFromSession::class,
-        ValidateCsrfToken::class,
+        PreventRequestForgery::class,
         SubstituteBindings::class,
         SetLocale::class,
         SetTimezone::class,
     ])
     ->name('payment.close');
 
-Route::withoutMiddleware([ValidateCsrfToken::class])->group(function () {
+Route::withoutMiddleware([PreventRequestForgery::class])->group(function () {
     Route::match(['get', 'post'], '/payment/cbt/callback', [CbtCallbackController::class, 'handle'])
         ->name('payment.cbt.callback');
 

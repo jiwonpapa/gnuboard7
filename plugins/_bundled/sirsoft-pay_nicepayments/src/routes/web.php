@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
 use Plugins\Sirsoft\PayNicepayments\Controllers\PaymentCallbackController;
 
@@ -16,7 +16,7 @@ use Plugins\Sirsoft\PayNicepayments\Controllers\PaymentCallbackController;
 |
 */
 
-Route::withoutMiddleware([ValidateCsrfToken::class])
+Route::withoutMiddleware([PreventRequestForgery::class])
     ->group(function () {
         // 결제 승인 콜백 (나이스페이먼츠 → 브라우저 POST)
         Route::post('/payment/callback', [PaymentCallbackController::class, 'authCallback'])
@@ -31,7 +31,7 @@ Route::withoutMiddleware([ValidateCsrfToken::class])
 
 // SignData 생성: 비회원 결제도 결제창 진입 직전에 호출하므로 인증 미들웨어를 걸지 않는다.
 // 대신 컨트롤러에서 주문번호, 결제 전 상태, 나이스페이 결제 레코드, 청구 금액을 모두 검증한다.
-Route::withoutMiddleware([ValidateCsrfToken::class])
+Route::withoutMiddleware([PreventRequestForgery::class])
     ->middleware(['throttle:30,1'])
     ->group(function () {
         Route::post('/payment/sign-data', [PaymentCallbackController::class, 'signData'])

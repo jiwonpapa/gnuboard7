@@ -43,7 +43,7 @@ class CoreBackupHelper
         // 상속한다(소유자 아님 → chmod 불가 환경은 silent no-op, 멱등).
         File::ensureDirectoryExists($backupRoot, 0775);
         FilePermissionHelper::inheritOwnershipFromParent($backupRoot);
-        FilePermissionHelper::syncGroupWritability($backupRoot);
+        FilePermissionHelper::syncGroupWritabilityDetailed($backupRoot, true);
 
         File::ensureDirectoryExists($backupPath, 0775, true);
         FilePermissionHelper::inheritOwnershipFromParent($backupPath);

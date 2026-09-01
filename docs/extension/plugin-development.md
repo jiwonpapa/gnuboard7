@@ -264,7 +264,7 @@ class Plugin implements PluginInterface
         }
     ],
     "require": {
-        "php": "^8.2"
+        "php": "^8.3"
     },
     "autoload": {
         "psr-4": {

@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Auth;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class SetTimezoneTest extends TestCase
@@ -90,9 +91,8 @@ class SetTimezoneTest extends TestCase
 
     /**
      * 기존 화이트리스트에 없던 IANA 타임존도 허용되는지 테스트합니다.
-     *
-     * @dataProvider arbitraryIanaTimezoneProvider
      */
+    #[DataProvider('arbitraryIanaTimezoneProvider')]
     public function test_arbitrary_iana_timezone_accepted(string $timezone): void
     {
         $user = User::factory()->create(['timezone' => $timezone]);

@@ -45,7 +45,7 @@ class DeleteDirectoryTest extends TestCase
 
         // 인스톨러 함수 로드 (pure PHPUnit TestCase 라서 Laravel base_path() 사용 불가).
         // 프로젝트 루트 절대경로(__DIR__ 기준)로 로드한다 — 다른 인스톨러 테스트
-        // (#[RunClassInSeparateProcess] + temp BASE_PATH)가 메인 프로세스로 BASE_PATH 를
+        // (#[RunTestsInSeparateProcesses] + temp BASE_PATH)가 메인 프로세스로 BASE_PATH 를
         // 누수시켜도 그 temp 경로에는 public/install 이 없어 require 가 깨지므로, 누수된
         // BASE_PATH 값과 무관하게 항상 실제 프로젝트 파일을 참조한다.
         $installerRoot = dirname(__DIR__, 3);

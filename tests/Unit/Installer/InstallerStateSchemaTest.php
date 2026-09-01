@@ -3,7 +3,7 @@
 namespace Tests\Unit\Installer;
 
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
-use PHPUnit\Framework\Attributes\RunClassInSeparateProcess;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  *
  * BASE_PATH 는 PHP 상수로 클래스 라이프사이클 단위 단 한 번 정의 (setUpBeforeClass).
  */
-#[RunClassInSeparateProcess]
+#[RunTestsInSeparateProcesses]
 #[PreserveGlobalState(false)]
 class InstallerStateSchemaTest extends TestCase
 {
@@ -132,5 +132,4 @@ class InstallerStateSchemaTest extends TestCase
             '기존 modules 키도 함께 보존되어야 함 (회귀 가드)'
         );
     }
-
 }

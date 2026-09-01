@@ -94,7 +94,7 @@ OK
 주의사항:
 
 - 토스는 notify IP 목록·요청 서명을 제공하지 않는다. 공식 위조 방지 수단은 **secret 대조뿐**이므로 `webhook_secret_verify` 를 끄지 않는 것을 권장한다.
-- 토스는 CSRF 토큰을 보내지 않으므로 이 라우트는 `ValidateCsrfToken` 이 면제되어 있다.
+- 토스는 CSRF 토큰을 보내지 않으므로 이 라우트는 `PreventRequestForgery` 가 면제되어 있다.
 - 미응답 시 토스가 최대 7회 재전송한다. 부수 작업(알림·재고·적립금 등)은 `completePayment` 내부 훅 리스너에 위임하고 컨트롤러는 빠르게 응답한다.
 
 
@@ -171,6 +171,5 @@ OK
 
 - 이 엔드포인트는 주문 상태를 **변경하지 않는다**. 실제 상태 전이는 결제 승인 콜백(`/payment/success`)과 입금통보 웹훅(`/webhook/deposit`)이 담당한다.
 - 주문을 찾지 못해도 200 `OK` 를 반환한다 (토스의 재전송을 멈추기 위함).
-- 토스는 CSRF 토큰을 보내지 않으므로 이 라우트는 `ValidateCsrfToken` 이 면제되어 있다.
-
+- 토스는 CSRF 토큰을 보내지 않으므로 이 라우트는 `PreventRequestForgery` 가 면제되어 있다.
 

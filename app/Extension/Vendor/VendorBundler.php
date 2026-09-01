@@ -271,7 +271,7 @@ class VendorBundler
         $manifestPath = $outputPath.DIRECTORY_SEPARATOR.VendorIntegrityChecker::MANIFEST_FILENAME;
 
         // 실제 외부 패키지 의존성이 없는 확장은 번들링 대상이 아님 — skip 처리
-        // (composer.json 에 `php: ^8.2` 런타임 제약만 있고 패키지 require 가 없는 경우)
+        // (composer.json 에 `php: ^8.3` 런타임 제약만 있고 패키지 require 가 없는 경우)
         if (! $this->hasExternalDependencies($composerJsonPath)) {
             return new VendorBundleResult(
                 target: $target,

@@ -5,6 +5,7 @@ namespace Tests\Unit\Extension\Helpers;
 use App\Extension\Helpers\IdentityPolicySyncHelper;
 use App\Models\IdentityPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -122,9 +123,8 @@ class IdentityPolicySyncHelperTest extends TestCase
     /**
      * trackable 5필드(enabled / grace_minutes / provider_id / fail_mode / conditions) 각각에 대해
      * user_overrides 등록 시 syncPolicy 가 운영자 값을 보존하는지 매트릭스 검증.
-     *
-     * @dataProvider trackableFieldProvider
      */
+    #[DataProvider('trackableFieldProvider')]
     public function test_sync_preserves_each_trackable_field_in_user_overrides(string $field, mixed $declared, mixed $override): void
     {
         $key = "test.matrix.{$field}";

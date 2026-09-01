@@ -14,6 +14,7 @@ use App\Services\LanguagePack\LanguagePackRegistry;
 use App\Services\LanguagePack\LanguagePackSeedInjector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
+use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -239,9 +240,7 @@ class ManagerSyncFilterTest extends TestCase
         yield 'template' => ['template', 'sirsoft-basic'];
     }
 
-    /**
-     * @dataProvider manifestScopeProvider
-     */
+    #[DataProvider('manifestScopeProvider')]
     public function test_manifest_translations_filter_auto_registered_and_injects_ja(string $scope, string $target): void
     {
         $packRoot = base_path("lang-packs/g7-{$scope}-{$target}-ja");

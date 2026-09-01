@@ -4,6 +4,7 @@ namespace Tests\Unit\Extension;
 
 use App\Extension\Helpers\CoreBackupHelper;
 use Illuminate\Support\Facades\File;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -176,9 +177,8 @@ class CoreBackupHelperApplyListTest extends TestCase
      * 코어 업데이트 시 번들 확장의 새 파일(composer.json·vendor-bundle.*)이
      * 반영되지 않는다. targets 에 더 구체적으로 명시된 경로는 상위 protected 를
      * 오버라이드해야 한다. 4종 확장(모듈/플러그인/템플릿/언어팩) 전수 검증.
-     *
-     * @dataProvider bundledDomainProvider
      */
+    #[DataProvider('bundledDomainProvider')]
     public function test_bundled_target_overrides_parent_protected_path(string $domain): void
     {
         $bundledTarget = "{$domain}/_bundled";

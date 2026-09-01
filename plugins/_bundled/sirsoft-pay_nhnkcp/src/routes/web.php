@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
 use Plugins\Sirsoft\PayNhnkcp\Controllers\EscrowCommonNotifyController;
 use Plugins\Sirsoft\PayNhnkcp\Controllers\PaymentCallbackController;
@@ -22,7 +22,7 @@ use Plugins\Sirsoft\PayNhnkcp\Controllers\PaymentCallbackController;
 |
 */
 
-Route::withoutMiddleware([ValidateCsrfToken::class])->group(function () {
+Route::withoutMiddleware([PreventRequestForgery::class])->group(function () {
     // 결제 승인 콜백 (KCP → 브라우저 POST)
     Route::post('/payment/callback', [PaymentCallbackController::class, 'authCallback'])
         ->name('payment.callback');

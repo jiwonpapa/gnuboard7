@@ -105,4 +105,17 @@ return [
 
     'prefix' => env('CACHE_PREFIX', Str::slug((string) env('APP_NAME', 'laravel')).'-cache-'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Serializable Classes
+    |--------------------------------------------------------------------------
+    |
+    | G7 caches Eloquent models and collections in several core services.
+    | Keep class unserialization enabled until those cache contracts have been
+    | migrated to scalar payloads.
+    |
+    */
+
+    'serializable_classes' => true,
+
 ];

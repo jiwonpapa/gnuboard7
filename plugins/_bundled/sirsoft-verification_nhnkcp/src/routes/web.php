@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
 use Plugins\Sirsoft\VerificationNhnkcp\Http\Controllers\KcpBridgeController;
 use Plugins\Sirsoft\VerificationNhnkcp\Http\Controllers\KcpCallbackController;
@@ -19,7 +19,7 @@ use Plugins\Sirsoft\VerificationNhnkcp\Http\Controllers\KcpCallbackController;
 */
 
 // 외부 인증기관 콜백 — CSRF 면제 (KCP 표준창이 외부에서 form POST 하므로 CSRF 토큰이 없다)
-Route::withoutMiddleware([ValidateCsrfToken::class])->group(function () {
+Route::withoutMiddleware([PreventRequestForgery::class])->group(function () {
     Route::post('/plugin/nhnkcp/callback', [KcpCallbackController::class, 'handle'])
         ->name('plugin.verification_nhnkcp.callback');
 });

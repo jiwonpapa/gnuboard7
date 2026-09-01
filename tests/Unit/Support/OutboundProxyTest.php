@@ -3,6 +3,7 @@
 namespace Tests\Unit\Support;
 
 use App\Support\OutboundProxy;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -96,9 +97,8 @@ class OutboundProxyTest extends TestCase
      * @scenario debug_mode=on, proxy_value=invalid, bypass_list=empty
      *
      * @effects proxy_rejects_disallowed_scheme
-     *
-     * @dataProvider invalidProxyUrls
      */
+    #[DataProvider('invalidProxyUrls')]
     public function test_invalid_proxy_url_is_not_applied(string $url, string $why): void
     {
         $this->assertNull(

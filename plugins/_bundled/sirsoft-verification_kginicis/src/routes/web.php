@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
 use Plugins\Sirsoft\VerificationKginicis\Http\Controllers\InicisCallbackController;
 use Plugins\Sirsoft\VerificationKginicis\Http\Controllers\InicisPopupBridgeController;
@@ -20,7 +20,7 @@ use Plugins\Sirsoft\VerificationKginicis\Http\Controllers\InicisPopupBridgeContr
 */
 
 // 외부 PG 콜백 — CSRF 면제 (이니시스가 외부에서 form POST 로 콜백 → CSRF 토큰 없음)
-Route::withoutMiddleware([ValidateCsrfToken::class])->group(function () {
+Route::withoutMiddleware([PreventRequestForgery::class])->group(function () {
     Route::post('/plugin/inicis/callback', [InicisCallbackController::class, 'handle'])
         ->name('plugin.verification_kginicis.callback');
 });

@@ -140,7 +140,7 @@ HTTP/1.1 200
 
 - **라우트명**: `plugin.verification_kginicis.callback`
 - **호출자**: KG이니시스 (매뉴얼 STEP2 — 외부 form POST)
-- **미들웨어**: `web` (CSRF 검증은 `ValidateCsrfToken` 제외 — 외부 호출이라 토큰이 없다)
+- **미들웨어**: `web` (CSRF 검증은 `PreventRequestForgery` 제외 — 외부 호출이라 토큰이 없다)
 - **FormRequest**: `InicisCallbackRequest` — **검증 규칙 없음(의도된 결정)**
 
 이니시스는 매뉴얼에 명시되지 않은 필드를 가맹점 설정·인증 수단에 따라 함께 보낸다. 요청

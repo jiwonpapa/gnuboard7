@@ -47,7 +47,7 @@ class ExtensionBackupHelper
         foreach ([$backupRoot, $backupTypeDir] as $dir) {
             File::ensureDirectoryExists($dir, 0775);
             FilePermissionHelper::inheritOwnershipFromParent($dir);
-            FilePermissionHelper::syncGroupWritability($dir);
+            FilePermissionHelper::syncGroupWritabilityDetailed($dir, true);
         }
 
         // 파일별 복사로 진행 상세 보고

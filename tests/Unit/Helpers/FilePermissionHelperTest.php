@@ -314,6 +314,7 @@ class FilePermissionHelperTest extends TestCase
 
         $child = $root.DIRECTORY_SEPARATOR.'ok';
         mkdir($child, 0775);
+        chmod($child, 0775);
 
         $file = $root.DIRECTORY_SEPARATOR.'fine.txt';
         file_put_contents($file, 'x');

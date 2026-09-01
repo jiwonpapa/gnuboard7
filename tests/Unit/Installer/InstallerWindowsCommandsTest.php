@@ -14,7 +14,7 @@ class InstallerWindowsCommandsTest extends TestCase
     /**
      * 프로젝트 루트 절대경로 (BASE_PATH 상수와 독립).
      *
-     * 다른 인스톨러 테스트(#[RunClassInSeparateProcess] + temp BASE_PATH)가 메인
+     * 다른 인스톨러 테스트(#[RunTestsInSeparateProcesses] + temp BASE_PATH)가 메인
      * 프로세스로 BASE_PATH 를 누수시키면, 그 temp 경로 하위에는 public/install 이 없어
      * require 가 깨진다. 본 클래스는 __DIR__ 기준 절대경로로 인스톨러 파일을 로드해
      * 누수된 BASE_PATH 값과 무관하게 항상 실제 프로젝트 파일을 참조한다.

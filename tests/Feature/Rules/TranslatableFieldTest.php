@@ -7,6 +7,7 @@ use App\Rules\LocaleRequiredTranslatable;
 use App\Rules\TranslatableField;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class TranslatableFieldTest extends TestCase
@@ -369,11 +370,10 @@ class TranslatableFieldTest extends TestCase
      *
      * 한쪽만 strlen() 으로 되돌아가는 회귀를 교차 단언으로 차단합니다.
      *
-     * @dataProvider lengthJudgementProvider
-     *
      * @param  string  $text  검증 문자열
      * @param  bool  $shouldPass  통과 기대 여부
      */
+    #[DataProvider('lengthJudgementProvider')]
     public function test_both_translatable_rules_agree_on_length(string $text, bool $shouldPass): void
     {
         $translatable = new TranslatableField(maxLength: 500);

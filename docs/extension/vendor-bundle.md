@@ -71,10 +71,10 @@ G7 코어와 모듈/플러그인은 PHP 의존성 관리에 Composer를 사용�
     "zip_sha256": "...",
     "zip_size": 12345678,
     "package_count": 142,
-    "php_requirement": "^8.2",
+    "php_requirement": "^8.3",
     "g7_version": "7.0.0-beta.4",
     "packages": [
-        { "name": "laravel/framework", "version": "12.0.5", "type": "library" }
+        { "name": "laravel/framework", "version": "13.0.0", "type": "library" }
     ]
 }
 ```

@@ -5,6 +5,7 @@ namespace Tests\Unit\Http\Requests;
 use App\Http\Requests\Module\PerformModuleUpdateRequest;
 use App\Http\Requests\Plugin\PerformPluginUpdateRequest;
 use Illuminate\Support\Facades\Validator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -14,23 +15,19 @@ use Tests\TestCase;
  */
 class PerformExtensionUpdateRequestTest extends TestCase
 {
-    /**
-     * @dataProvider validLayoutStrategyProvider
-     */
+    #[DataProvider('validLayoutStrategyProvider')]
     public function test_module_update_request_accepts_valid_layout_strategy(string $strategy): void
     {
-        $rules = (new PerformModuleUpdateRequest())->rules();
+        $rules = (new PerformModuleUpdateRequest)->rules();
         $validator = Validator::make(['layout_strategy' => $strategy], $rules);
 
         $this->assertFalse($validator->fails(), "layout_strategy={$strategy} 은 유효해야 합니다");
     }
 
-    /**
-     * @dataProvider validLayoutStrategyProvider
-     */
+    #[DataProvider('validLayoutStrategyProvider')]
     public function test_plugin_update_request_accepts_valid_layout_strategy(string $strategy): void
     {
-        $rules = (new PerformPluginUpdateRequest())->rules();
+        $rules = (new PerformPluginUpdateRequest)->rules();
         $validator = Validator::make(['layout_strategy' => $strategy], $rules);
 
         $this->assertFalse($validator->fails(), "layout_strategy={$strategy} 은 유효해야 합니다");
@@ -38,7 +35,7 @@ class PerformExtensionUpdateRequestTest extends TestCase
 
     public function test_module_update_request_rejects_invalid_layout_strategy(): void
     {
-        $rules = (new PerformModuleUpdateRequest())->rules();
+        $rules = (new PerformModuleUpdateRequest)->rules();
         $validator = Validator::make(['layout_strategy' => 'invalid'], $rules);
 
         $this->assertTrue($validator->fails());
@@ -47,7 +44,7 @@ class PerformExtensionUpdateRequestTest extends TestCase
 
     public function test_plugin_update_request_rejects_invalid_layout_strategy(): void
     {
-        $rules = (new PerformPluginUpdateRequest())->rules();
+        $rules = (new PerformPluginUpdateRequest)->rules();
         $validator = Validator::make(['layout_strategy' => 'invalid'], $rules);
 
         $this->assertTrue($validator->fails());
@@ -56,18 +53,16 @@ class PerformExtensionUpdateRequestTest extends TestCase
 
     public function test_module_update_request_layout_strategy_is_optional(): void
     {
-        $rules = (new PerformModuleUpdateRequest())->rules();
+        $rules = (new PerformModuleUpdateRequest)->rules();
         $validator = Validator::make([], $rules);
 
         $this->assertFalse($validator->fails(), 'layout_strategy 미지정 시에도 통과해야 함');
     }
 
-    /**
-     * @dataProvider validVendorModeProvider
-     */
+    #[DataProvider('validVendorModeProvider')]
     public function test_module_update_request_accepts_valid_vendor_mode(string $mode): void
     {
-        $rules = (new PerformModuleUpdateRequest())->rules();
+        $rules = (new PerformModuleUpdateRequest)->rules();
         $validator = Validator::make(['vendor_mode' => $mode], $rules);
 
         $this->assertFalse($validator->fails(), "vendor_mode={$mode} 은 유효해야 합니다");
@@ -75,7 +70,7 @@ class PerformExtensionUpdateRequestTest extends TestCase
 
     public function test_plugin_update_request_rejects_invalid_vendor_mode(): void
     {
-        $rules = (new PerformPluginUpdateRequest())->rules();
+        $rules = (new PerformPluginUpdateRequest)->rules();
         $validator = Validator::make(['vendor_mode' => 'invalid'], $rules);
 
         $this->assertTrue($validator->fails());

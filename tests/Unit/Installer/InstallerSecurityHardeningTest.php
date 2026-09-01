@@ -33,7 +33,7 @@ class InstallerSecurityHardeningTest extends TestCase
         require_once __DIR__.'/stubs/lang_stub.php';
 
         if (! defined('MIN_PHP_VERSION')) {
-            define('MIN_PHP_VERSION', '8.2.0');
+            define('MIN_PHP_VERSION', '8.3.0');
         }
         if (! defined('CHECK_CONFIGURATION_LIBRARY')) {
             define('CHECK_CONFIGURATION_LIBRARY', true);

@@ -663,9 +663,11 @@ class ValidationApi
     private function detectPhpBinaries(): void
     {
         $commonPaths = [
+            '/usr/local/php85/bin/php',
             '/usr/local/php84/bin/php',
             '/usr/local/php83/bin/php',
             '/usr/local/php82/bin/php',
+            '/usr/bin/php8.5',
             '/usr/bin/php8.4',
             '/usr/bin/php8.3',
             '/usr/bin/php8.2',

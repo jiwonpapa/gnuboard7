@@ -21,7 +21,7 @@ class EventServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        // Laravel 12 자동 발견(withEvents)으로 인한 app/Listeners/ 중복 등록 방지
+        // Laravel 자동 발견(withEvents)으로 인한 app/Listeners/ 중복 등록 방지
         static::disableEventDiscovery();
 
         parent::register();

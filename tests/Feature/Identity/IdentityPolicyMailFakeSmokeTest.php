@@ -8,9 +8,9 @@ use App\Models\User;
 use App\Notifications\GenericNotification;
 use Database\Seeders\IdentityMessageDefinitionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -47,9 +47,8 @@ class IdentityPolicyMailFakeSmokeTest extends TestCase
      * 메일 본문 평문 코드는 보안상 hash 만 저장되므로 본 테스트는 발송이 트리거되었음을 'sent' 상태로 검증.
      * GenericNotification 의 via() 채널 평가는 NotificationDefinition/readiness 체인 의존이라
      * 테스트 환경에서 별도 시드 없이는 fake 캡처가 불가 — 회로 자체 검증으로 충분.
-     *
-     * @dataProvider purposesProvider
      */
+    #[DataProvider('purposesProvider')]
     public function test_mail_provider_circuit_for_purpose(string $purpose, string $expectedRenderHint, string $expectedHashKey): void
     {
         $user = User::factory()->create();

@@ -40,7 +40,7 @@ class StartApiSession
     /**
      * 세션 파이프라인 미들웨어 목록을 반환합니다.
      *
-     * CSRF 검증(VerifyCsrfToken)과 sanctum 속성 설정은 포함하지 않습니다.
+     * CSRF 검증(PreventRequestForgery)과 sanctum 속성 설정은 포함하지 않습니다.
      *
      * @return array<class-string> 미들웨어 클래스 목록
      */

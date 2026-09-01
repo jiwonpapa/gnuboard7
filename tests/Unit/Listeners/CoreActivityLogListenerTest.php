@@ -14,6 +14,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Log\LoggerInterface;
 use Tests\TestCase;
 
@@ -906,9 +907,7 @@ class CoreActivityLogListenerTest extends TestCase
     // Module 핸들러 테스트 (6개)
     // ═══════════════════════════════════════════
 
-    /**
-     * @dataProvider moduleInstallActivateDeactivateProvider
-     */
+    #[DataProvider('moduleInstallActivateDeactivateProvider')]
     public function test_module_lifecycle_hooks_log_activity(
         string $method,
         string $expectedAction,
@@ -1010,9 +1009,7 @@ class CoreActivityLogListenerTest extends TestCase
     // Plugin 핸들러 테스트 (5개)
     // ═══════════════════════════════════════════
 
-    /**
-     * @dataProvider pluginInstallActivateDeactivateProvider
-     */
+    #[DataProvider('pluginInstallActivateDeactivateProvider')]
     public function test_plugin_lifecycle_hooks_log_activity(
         string $method,
         string $expectedAction,
@@ -1379,9 +1376,7 @@ class CoreActivityLogListenerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider allHookActionsProvider
-     */
+    #[DataProvider('allHookActionsProvider')]
     public function test_hook_action_mapping_is_correct(string $hookName, string $method, string $expectedAction, ActivityLogType $expectedLogType, string $expectedDescriptionKey): void
     {
         // 이 테스트는 getSubscribedHooks()의 모든 로깅 훅이

@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Database\Console\Seeds\SeedCommand as BaseSeedCommand;
-use Symfony\Component\Console\Input\InputOption;
+use Illuminate\Database\Seeder;
 
 /**
  * db:seed 커맨드 확장
@@ -17,12 +17,26 @@ use Symfony\Component\Console\Input\InputOption;
 class SeedCommand extends BaseSeedCommand
 {
     /**
+     * Laravel 13의 기본 SeedCommand는 getOptions() 대신 signature를 사용합니다.
+     * 기본 옵션을 유지하면서 G7의 count/sample 옵션을 함께 선언합니다.
+     *
+     * @var string
+     */
+    protected $signature = 'db:seed
+                    {class? : The class name of the root seeder}
+                    {--class=Database\\Seeders\\DatabaseSeeder : The class name of the root seeder}
+                    {--database= : The database connection to seed}
+                    {--force : Force the operation to run when in production}
+                    {--count=* : 시더에 전달할 카운트 옵션 (형식: key=value, 예: --count=products=1000)}
+                    {--sample : 샘플 데이터 시더도 함께 실행}';
+
+    /**
      * 시더 인스턴스를 컨테이너에서 생성합니다.
      *
      * 부모 메서드를 호출한 뒤, --count 옵션이 있으면
      * 시더에 setSeederCounts()로 전달합니다.
      *
-     * @return \Illuminate\Database\Seeder
+     * @return Seeder
      */
     protected function getSeeder()
     {
@@ -66,20 +80,5 @@ class SeedCommand extends BaseSeedCommand
         }
 
         return $counts;
-    }
-
-    /**
-     * 콘솔 커맨드 옵션을 정의합니다.
-     *
-     * 부모 옵션에 --count 옵션을 추가합니다.
-     *
-     * @return array
-     */
-    protected function getOptions()
-    {
-        return array_merge(parent::getOptions(), [
-            ['count', null, InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, '시더에 전달할 카운트 옵션 (형식: key=value, 예: --count=products=1000)', []],
-            ['sample', null, InputOption::VALUE_NONE, '샘플 데이터 시더도 함께 실행'],
-        ]);
     }
 }

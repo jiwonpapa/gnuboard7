@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-7.0.9-blue" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php&logoColor=white" alt="PHP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Laravel-12.x-FF2D20?logo=laravel&logoColor=white" alt="Laravel"></a>
+  <a href="#"><img src="https://img.shields.io/badge/version-8.0.0-blue" alt="Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/PHP-8.3%2B-777BB4?logo=php&logoColor=white" alt="PHP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Laravel-13.x-FF2D20?logo=laravel&logoColor=white" alt="Laravel"></a>
   <a href="#"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
   <a href="#"><img src="https://img.shields.io/badge/status-Stable-brightgreen" alt="Status"></a>
@@ -71,10 +71,10 @@ Laravel과 React를 기반으로, 보안부터 아키텍처까지 처음부터 �
 
 | 구분 | 기술 |
 |------|------|
-| **백엔드** | PHP 8.2+, Laravel 12.x, MySQL 8.0+ / MariaDB 10.3+, Redis 6.0+ |
+| **백엔드** | PHP 8.3+, Laravel 13.x, MySQL 8.0+ / MariaDB 10.3+, Redis 6.0+ |
 | **프론트엔드** | React 19, Vite, Tailwind CSS 4 (다크 모드 지원) |
 | **인증** | Laravel Sanctum (Bearer 토큰) |
-| **테스트** | PHPUnit 11.x, Vitest |
+| **테스트** | PHPUnit 12.x, Vitest |
 | **코드 품질** | Laravel Pint (PSR-12) |
 
 ---
@@ -83,7 +83,7 @@ Laravel과 React를 기반으로, 보안부터 아키텍처까지 처음부터 �
 
 ```
 Gnuboard7
-├── Core (Laravel 12)
+├── Core (Laravel 13)
 │   ├── Controller → FormRequest → Service → Repository → Model
 │   ├── Hook System (Action / Filter)
 │   ├── Permission (Role → Permission → Scope)
@@ -353,7 +353,7 @@ HookManager::doAction('sirsoft-ecommerce.order.after_confirm', $order);
 
 ### 시스템 요구사항
 
-- PHP 8.2+ (필수 확장 16개 포함 — `ctype`, `curl`, `dom`, `fileinfo`, `json`, `mbstring`, `openssl`, `pdo_mysql`, `tokenizer`, `xml`, `zip` 등. `gd`/`imagick`, `intl`, `redis`, `bcmath` 등은 해당 기능을 쓸 때만 필요하며 전체 목록은 [docs/requirements.md](docs/requirements.md) 참조)
+- PHP 8.3+ (필수 확장 16개 포함 — `ctype`, `curl`, `dom`, `fileinfo`, `json`, `mbstring`, `openssl`, `pdo_mysql`, `tokenizer`, `xml`, `zip` 등. `gd`/`imagick`, `intl`, `redis`, `bcmath` 등은 해당 기능을 쓸 때만 필요하며 전체 목록은 [docs/requirements.md](docs/requirements.md) 참조)
 - MySQL 8.0+ 또는 MariaDB 10.3+ (utf8mb4)
 - Composer 2.x
 - Node.js 20+ (프론트엔드 에셋을 직접 빌드할 때만 필요)
