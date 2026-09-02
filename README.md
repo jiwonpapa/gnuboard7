@@ -1,3 +1,5 @@
+![JW SOFT — Gnuboard7 Performance Lab · Benchmark · Tuning · Extensions](https://raw.githubusercontent.com/jiwonpapa/gnuboard7/refs/heads/codex/7.0.8-performance-lab/docs/assets/jwsoft-g7-performance-lab-intro.png)
+
 # Gnuboard7 7.0.8 Performance Lab
 
 공식 그누보드7 `7.0.8` 소스를 기준으로 더미데이터·A/B 하네스와 `7.0.5`에서 수행한 성능 실험 자료를 공개하는 비공식 연구 포크입니다.
