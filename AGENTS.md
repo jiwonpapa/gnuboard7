@@ -149,7 +149,7 @@
 
 | 대상 | 진입점 | 문서/엔드포인트 |
 |------|--------|----------------|
-| 코어 | [docs/backend/api/README.md](docs/backend/api/README.md) | 36 / 325 |
+| 코어 | [docs/backend/api/README.md](docs/backend/api/README.md) | 36 / 328 |
 
 
 ### 확장 API 레퍼런스 (14개 확장, 자동 스캔)
@@ -475,6 +475,24 @@ catch-all shadow 는 보호처럼 보인다는 점이 위험하다. 가려진 �
 이 결함군은 예외도 오류도 남기지 않는다 — 약한 경로가 정상 응답을 내보내는 것이 유일한 증상이다. secret 게이트 재적용·hash 서빙 게이트·rank 대칭·URL 판정 3층 동형·정적 bulk 스코프 재적용·가드 선행·형제 메서드 가드 패리티·abilityMap prefix 정합은 의미 판정 영역이라 정적 검사가 일부만 덮으므로, 부모 변경·하위 서빙·등급 경로·URL 검증 지점을 건드릴 때 코드 리뷰에서 대칭성을 확인한다.
 
 > 상세: [validation.md](docs/backend/validation.md), [service-repository.md](docs/backend/service-repository.md), [frontend/security.md](docs/frontend/security.md)
+
+### 서버가 조건에 따라 다른 형태의 200 을 돌려주는 엔드포인트
+
+같은 엔드포인트가 설정·상태에 따라 **다른 형태의 2xx** 를 낸다면, 프론트는 형태를 판별한 뒤에 읽어야 한다. 한 형태만 가정하면 다른 형태에서 필드 접근이 그 자리에서 던지고, 그 원문이 오류 박스에 영문으로 노출된다. 서버는 정상 응답했으므로 **서버 로그에는 흔적이 없다** — 깨진 것은 클라이언트뿐이다.
+
+| ❌ 금지 | ✅ 올바른 사용 |
+|--------|---------------|
+| 응답 타입을 한 형태로 고정 선언하고 `response.data.user.*` 를 바로 읽기 | 판별 유니온으로 두 형태를 표현 (`LoginResult` = `{status:'authenticated', user}` \| `{status:'two_factor_required', challenge}`) |
+| 저장 지점에 형태 가드 없이 `setToken(response.data.token)` | 비어 있지 않은 문자열만 저장 — `localStorage` 는 무엇을 넣든 문자열로 바꾸므로 `undefined` 가 `"undefined"`(truthy)로 남아 이후 모든 요청이 `Bearer undefined` 로 나가 401 이 된다 |
+| 대체 형태 분기를 사용자 경로에만 두고 관리자 경로는 그대로 | 관리자 경로가 먼저 500 이 되면 설정을 되돌릴 수단까지 사라진다 — 두 경로 동시 적용 |
+| `onSuccess` 후속 액션에 조건 없이 성공 처리를 나열 | 대체 형태에서 실행되면 안 되는 액션마다 `if:"{{!response.대체형태플래그}}"` |
+| `onSuccess`·시퀀스 안에서 방금 저장한 상태(`_global.*`/`_local.*`)를 형제 액션의 `if`·값으로 재독 | 그 시점 컨텍스트는 아직 갱신 전이다 — `{{response.*}}` 만 읽는다 (`onSuccess` 결과는 `handleSequence` 의 상태 동기화 대상이 아니다) |
+| 서버가 제공하는 기능의 프론트 화면 부재를 "미사용" 으로 간주 | 토글을 켠 사이트에서만 드러나는 미구현이다 — 서버 토글 ↔ 화면 존재를 전수 대조 |
+
+착수 전 전수조사 축은 **"서버가 대체 형태 2xx 를 내는 엔드포인트 ↔ 프론트 처리 여부"** 다. 그리고 **"서버 토글 ON 시 프론트 화면 존재 여부"** 를 함께 본다 — 2단계 인증은 도입 후 여러 버전 동안 입력 화면이 없었고, 그 토글을 켠 사이트에서만 전원 로그인 불가로 나타났다(공개 #133).
+
+> 상세: [auth-system.md "2단계 인증 로그인"](docs/frontend/auth-system.md)
+> 정적 검사로는 잡히지 않는다 — 응답 변종은 서버 분기의 의미 판정이므로 코드 리뷰에서 확인한다.
 
 ### 제3자 라이브러리는 쓰기 경로를 지정받는다
 
