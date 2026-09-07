@@ -44,6 +44,7 @@ import { EDITOR_TRANSLATIONS_REFRESHED_EVENT } from '../hooks/useInlineEdit';
 import { buildSampleGlobalSeed } from '../sample-data/sampleGlobalChain';
 import { extractDollarGlobals, stripDollarGlobals } from '../sample-data/dollarGlobals';
 import { findNodeByPath, type EditorNode } from '../utils/layoutTreeUtils';
+import { readPreviewLocalDefaults, mergePreviewLocal } from '../utils/previewLocalDefaults';
 import { limitIterationSourceToOne } from '../utils/iterationSampleLimit';
 import { buildBaseEditorComponents } from '../utils/baseEditorSlotMarkers';
 import type { SampleGlobalSource } from '../spec/editorSpecLoader';
@@ -351,6 +352,9 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
   // 일반 상태 값으로 주입한다(레이아웃 표현식 `{{_local.errors?.email?.[0]}}` 가 그대로
   // 읽도록 — 사용자 페이지 parity). isolatedGlobal 은 `{ ...global, _local }` 형태로
   // 흐르므로 local 패치는 `_local` 키 아래에 병합한다.
+  // TemplateApp uses initLocal, falling back to state. A stable value key prevents unrelated node edits resetting the preview store.
+  const layoutLocalKey = JSON.stringify(document?.raw?.initLocal || document?.raw?.state || {});
+  const layoutLocal = useMemo(() => readPreviewLocalDefaults(JSON.parse(layoutLocalKey)), [layoutLocalKey]);
   const globalSeed = useMemo(() => {
     const formErrors = resolveFormErrorMessages(getFormErrors(activeStateItem), translationEngine, {
       templateId: state.templateIdentifier,
@@ -359,13 +363,13 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
     const baselineLocal = (baselineSeed as { _local?: Record<string, unknown> })._local;
     const { global, local } = applyInitialPatch({
       globalBaseline: baselineSeed,
-      localBaseline: (baselineLocal as Record<string, unknown>) ?? {},
+      localBaseline: mergePreviewLocal(layoutLocal, baselineLocal),
       patch: activeStateItem?.initialState ?? null,
       formErrors,
       isEditMode: true,
     });
     return { ...global, _local: local };
-  }, [baselineSeed, activeStateItem, translationEngine, state.templateIdentifier, state.locale]);
+  }, [baselineSeed, layoutLocal, activeStateItem, translationEngine, state.templateIdentifier, state.locale]);
 
   // 활성 페이지 상태의 `_local` 초기화 패치 ((3)) — DynamicRenderer 의
   // `_localInit`(force replace)으로 주입해 레이아웃 자체 init_actions(`setState target:local`)
@@ -714,9 +718,11 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
   // 노드의 `iteration.source` 표현식이 가리키는 데이터 배열을 1개로 잘라 dataContext 를 가공한다.
   // 그 외 모드는 dataContext 원본 그대로.
   const dataContextForRender = useMemo<Record<string, any>>(() => {
-    if (state.editMode !== 'iteration_item') return dataContext;
+    const previewContext = { ...dataContext, _local: mergePreviewLocal(
+      mergePreviewLocal(layoutLocal, dataContext._local), isolatedGlobal._local) };
+    if (state.editMode !== 'iteration_item') return previewContext;
     const ctx = document?.iterationContext;
-    if (!ctx) return dataContext;
+    if (!ctx) return previewContext;
     const hostComponents = (document?.raw?.components ?? []) as EditorNode[];
     const sourceNode = findNodeByPath(
       { children: hostComponents } as EditorNode,
@@ -726,9 +732,9 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
       sourceNode && (sourceNode as any).iteration && typeof (sourceNode as any).iteration.source === 'string'
         ? ((sourceNode as any).iteration.source as string)
         : null;
-    if (!sourceExpr) return dataContext;
-    return limitIterationSourceToOne(dataContext, sourceExpr);
-  }, [state.editMode, dataContext, document]);
+    if (!sourceExpr) return previewContext;
+    return limitIterationSourceToOne(previewContext, sourceExpr);
+  }, [state.editMode, dataContext, document, layoutLocal, isolatedGlobal]);
 
   // 인라인 편집 키 CRUD 후 캔버스 재렌더 신호.
   // useInlineEdit.bustTranslationCache 가 서버 lang 재fetch 완료 후 발화하는 이벤트를
@@ -1149,10 +1155,7 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
                   ...(stateLocalInit
                     ? {
                         _localInit: stateLocalInit,
-                        _local: {
-                          ...((dataContext as { _local?: Record<string, unknown> })._local ?? {}),
-                          ...((isolatedGlobal as { _local?: Record<string, unknown> })._local ?? {}),
-                        },
+                        _local: dataContextForRender._local,
                       }
                     : {}),
                   // route — 기본 sampleRouteParams 위에 활성 상태의 route 패치 적용

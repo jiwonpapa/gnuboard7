@@ -7,6 +7,8 @@
 
 ## [engine-v1.67.0] - 2026-09-07
 
+- 편집 캔버스에 layout initLocal/state 기본값을 전달해 `_local` 반복 템플릿이 비어 보이던 문제 수정. 기존 로컬 값 우선, 반복 편집 시 해당 배열만 1개 표시, 원본 미변경.
+
 ### Added
 
 - 공개 호스트의 `collections`와 guarded `structure` 명령으로 children, responsive 자식, array/group, array-cell-tree를 편집한다. 선언된 seed·허용 위치만 사용하며 출처·알 수 없는 필드·바인딩을 보존한다. 복제의 내부 ID/DOM 참조를 다시 연결하고 해석할 수 없는 참조와 외부 참조 대상 삭제는 거부한다.
