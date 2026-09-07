@@ -96,6 +96,21 @@ final class SeoCacheBounds
     }
 
     /**
+     * 차감한 미스 렌더 1건을 예산에 되돌립니다.
+     *
+     * 렌더러가 "그릴 게 없음"(null)으로 돌아온 요청 — 미라우트 404, SEO 비활성 화면 — 은
+     * 캐시에 남지 않아 올 때마다 다시 예산을 쓴다. 봇은 예전에 있던 죽은 주소를 오래 다시
+     * 긁으므로, 그 요청까지 세면 정상 페이지의 예산이 죽은 주소에 소진된다. 렌더 도중 예외는
+     * 비용을 이미 치른 것이라 되돌리지 않는다.
+     *
+     * @param  string  $ip  요청 IP
+     */
+    public static function refundRender(string $ip): void
+    {
+        RateLimiter::decrement('seo-render:'.$ip, 60);
+    }
+
+    /**
      * 이 IP 의 요청을 통계로 기록할 수 있는지 판정합니다.
      *
      * 통계 테이블이 새로운 증식 축이 되지 않도록 기록 자체에도 상한을 둔다.
@@ -127,11 +142,15 @@ final class SeoCacheBounds
      * 이미 인덱스에 있는 키의 **갱신**은 이 판정을 거치지 않는다(호출측 책임) — 저장 규모가
      * 늘지 않기 때문이다.
      *
+     * 경로당 변종은 **언어별로** 센다. 인덱스 항목은 url|locale 별이라 경로만 보고 합산하면
+     * 언어 수만큼 실효 상한이 줄어, 다국어 사이트의 목록 뒤쪽 페이지가 언어마다 캐시에서 빠진다.
+     *
      * @param  array<string, array<string, mixed>>  $index  현재 캐시 인덱스
      * @param  string  $url  저장하려는 URL (경로 + 정규화 쿼리)
+     * @param  string  $locale  저장하려는 로케일
      * @return bool 저장 허용 여부
      */
-    public static function canStore(array $index, string $url): bool
+    public static function canStore(array $index, string $url, string $locale): bool
     {
         if (count($index) >= self::limit('max_entries', 20000)) {
             return false;
@@ -141,6 +160,10 @@ final class SeoCacheBounds
         $variants = 0;
 
         foreach ($index as $entry) {
+            if (($entry['locale'] ?? null) !== $locale) {
+                continue;
+            }
+
             if (self::pathOf((string) ($entry['url'] ?? '')) === $path) {
                 $variants++;
             }

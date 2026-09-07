@@ -5,6 +5,7 @@ namespace Tests\Feature\Seo;
 use App\Seo\BotDetector;
 use App\Seo\Contracts\SeoCacheManagerInterface;
 use App\Seo\Contracts\SeoRendererInterface;
+use App\Seo\SeoCacheManager;
 use App\Seo\SeoCacheStatsService;
 use App\Seo\SeoMiddleware;
 use Illuminate\Http\Request;
@@ -701,5 +702,70 @@ class SeoMiddlewareTest extends TestCase
         $this->statsService->expects($this->never())->method('recordHit');
 
         $this->middleware->handle($this->createRequest('/products', 'Googlebot/2.1'), $this->spaNext());
+    }
+
+    /**
+     * 캐시 적중(HIT)은 렌더러를 거치지 않으므로 레이아웃명을 요청 속성에서 얻을 수 없다 —
+     * 캐시 항목에 함께 저장된 레이아웃명으로 통계에 귀속한다. 없으면 화면별 표에서 모든
+     * 화면의 적중이 0 이 되고 'N/A' 행에만 쌓인다.
+     *
+     * @effects cache_hit_carries_layout_name_from_cache_entry
+     */
+    public function test_cache_hit_records_stat_hit_with_layout_from_cache_entry(): void
+    {
+        config(['g7_settings.core.seo.bot_detection_enabled' => true]);
+
+        $cacheManager = $this->createMock(SeoCacheManager::class);
+        $cacheManager->method('getEntry')->willReturn(['html' => '<html>cached</html>', 'layout' => 'shop/show']);
+
+        $middleware = new SeoMiddleware($this->botDetector, $cacheManager, $this->renderer, $this->statsService);
+
+        $this->botDetector->method('isBot')->willReturn(true);
+        $this->statsService->expects($this->once())
+            ->method('recordHit')
+            ->with('/products', config('app.locale'), 'shop/show');
+
+        $response = $middleware->handle($this->createRequest('/products', 'Googlebot/2.1'), $this->spaNext());
+
+        $this->assertSame('<html>cached</html>', $response->getContent());
+        $this->assertSame('HIT', $response->headers->get('X-SEO-Cache'));
+    }
+
+    /**
+     * 렌더러가 "그릴 게 없음"(null)을 돌려주면 방금 뺀 렌더 예산을 되돌린다 — 미라우트 404 나
+     * SEO 비활성 화면은 캐시에 남지 않아 올 때마다 다시 예산을 쓰므로, 죽은 주소 재크롤이
+     * 정상 페이지의 예산을 태운다.
+     *
+     * @effects null_render_refunds_render_budget
+     */
+    public function test_null_render_refunds_render_budget(): void
+    {
+        config(['g7_settings.core.seo.bot_detection_enabled' => true]);
+
+        $this->botDetector->method('isBot')->willReturn(true);
+        $this->cacheManager->method('get')->willReturn(null);
+        $this->renderer->method('render')->willReturn(null);
+
+        $this->middleware->handle($this->createRequest('/gone', 'Googlebot/2.1'), $this->spaNext());
+
+        $this->assertSame(0, (int) RateLimiter::attempts('seo-render:127.0.0.1'));
+    }
+
+    /**
+     * 렌더 중 예외는 비용을 이미 치른 것이므로 예산을 되돌리지 않는다 (회귀 가드).
+     *
+     * @effects null_render_refunds_render_budget
+     */
+    public function test_render_exception_keeps_render_budget_charged(): void
+    {
+        config(['g7_settings.core.seo.bot_detection_enabled' => true]);
+
+        $this->botDetector->method('isBot')->willReturn(true);
+        $this->cacheManager->method('get')->willReturn(null);
+        $this->renderer->method('render')->willThrowException(new \RuntimeException('boom'));
+
+        $this->middleware->handle($this->createRequest('/products', 'Googlebot/2.1'), $this->spaNext());
+
+        $this->assertSame(1, (int) RateLimiter::attempts('seo-render:127.0.0.1'));
     }
 }

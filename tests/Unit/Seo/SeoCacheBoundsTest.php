@@ -99,14 +99,14 @@ class SeoCacheBoundsTest extends TestCase
         ]);
 
         $index = [
-            'k1' => ['url' => '/shop?page=1'],
-            'k2' => ['url' => '/shop?page=2'],
-            'k3' => ['url' => '/shop?page=3'],
+            'k1' => ['url' => '/shop?page=1', 'locale' => 'ko'],
+            'k2' => ['url' => '/shop?page=2', 'locale' => 'ko'],
+            'k3' => ['url' => '/shop?page=3', 'locale' => 'ko'],
         ];
 
-        $this->assertFalse(SeoCacheBounds::canStore($index, '/shop?page=4'));
+        $this->assertFalse(SeoCacheBounds::canStore($index, '/shop?page=4', 'ko'));
         // 다른 경로는 자기 예산을 따로 쓴다
-        $this->assertTrue(SeoCacheBounds::canStore($index, '/board?page=1'));
+        $this->assertTrue(SeoCacheBounds::canStore($index, '/board?page=1', 'ko'));
     }
 
     /**
@@ -122,11 +122,11 @@ class SeoCacheBoundsTest extends TestCase
         ]);
 
         $index = [
-            'k1' => ['url' => '/a'],
-            'k2' => ['url' => '/b'],
+            'k1' => ['url' => '/a', 'locale' => 'ko'],
+            'k2' => ['url' => '/b', 'locale' => 'ko'],
         ];
 
-        $this->assertFalse(SeoCacheBounds::canStore($index, '/c'));
+        $this->assertFalse(SeoCacheBounds::canStore($index, '/c', 'ko'));
     }
 
     /**
@@ -161,5 +161,28 @@ class SeoCacheBoundsTest extends TestCase
         SeoCacheBounds::recordStat('10.0.0.3');
 
         $this->assertFalse(SeoCacheBounds::statsAllowed('10.0.0.3'));
+    }
+
+    /**
+     * 경로당 변종 상한은 언어별로 따로 센다 — 인덱스 항목은 url|locale 별이므로 경로만 보고
+     * 합산하면 언어 수만큼 실효 상한이 줄어든다.
+     *
+     * @effects store_counts_path_variants_per_locale
+     */
+    public function test_can_store_counts_path_variants_per_locale(): void
+    {
+        config([
+            'core.seo_cache_limits.max_variants_per_path' => 2,
+            'core.seo_cache_limits.max_entries' => 20000,
+        ]);
+
+        $index = [
+            'k1' => ['url' => '/shop?page=1', 'locale' => 'ko'],
+            'k2' => ['url' => '/shop?page=2', 'locale' => 'ko'],
+            'k3' => ['url' => '/shop?page=1', 'locale' => 'en'],
+        ];
+
+        $this->assertFalse(SeoCacheBounds::canStore($index, '/shop?page=3', 'ko'));
+        $this->assertTrue(SeoCacheBounds::canStore($index, '/shop?page=2', 'en'), '다른 언어는 자기 예산을 따로 쓴다');
     }
 }

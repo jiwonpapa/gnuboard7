@@ -35,13 +35,40 @@ class SeoCacheManager implements SeoCacheManagerInterface
      */
     public function get(string $url, string $locale): ?string
     {
+        return $this->getEntry($url, $locale)['html'] ?? null;
+    }
+
+    /**
+     * 캐시 항목(HTML + 레이아웃명)을 조회합니다.
+     *
+     * 페이지는 레이아웃명과 함께 저장된다 — 캐시 적중 경로는 렌더러를 거치지 않아 요청
+     * 속성에 레이아웃명이 없고, 통계를 화면별로 귀속하려면 항목이 그것을 알아야 한다.
+     * 이전 버전이 문자열로만 저장한 항목은 레이아웃명 없이 그대로 읽힌다 — 배포 직후
+     * 살아 있는 캐시를 버리지 않는다.
+     *
+     * @param  string  $url  URL
+     * @param  string  $locale  로케일
+     * @return array{html: string, layout: string|null}|null 캐시 항목 (없으면 null)
+     */
+    public function getEntry(string $url, string $locale): ?array
+    {
         if (! $this->isEnabled()) {
             return null;
         }
 
-        $key = $this->buildKey($url, $locale);
+        $value = $this->cache->get($this->buildKey($url, $locale));
 
-        return $this->cache->get($key);
+        if (is_string($value)) {
+            return ['html' => $value, 'layout' => null];
+        }
+
+        if (is_array($value) && is_string($value['html'] ?? null)) {
+            $layout = $value['layout'] ?? null;
+
+            return ['html' => $value['html'], 'layout' => is_string($layout) ? $layout : null];
+        }
+
+        return null;
     }
 
     /**
@@ -259,11 +286,11 @@ class SeoCacheManager implements SeoCacheManagerInterface
             // 스스로 줄지 않는다. 여기서 한 번 정리하지 않으면 상한이 "지금 저장된 양"이
             // 아니라 "과거에 저장한 적이 있는 양"을 재게 되어, 한 번 닿은 경로는 실제
             // 캐시가 비어도 영영 저장이 막힌다(상한이 아니라 일방향 래치가 된다).
-            if (! SeoCacheBounds::canStore($index, $url) && $this->shouldAttemptPrune()) {
+            if (! SeoCacheBounds::canStore($index, $url, $locale) && $this->shouldAttemptPrune()) {
                 $index = $this->rebuildIndex();
             }
 
-            if (! SeoCacheBounds::canStore($index, $url)) {
+            if (! SeoCacheBounds::canStore($index, $url, $locale)) {
                 Log::debug('[SEO] 캐시 저장 상한에 도달해 저장하지 않습니다', [
                     'url' => $url,
                     'locale' => $locale,
@@ -274,7 +301,8 @@ class SeoCacheManager implements SeoCacheManagerInterface
             }
         }
 
-        $this->cache->put($key, $html, $this->getCacheTtl());
+        // 레이아웃명을 페이지와 함께 둔다 — 적중 경로가 통계를 화면별로 귀속할 유일한 출처다.
+        $this->cache->put($key, ['html' => $html, 'layout' => $layoutName], $this->getCacheTtl());
 
         $entry = [
             'url' => $url,

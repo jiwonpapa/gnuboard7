@@ -143,7 +143,7 @@ return [
         // 정규화된 쿼리 문자열 길이 상한 (바이트)
         'max_query_length' => (int) env('G7_SEO_CACHE_MAX_QUERY_LENGTH', 512),
 
-        // 같은 경로에 대해 저장하는 쿼리 변종 수 상한
+        // 같은 경로·언어에 대해 저장하는 쿼리 변종 수 상한 (언어별로 따로 센다)
         'max_variants_per_path' => (int) env('G7_SEO_CACHE_MAX_VARIANTS_PER_PATH', 50),
 
         // 캐시 인덱스 전체 항목 수 상한

@@ -154,39 +154,7 @@ class ExtensionBundleService
      */
     public function buildJsBundle(string $type): string
     {
-        $ordered = $this->getOrderedGlobalAssetPaths($type);
-        $isProduction = app()->environment('production');
-        $segments = [];
-
-        foreach ($ordered as $identifier => $paths) {
-            if (empty($paths['jsAbsPath'])) {
-                continue;
-            }
-
-            try {
-                $content = @file_get_contents($paths['jsAbsPath']);
-
-                if ($content === false) {
-                    Log::warning('확장 JS 번들 병합: 파일 읽기 실패, 해당 확장 skip', [
-                        'type' => $type,
-                        'identifier' => $identifier,
-                        'path' => $paths['jsAbsPath'],
-                    ]);
-
-                    continue;
-                }
-
-                $segments[] = $this->processJsSourceMap($content, $type, $identifier, $isProduction);
-            } catch (\Throwable $e) {
-                Log::warning('확장 JS 번들 병합 중 오류, 해당 확장 skip', [
-                    'type' => $type,
-                    'identifier' => $identifier,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        return implode("\n;\n", $segments);
+        return $this->mergeBundle($type, 'js')['content'];
     }
 
     /**
@@ -204,60 +172,7 @@ class ExtensionBundleService
      */
     public function buildCssBundle(string $type): string
     {
-        $ordered = $this->getOrderedGlobalAssetPaths($type);
-        $isProduction = app()->environment('production');
-        $typeSegment = $type === 'plugin' ? 'plugins' : 'modules';
-        $version = $this->getCurrentVersion();
-        $segments = [];
-
-        foreach ($ordered as $identifier => $paths) {
-            if (empty($paths['cssAbsPath'])) {
-                continue;
-            }
-
-            try {
-                $content = @file_get_contents($paths['cssAbsPath']);
-
-                if ($content === false) {
-                    Log::warning('확장 CSS 번들 병합: 파일 읽기 실패, 해당 확장 skip', [
-                        'type' => $type,
-                        'identifier' => $identifier,
-                        'path' => $paths['cssAbsPath'],
-                    ]);
-
-                    continue;
-                }
-
-                // 상대 참조는 **치환**한다. 병합본의 주소(`/api/{type}/bundle.css` 또는 정적
-                // 게시본)는 어느 확장의 dist 디렉토리도 아니므로 상대 해석이 반드시 어긋나는데,
-                // 그 실패는 404 하나로만 나타나 서버 로그에 흔적이 없다.
-                //
-                // 종전에는 그런 CSS 를 가진 확장을 번들에서 통째로 제외했다. 그러나 번들 URL 이
-                // 내려오면 프론트는 개별 로딩을 아예 타지 않으므로(TemplateApp.loadExtensionAssets)
-                // 제외 = 그 확장의 스타일이 **하나도 적용되지 않음** 이었다. 주석이 말하던
-                // "개별 폴백" 은 bundleUrls 부재(구버전 blade) 경로에만 있다.
-                $content = AssetCssUrlRewriter::rewrite(
-                    $content,
-                    (string) ($paths['cssRelPath'] ?? ''),
-                    fn (string $path): string => AssetUrl::extensionApiAsset(
-                        $typeSegment,
-                        $identifier,
-                        $path,
-                        $version
-                    )
-                );
-
-                $segments[] = $this->processCssSourceMap($content, $isProduction);
-            } catch (\Throwable $e) {
-                Log::warning('확장 CSS 번들 병합 중 오류, 해당 확장 skip', [
-                    'type' => $type,
-                    'identifier' => $identifier,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        return implode("\n", $segments);
+        return $this->mergeBundle($type, 'css')['content'];
     }
 
     /**
@@ -331,8 +246,9 @@ class ExtensionBundleService
      *
      * 병합 결과가 비어 있어도 선언한 산출물이 **전부 존재하면**(또는 선언이 0이면) 0바이트
      * 캐시 파일을 만든다. 그래야 정적 게시 대상이 되어 방문자가 웹서버에서 직접 받는다 —
-     * 만들지 않으면 그 구성의 모든 페이지 로드가 PHP 를 거친다. 선언한 산출물이 **소실**된
-     * 경우에만 캐시하지 않아, 호출측의 503 판정이 그대로 유지된다.
+     * 만들지 않으면 그 구성의 모든 페이지 로드가 PHP 를 거친다. 캐시하지 않는 것은 둘이다 —
+     * 선언한 산출물이 **소실**된 경우(호출측의 503 판정을 그대로 유지한다)와 병합 단계에서
+     * 확장을 **건너뛴** 경우(그 상태가 굳지 않도록 매 요청 재시도에 맡긴다).
      *
      * @param  CoreStorageDriver  $storage  번들 디스크 스토리지
      * @param  string  $type  'module' | 'plugin'
@@ -379,7 +295,22 @@ class ExtensionBundleService
                 return $storage->getBasePath('').'/'.$relativeName;
             }
 
-            $content = $this->buildBundleContent($type, $kind);
+            ['content' => $content, 'skipped' => $skipped] = $this->mergeBundle($type, $kind);
+
+            // 건너뛴 확장이 있으면 캐시하지 않는다 — 파일은 존재·판독 가능한데 읽기·치환이
+            // 실패한 상태가 캐시로 굳으면 버전 bump 전까지 그 확장 자산이 사라진 채 고정된다.
+            // 캐시 없이 돌아가면 호출측이 매 요청 다시 병합하므로 원인이 사라지는 순간 회복한다.
+            // 출하 기본 로그 수준이 error 라 warning 은 기록되지 않는다 — 이 통지가 유일한 흔적이다.
+            if ($skipped !== []) {
+                Log::error('확장 번들 캐시 보류 — 병합 단계에서 건너뛴 확장이 있어 캐시하지 않습니다', [
+                    'type' => $type,
+                    'kind' => $kind,
+                    'version' => $version,
+                    'skipped' => $skipped,
+                ]);
+
+                return '';
+            }
 
             // 비었는데 선언한 산출물이 소실이면 캐시하지 않는다 — 배포 중 dist 가 잠깐 빈
             // 장애가 0바이트 캐시로 굳어 정상(빈 200)으로 위장되면 안 된다.
@@ -408,9 +339,163 @@ class ExtensionBundleService
      */
     public function buildBundleContent(string $type, string $kind): string
     {
-        return $kind === 'css'
-            ? $this->buildCssBundle($type)
-            : $this->buildJsBundle($type);
+        return $this->mergeBundle($type, $kind)['content'];
+    }
+
+    /**
+     * 병합 결과와 함께 **건너뛴 확장**을 돌려줍니다 (캐시 판정용).
+     *
+     * 캐시할지는 결과 문자열만으로 판정할 수 없다 — 파일은 존재·판독 가능한데 읽기나 치환이
+     * 실패해 건너뛴 확장은 결과에서 조용히 빠질 뿐이다. 그 상태가 캐시로 굳으면 버전 bump
+     * 전까지 그 확장 자산이 사라진 채 고정되므로, 캐시 경로는 건너뜀 여부를 함께 받는다.
+     *
+     * @param  string  $type  'module' | 'plugin'
+     * @param  string  $kind  'js' | 'css'
+     * @return array{content: string, skipped: list<string>} 병합 결과와 건너뛴 확장 식별자
+     */
+    private function mergeBundle(string $type, string $kind): array
+    {
+        $merged = $kind === 'css' ? $this->mergeCss($type) : $this->mergeJs($type);
+
+        return [
+            'content' => implode($kind === 'css' ? "\n" : "\n;\n", $merged['segments']),
+            'skipped' => $merged['skipped'],
+        ];
+    }
+
+    /**
+     * JS 세그먼트를 priority 순으로 모읍니다.
+     *
+     * 확장별 fine-grained try/catch — 읽기 실패·처리 예외는 그 확장만 건너뛰고(`skipped`
+     * 에 기록) 나머지 병합을 지속한다. 한 확장의 실패가 번들 전체를 붕괴시키지 않는다.
+     *
+     * @param  string  $type  'module' | 'plugin'
+     * @return array{segments: list<string>, skipped: list<string>} 세그먼트와 건너뛴 확장 식별자
+     */
+    private function mergeJs(string $type): array
+    {
+        $ordered = $this->getOrderedGlobalAssetPaths($type);
+        $isProduction = app()->environment('production');
+        $segments = [];
+        $skipped = [];
+
+        foreach ($ordered as $identifier => $paths) {
+            if (empty($paths['jsAbsPath'])) {
+                continue;
+            }
+
+            try {
+                $content = $this->readAssetSource($paths['jsAbsPath']);
+
+                if ($content === false) {
+                    Log::warning('확장 JS 번들 병합: 파일 읽기 실패, 해당 확장 skip', [
+                        'type' => $type,
+                        'identifier' => $identifier,
+                        'path' => $paths['jsAbsPath'],
+                    ]);
+                    $skipped[] = (string) $identifier;
+
+                    continue;
+                }
+
+                $segments[] = $this->processJsSourceMap($content, $type, $identifier, $isProduction);
+            } catch (\Throwable $e) {
+                Log::warning('확장 JS 번들 병합 중 오류, 해당 확장 skip', [
+                    'type' => $type,
+                    'identifier' => $identifier,
+                    'error' => $e->getMessage(),
+                ]);
+                $skipped[] = (string) $identifier;
+            }
+        }
+
+        return ['segments' => $segments, 'skipped' => $skipped];
+    }
+
+    /**
+     * CSS 세그먼트를 priority 순으로 모읍니다.
+     *
+     * CSS 안의 상대 `url(...)`·`@import` 참조는 그 확장의 절대 자산 URL 로 치환한다 —
+     * 병합본의 주소는 어느 확장의 dist 디렉토리도 아니라 상대 해석이 반드시 어긋나기 때문이다.
+     * 치환은 개별 자산 서빙(ServesRewritableCssAssets)과 같은 규칙(AssetCssUrlRewriter)을 쓴다.
+     *
+     * @param  string  $type  'module' | 'plugin'
+     * @return array{segments: list<string>, skipped: list<string>} 세그먼트와 건너뛴 확장 식별자
+     */
+    private function mergeCss(string $type): array
+    {
+        $ordered = $this->getOrderedGlobalAssetPaths($type);
+        $isProduction = app()->environment('production');
+        $typeSegment = $type === 'plugin' ? 'plugins' : 'modules';
+        $version = $this->getCurrentVersion();
+        $segments = [];
+        $skipped = [];
+
+        foreach ($ordered as $identifier => $paths) {
+            if (empty($paths['cssAbsPath'])) {
+                continue;
+            }
+
+            try {
+                $content = $this->readAssetSource($paths['cssAbsPath']);
+
+                if ($content === false) {
+                    Log::warning('확장 CSS 번들 병합: 파일 읽기 실패, 해당 확장 skip', [
+                        'type' => $type,
+                        'identifier' => $identifier,
+                        'path' => $paths['cssAbsPath'],
+                    ]);
+                    $skipped[] = (string) $identifier;
+
+                    continue;
+                }
+
+                // 상대 참조는 **치환**한다. 병합본의 주소(`/api/{type}/bundle.css` 또는 정적
+                // 게시본)는 어느 확장의 dist 디렉토리도 아니므로 상대 해석이 반드시 어긋나는데,
+                // 그 실패는 404 하나로만 나타나 서버 로그에 흔적이 없다.
+                //
+                // 종전에는 그런 CSS 를 가진 확장을 번들에서 통째로 제외했다. 그러나 번들 URL 이
+                // 내려오면 프론트는 개별 로딩을 아예 타지 않으므로(TemplateApp.loadExtensionAssets)
+                // 제외 = 그 확장의 스타일이 **하나도 적용되지 않음** 이었다. 주석이 말하던
+                // "개별 폴백" 은 bundleUrls 부재(구버전 blade) 경로에만 있다.
+                $content = AssetCssUrlRewriter::rewrite(
+                    $content,
+                    (string) ($paths['cssRelPath'] ?? ''),
+                    fn (string $path): string => AssetUrl::extensionApiAsset(
+                        $typeSegment,
+                        $identifier,
+                        $path,
+                        $version
+                    )
+                );
+
+                $segments[] = $this->processCssSourceMap($content, $isProduction);
+            } catch (\Throwable $e) {
+                Log::warning('확장 CSS 번들 병합 중 오류, 해당 확장 skip', [
+                    'type' => $type,
+                    'identifier' => $identifier,
+                    'error' => $e->getMessage(),
+                ]);
+                $skipped[] = (string) $identifier;
+            }
+        }
+
+        return ['segments' => $segments, 'skipped' => $skipped];
+    }
+
+    /**
+     * 확장 자산 원본을 읽습니다.
+     *
+     * 실패는 `false` 로 돌아오고 호출측이 그 확장을 건너뛴다. 별도 메서드인 이유는
+     * "존재·판독 가능한데 읽기가 실패하는" 상태를 테스트가 재현할 수 있어야 하기 때문이다 —
+     * 그 상태가 캐시로 굳는 것이 이 서비스가 막아야 할 결함이다.
+     *
+     * @param  string  $path  절대 경로
+     * @return string|false 파일 내용 (실패 시 false)
+     */
+    protected function readAssetSource(string $path): string|false
+    {
+        return @file_get_contents($path);
     }
 
     /**

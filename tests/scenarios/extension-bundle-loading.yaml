@@ -69,6 +69,7 @@ effects:
   - prod_build_lock_failure_falls_back_to_unlocked_build
   - prod_empty_result_with_present_artifacts_is_cached_as_zero_byte_file
   - prod_empty_result_with_missing_artifact_is_not_cached
+  - prod_build_with_skipped_extension_is_not_cached
   - zero_byte_bundle_is_statically_published
 
 test_files:

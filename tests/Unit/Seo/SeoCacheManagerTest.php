@@ -423,4 +423,63 @@ class SeoCacheManagerTest extends TestCase
         $manager->putWithLayout('/shop?page=6', 'ko', '<html>6</html>', 'shop');
         $this->assertSame('<html>6</html>', $manager->get('/shop?page=6', 'ko'));
     }
+
+    /**
+     * 페이지와 함께 저장한 레이아웃명을 꺼낼 수 있다 — 캐시 적중(HIT)은 렌더러를 거치지
+     * 않으므로 요청 속성에 레이아웃명이 없고, 캐시 항목이 그것을 알아야 통계가 화면별로 귀속된다.
+     *
+     * @effects cache_hit_carries_layout_name_from_cache_entry
+     */
+    public function test_get_entry_returns_layout_stored_with_page(): void
+    {
+        $this->cacheManager->putWithLayout('/products/1', 'ko', '<html>p</html>', 'shop/show');
+
+        $this->assertSame(
+            ['html' => '<html>p</html>', 'layout' => 'shop/show'],
+            $this->cacheManager->getEntry('/products/1', 'ko')
+        );
+        $this->assertSame('<html>p</html>', $this->cacheManager->get('/products/1', 'ko'));
+        $this->assertNull($this->cacheManager->getEntry('/nope', 'ko'));
+    }
+
+    /**
+     * 이전 버전이 문자열로만 저장한 항목도 그대로 읽힌다 — 배포 직후 살아 있는 캐시를 버리지 않는다.
+     *
+     * @effects cache_hit_carries_layout_name_from_cache_entry
+     */
+    public function test_get_reads_legacy_string_entries(): void
+    {
+        $driver = new CoreCacheDriver('array');
+        $manager = new SeoCacheManager($driver);
+
+        $driver->put('seo.page.'.md5('/legacy|ko'), '<html>legacy</html>', 3600);
+
+        $this->assertSame('<html>legacy</html>', $manager->get('/legacy', 'ko'));
+        $this->assertSame(['html' => '<html>legacy</html>', 'layout' => null], $manager->getEntry('/legacy', 'ko'));
+    }
+
+    /**
+     * 경로당 변종 상한은 언어별로 따로 센다 — 인덱스 항목은 url|locale 별인데 경로만 보고
+     * 합산하면 언어 수만큼 실효 상한이 줄어, 다국어 사이트의 목록 뒤쪽 페이지가 캐시에서 빠진다.
+     *
+     * @effects store_counts_path_variants_per_locale
+     */
+    public function test_path_variant_cap_is_counted_per_locale(): void
+    {
+        config([
+            'core.seo_cache_limits.max_variants_per_path' => 3,
+            'core.seo_cache_limits.max_entries' => 20000,
+        ]);
+
+        for ($i = 1; $i <= 3; $i++) {
+            $this->cacheManager->putWithLayout('/shop?page='.$i, 'ko', '<html>ko'.$i.'</html>', 'shop');
+        }
+
+        // ko 는 상한 도달, en 은 자기 예산을 따로 쓴다
+        $this->cacheManager->putWithLayout('/shop?page=4', 'ko', '<html>ko4</html>', 'shop');
+        $this->cacheManager->putWithLayout('/shop?page=1', 'en', '<html>en1</html>', 'shop');
+
+        $this->assertNull($this->cacheManager->get('/shop?page=4', 'ko'));
+        $this->assertSame('<html>en1</html>', $this->cacheManager->get('/shop?page=1', 'en'));
+    }
 }

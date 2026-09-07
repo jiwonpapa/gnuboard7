@@ -131,7 +131,8 @@ class ExtensionBundleServiceTest extends TestCase
         int $priority,
         array $assets,
         string $strategy = 'global',
-        ?array $declaredPaths = null
+        ?array $declaredPaths = null,
+        ?array $builtPaths = null
     ): object {
         $ext = Mockery::mock();
         $ext->shouldReceive('hasAssets')->andReturn($assets !== []);
@@ -142,8 +143,10 @@ class ExtensionBundleServiceTest extends TestCase
             'dependencies' => [],
         ]);
         $ext->shouldReceive('getAssets')->andReturn($assets);
+        // 실제 확장은 존재하는 산출물만 built 경로로 돌려준다(getBuiltAssetPaths 가 file_exists 로 거른다).
+        // 기본값은 "산출물 없음" 상태를 흉내 내는 부재 경로다 — 존재하는 산출물을 흉내 내려면 $builtPaths 로 지정한다.
         $ext->shouldReceive('getBuiltAssetAbsolutePaths')->andReturn(
-            array_map(fn () => $this->fixtureDir.'/missing-'.$identifier.'.out', $assets)
+            $builtPaths ?? array_map(fn () => $this->fixtureDir.'/missing-'.$identifier.'.out', $assets)
         );
         $ext->shouldReceive('getBuiltAssetPaths')->andReturn(
             array_map(fn () => 'dist/css/module.css', $assets)
@@ -914,6 +917,7 @@ class ExtensionBundleServiceTest extends TestCase
                     100,
                     ['css' => ['output' => 'dist/css/module.css']],
                     'global',
+                    ['css' => $cssPath],
                     ['css' => $cssPath]
                 ),
             ];
@@ -981,5 +985,45 @@ class ExtensionBundleServiceTest extends TestCase
         $this->assertNotSame('', $path);
         $this->assertFileExists($path);
         $this->assertSame(0, filesize($path));
+    }
+
+    /**
+     * 병합 단계에서 건너뛴 확장이 하나라도 있으면 캐시하지 않는다 — 파일은 존재·판독 가능한데
+     * 읽기·치환이 실패한 상태가 0바이트(또는 일부 빠진) 캐시로 굳으면 버전 bump 전까지 그
+     * 확장 스타일이 사라진 채 고정된다. 종전처럼 매 요청 재시도해 원인이 사라지면 회복한다.
+     *
+     * @effects prod_build_with_skipped_extension_is_not_cached
+     */
+    public function test_prod_does_not_cache_when_an_extension_was_skipped_during_merge(): void
+    {
+        $this->app['env'] = 'production';
+        app()->detectEnvironment(fn () => 'production');
+
+        $cssPath = $this->writeFixture('unreadable.css', '.a{color:red}');
+
+        $this->moduleManager->shouldReceive('getActiveModules')->andReturn([
+            'ext-unreadable' => $this->fakeExtension('ext-unreadable', 100, null, $cssPath),
+        ]);
+
+        $svc = new class($this->moduleManager, $this->pluginManager) extends ExtensionBundleService
+        {
+            public string $failOn = '';
+
+            protected function readAssetSource(string $path): string|false
+            {
+                return $path === $this->failOn ? false : parent::readAssetSource($path);
+            }
+        };
+        $svc->failOn = $cssPath;
+
+        $this->assertSame('', $svc->getBundleFilePath('module', 'css', 424250));
+        $this->assertFileDoesNotExist(storage_path('app/ext-bundles/module.424250.css'));
+
+        // 원인이 사라지면 다음 요청이 정상 캐시한다 (매 요청 재시도)
+        $svc->failOn = '';
+        $path = $svc->getBundleFilePath('module', 'css', 424250);
+
+        $this->assertNotSame('', $path);
+        $this->assertStringEqualsFile($path, '.a{color:red}');
     }
 }

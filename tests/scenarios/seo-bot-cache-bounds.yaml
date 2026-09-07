@@ -15,6 +15,10 @@ description: |
     - 렌더 예산: IP 당 분당 미스 렌더 상한, 초과분은 SPA + X-SEO-Cache: BYPASS (429 아님)
     - 저장 규모: 경로당 변종 수 · 전체 항목 수 상한, 기존 키 갱신은 상한과 무관
     - 통계: 미들웨어가 HIT/MISS 를 기록하되 IP 당 분당 상한 안에서만
+    - 캐시 항목은 HTML + 레이아웃명 — HIT 통계가 화면별로 귀속된다 (이전 문자열 항목 호환)
+    - 경로당 변종 상한은 언어별로 센다 (인덱스 항목이 url|locale 별이므로)
+    - 렌더러가 null 을 돌려준 요청은 렌더 예산을 되돌린다 (예외는 되돌리지 않는다)
+    - 통계 url 컬럼(768)은 캐시 키 URL 상한을 담는다 — 마이그레이션 왕복 안전
 
 axes:
   bot_state: [bot, browser]
@@ -39,8 +43,14 @@ effects:
   - expired_index_entries_are_pruned_before_cap_verdict
   - put_and_put_with_layout_share_the_storage_cap
   - index_prune_is_throttled_to_one_scan_per_interval
+  - cache_hit_carries_layout_name_from_cache_entry
+  - store_counts_path_variants_per_locale
+  - null_render_refunds_render_budget
+  - stats_url_column_fits_normalized_cache_url
 
 test_files:
   - tests/Unit/Seo/SeoCacheBoundsTest.php
   - tests/Unit/Seo/SeoCacheManagerTest.php
   - tests/Feature/Seo/SeoMiddlewareTest.php
+  - tests/Unit/Seo/SeoCacheStatsServiceTest.php
+  - tests/Feature/Database/ModifyUrlInSeoCacheStatsMigrationTest.php

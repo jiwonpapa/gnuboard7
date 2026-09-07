@@ -75,15 +75,15 @@ class SeoMiddleware
         $cacheUrl = $this->buildCacheUrl($request, $normalizedQuery);
 
         // 캐시 확인 — 적중은 비용이 없으므로 렌더 예산과 무관하게 서빙한다
-        $cachedHtml = $this->cacheManager->get($cacheUrl, $locale);
-        if ($cachedHtml !== null) {
+        $entry = $this->readEntry($cacheUrl, $locale);
+        if ($entry !== null) {
             $this->recordStat($ip, fn () => $this->statsService->recordHit(
                 $cacheUrl,
                 $locale,
-                $request->attributes->get('seo_layout_name') ?: null
+                $entry['layout'] ?: null
             ));
 
-            return response($cachedHtml, 200, [
+            return response($entry['html'], 200, [
                 'Content-Type' => 'text/html; charset=utf-8',
                 'X-SEO-Cache' => 'HIT',
             ]);
@@ -134,6 +134,10 @@ class SeoMiddleware
 
         // 렌더링 실패 시 SPA fallback
         if ($html === null) {
+            // "그릴 게 없음" 은 비용을 치르지 않았다 — 되돌리지 않으면 캐시에 남지 않는 죽은
+            // 주소 재크롤이 올 때마다 정상 페이지의 예산을 태운다.
+            SeoCacheBounds::refundRender($ip);
+
             return $next($request);
         }
 
@@ -153,6 +157,29 @@ class SeoMiddleware
             'Content-Type' => 'text/html; charset=utf-8',
             'X-SEO-Cache' => 'MISS',
         ]);
+    }
+
+    /**
+     * 캐시 항목(HTML + 레이아웃명)을 읽습니다.
+     *
+     * 적중 경로는 렌더러를 거치지 않아 요청 속성에 레이아웃명이 없다 — 통계를 화면별로
+     * 귀속하려면 캐시 항목이 그것을 알아야 한다. 인터페이스(`get`)는 HTML 만 돌려주므로
+     * 코어 매니저일 때만 항목 전체를 읽고, 다른 구현이 바인딩된 경우에는 레이아웃명 없이
+     * HTML 만 쓴다(그 통계는 레이아웃 미상으로 귀속된다).
+     *
+     * @param  string  $cacheUrl  캐시 키용 URL
+     * @param  string  $locale  로케일
+     * @return array{html: string, layout: string|null}|null 캐시 항목 (없으면 null)
+     */
+    private function readEntry(string $cacheUrl, string $locale): ?array
+    {
+        if ($this->cacheManager instanceof SeoCacheManager) {
+            return $this->cacheManager->getEntry($cacheUrl, $locale);
+        }
+
+        $html = $this->cacheManager->get($cacheUrl, $locale);
+
+        return $html === null ? null : ['html' => $html, 'layout' => null];
     }
 
     /**
