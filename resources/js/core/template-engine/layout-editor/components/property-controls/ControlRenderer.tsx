@@ -1,3 +1,4 @@
+import type { EditorExtensionHost } from '../../extensions/contract';
 // E2E: tests/Playwright/specs/layout-editor/prop-i18n-text-field.spec.ts (부록7 7-b — i18n-text+propValue 승격 위젯).
 /**
  * ControlRenderer.tsx — 컨트롤 1건 렌더 + 값 ↔ 패치 연결
@@ -24,6 +25,7 @@ import { I18nTextField } from './I18nTextField';
 import { DataChipValueInput } from '../page-settings/DataChipValueInput';
 
 export interface ControlRendererProps {
+  extensionHost?: EditorExtensionHost;
   /** 컨트롤 키 (`textAlign` 등) — 라벨 fallback 에 사용 */
   controlKey: string;
   /** 컨트롤 정의 */
@@ -61,6 +63,7 @@ function resolveLabel(controlKey: string, control: EditorControlSpec, t: Control
 }
 
 export function ControlRenderer({
+  extensionHost,
   controlKey,
   control,
   node,
@@ -170,7 +173,7 @@ export function ControlRenderer({
             {t('layout_editor.property_modal.dark_code_only')}
           </span>
         ) : Widget ? (
-          <Widget control={control} value={resolution.value} onChange={handleChange} t={t} candidates={candidates} bindingCandidates={bindingCandidates} freeValueDisabled={freeValueDisabled} />
+          <Widget extensionHost={extensionHost} control={control} value={resolution.value} onChange={handleChange} t={t} candidates={candidates} bindingCandidates={bindingCandidates} freeValueDisabled={freeValueDisabled} />
         ) : (
           <span data-testid={`g7le-control-unsupported-${controlKey}`} style={unsupported}>
             {t('layout_editor.property_modal.unsupported_widget')}

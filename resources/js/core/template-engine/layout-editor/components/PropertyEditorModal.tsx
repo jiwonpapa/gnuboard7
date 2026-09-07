@@ -1,3 +1,4 @@
+import type { EditorExtensionHost } from '../extensions/contract';
 // e2e:allow 레이아웃 편집기 속성 편집 모달 — 컴포넌트 ⓘ 메뉴 진입 + 속성/번역 탭 칩 위젯·contentEditable·합성 클릭 의존으로 Playwright 자동화 부적합, Chrome MCP 매트릭스 + 단위(s7-property-controls/prop-i18n-text-field/TranslationField 등)로 검증 (TranslationField.tsx 와 동일 정책)
 /**
  * PropertyEditorModal.tsx — 속성 편집 모달
@@ -59,6 +60,7 @@ import {
 type TabKey = 'settings' | 'props' | 'style' | 'action' | 'visibility' | 'translation' | 'advanced';
 
 export interface PropertyEditorModalProps {
+  extensionHost?: EditorExtensionHost;
   /** 편집 대상 노드 (현재 패치 반영본) */
   node: EditorNode;
   /** 병합 editor-spec */
@@ -140,6 +142,7 @@ function findManifestEntry(manifest: ComponentManifest | null, name: string) {
 }
 
 export function PropertyEditorModal({
+  extensionHost,
   node,
   spec,
   manifest,
@@ -452,7 +455,7 @@ export function PropertyEditorModal({
                 신규 종류 모두 동일 슬롯에 직접 렌더, 코어는 kind 를 모른다. 구조 편집(항목/행·열)은
  CSS 가 아니라 노드 구조라 [속성] 탭에 둔다(스타일 탭=CSS 전용). */}
             {hasNodeEditor && NodeEditorComp && (
-              <NodeEditorComp
+              <NodeEditorComp extensionHost={extensionHost}
                 node={node}
                 params={nodeEditorParams}
                 spec={spec}
@@ -469,7 +472,7 @@ export function PropertyEditorModal({
 ). 합성 EditorControlSpec 이라 controls.json 없이 동작 —
                 동일 ControlRenderer 파이프라인으로 BASE_SCOPE 고정 렌더. */}
             {corePropKeys.map((key) => (
-              <ControlRenderer
+              <ControlRenderer extensionHost={extensionHost}
                 key={`core-${key}`}
                 controlKey={`core-${key}`}
                 control={CORE_PROP_CONTROLS[key]}
@@ -486,7 +489,7 @@ export function PropertyEditorModal({
               const control = getControl(spec, key);
               if (!control) return null;
               return (
-                <ControlRenderer
+                <ControlRenderer extensionHost={extensionHost}
                   key={key}
                   controlKey={key}
                   control={control}
@@ -534,7 +537,7 @@ export function PropertyEditorModal({
               const control = getControl(spec, key);
               if (!control) return null;
               return (
-                <ControlRenderer
+                <ControlRenderer extensionHost={extensionHost}
                   key={key}
                   controlKey={key}
                   control={control}

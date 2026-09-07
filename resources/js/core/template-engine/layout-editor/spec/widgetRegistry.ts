@@ -1,3 +1,4 @@
+import type { EditorExtensionHost } from '../extensions/contract';
 // e2e:allow 속성 위젯 레지스트리 타입/등록 — 칩·키화 결선용 후보 풀 prop 추가. 칩 입력기·contentEditable·합성 클릭 의존으로 Playwright 부적합, 단위(widgetRegistry/OptionsListControl 등)+Chrome MCP 매트릭스로 검증 (계획 정책)
 /**
  * widgetRegistry.ts — 컨트롤 위젯 레지스트리
@@ -30,6 +31,8 @@ import type { EditorControlSpec } from './specTypes';
  * ControlRenderer 가 recipeEngine 으로 처리한다.
  */
 export interface WidgetProps {
+  /** Optional public guarded host; existing extensions remain compatible. */
+  extensionHost?: EditorExtensionHost;
   /** 컨트롤 정의 — 옵션/스케일/라벨 등 */
   control: EditorControlSpec;
   /** 현재값 (reverseResolve 결과). undefined = 기본/미적용 */

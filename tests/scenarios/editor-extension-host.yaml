@@ -1,0 +1,18 @@
+feature: editor-extension-host
+description: 공개 선택 항목 확장 명령의 소유권 및 이력 보존
+test_files:
+  - resources/js/core/template-engine/layout-editor/__tests__/hooks/extensionHost.test.tsx
+axes:
+  operation: [text]
+  source: [route, base, partial, extension]
+effects:
+  - route_changes_text_only
+  - protected_sources_have_no_mutation
+  - stale_session_revision_path_rejected
+  - existing_history_undo_redo
+  - responsive_path_preserved
+  - panel_ready_replace_unregister
+  - old_host_compatibility
+notes: |
+  extensionHost.test.tsx의 source 테이블과 개별 테스트로 검증한다.
+  실제 소비자 저장 재열기는 PB nativeEditorContract.spec.ts에 별도 기록한다.

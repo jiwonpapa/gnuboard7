@@ -1,3 +1,4 @@
+import type { EditorExtensionHost } from '../extensions/contract';
 // e2e:allow 노드 에디터 레지스트리 타입 — 칩·키화 결선용 후보 풀 prop 추가. 칩 입력기·합성 클릭 의존으로 Playwright 부적합, 단위+Chrome MCP 매트릭스로 검증 (계획 정책)
 /**
  * nodeEditorRegistry.ts — 노드 에디터(속성탭 본체) 레지스트리
@@ -30,6 +31,8 @@ import type { BindingCandidate } from './bindingCandidates';
  * `nodeEditor.params`(그 kind 소유의 불투명 객체)를 그대로 전달받는다.
  */
 export interface NodeEditorProps {
+  /** Optional public guarded host; existing extensions remain compatible. */
+  extensionHost?: EditorExtensionHost;
   /** 편집 대상 노드(현재 패치 반영본) */
   node: EditorNode;
   /** capability `nodeEditor.params` — 그 kind 에디터가 해석하는 불투명 객체 */

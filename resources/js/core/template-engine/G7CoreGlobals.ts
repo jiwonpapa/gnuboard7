@@ -862,6 +862,7 @@ function initLayoutEditorStub(G7Core: any): void {
     __isStub: true,
     __queue: queue,
     __readyCallbacks: readyCallbacks,
+    registerPanel: (id: string, panel: unknown) => queue.push(['panel', id, panel]),
     registerWidget: (name: string, comp: unknown) => queue.push(['widget', name, comp]),
     registerNodeEditor: (kind: string, comp: unknown) => queue.push(['nodeEditor', kind, comp]),
     registerCanvasOverlay: (kind: string, overlay: unknown) =>

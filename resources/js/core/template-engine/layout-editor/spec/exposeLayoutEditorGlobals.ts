@@ -1,3 +1,4 @@
+import { registerPanel } from '../extensions/panelRegistry';
 /**
  * exposeLayoutEditorGlobals.ts — `G7Core.layoutEditor` 확장점 노출
  *
@@ -46,6 +47,7 @@ export function exposeLayoutEditorGlobals(): void {
 
   g7.layoutEditor = {
     /** 커스텀 속성 컨트롤 위젯 등록 — controls.json 의 `widget` 으로 참조 */
+    registerPanel,
     registerWidget,
     /** 커스텀 노드 에디터(속성탭 본체) 등록 — capability `nodeEditor.kind` 로 참조 */
     registerNodeEditor,
@@ -61,7 +63,8 @@ export function exposeLayoutEditorGlobals(): void {
   for (const entry of pendingQueue) {
     const [kind, ...args] = entry;
     try {
-      if (kind === 'widget') registerWidget(args[0] as string, args[1] as never);
+      if (kind === 'panel') registerPanel(args[0] as string, args[1] as Parameters<typeof registerPanel>[1]);
+      else if (kind === 'widget') registerWidget(args[0] as string, args[1] as never);
       else if (kind === 'nodeEditor') registerNodeEditor(args[0] as string, args[1] as never);
       else if (kind === 'canvasOverlay')
         registerCanvasOverlay(args[0] as string, args[1] as never);

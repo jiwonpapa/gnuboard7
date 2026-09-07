@@ -1,3 +1,4 @@
+import { useRevisionedDocument } from './useRevisionedDocument';
 /**
  * useLayoutDocument.ts — 편집기 캔버스의 레이아웃 문서 로드/패치/저장 hook
  *
@@ -133,6 +134,8 @@ export type SaveResult =
   | { kind: 'guard_no_document' };
 
 export interface UseLayoutDocumentResult {
+  /** Internal host command cell; not exposed as a mutable extension store. */
+  readExtensionDocument?: () => { sessionId: string; revision: number; value: LoadedLayoutDocument | null };
   /** 현재 로드된 문서 (null = 로드 전 / 라우트 미선택) */
   document: LoadedLayoutDocument | null;
   /** 로딩 중 여부 */
@@ -300,7 +303,10 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
   const iterationSourcePath =
     editMode === 'iteration_item' ? extractIterationSourcePath(state.selectedRoute?.path) : null;
 
-  const [document, setDocument] = useState<LoadedLayoutDocument | null>(null);
+  const documentCell = useRevisionedDocument<LoadedLayoutDocument>(
+    JSON.stringify([templateIdentifier, layoutName, editMode, state.selectedRoute?.path]),
+  );
+  const { value: document, set: setDocument, read: readExtensionDocument, renew: renewDocument } = documentCell;
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<EditorAccessError | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -332,10 +338,7 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
   );
 
   // 최신 문서 참조 — save 호출 시 비동기 콜백 안에서 stale closure 회피.
-  const documentRef = useRef<LoadedLayoutDocument | null>(null);
-  useEffect(() => {
-    documentRef.current = document;
-  }, [document]);
+
 
   // 현재 키의 dirty 캐시 갱신 + dirty 키 등록 (patch/set 공통).
   const writeCache = useCallback(
@@ -397,6 +400,8 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
   );
 
   const fetchDocument = useCallback(async (): Promise<void> => {
+    const requestSession = renewDocument();
+    const isCurrentRequest = () => readExtensionDocument().sessionId === requestSession;
     if (!layoutName) {
       setDocument(null);
       setError(null);
@@ -450,6 +455,7 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
 
       const response = await fetch(url, { headers, credentials: 'same-origin' });
       const body = await response.json().catch(() => null);
+      if (!isCurrentRequest()) return;
 
       if (!response.ok) {
         setError(buildEditorAccessError(response.status, body, 'layout'));
@@ -560,13 +566,14 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
         timestamp: Date.now(),
       });
     } catch (err: unknown) {
+      if (!isCurrentRequest()) return;
       setError(buildNetworkError(err, 'layout'));
       setDocument(null);
       setIsDirty(false);
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest()) setIsLoading(false);
     }
-  }, [templateIdentifier, layoutName, editMode, modalId, iterationSourcePath, cacheKey]);
+  }, [templateIdentifier, layoutName, editMode, state.selectedRoute?.path, modalId, iterationSourcePath, cacheKey]);
 
   useEffect(() => {
     fetchDocument();
@@ -691,7 +698,7 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
 
   const save = useCallback(
     async (options?: SaveOptions): Promise<SaveResult> => {
-      const current = documentRef.current;
+      const current = readExtensionDocument().value;
       if (!current) {
         trackEditorDocument({
           op: 'save_guard_result',
@@ -983,6 +990,7 @@ export function useLayoutDocument(): UseLayoutDocumentResult {
 
   return {
     document,
+    readExtensionDocument,
     isLoading,
     error,
     isDirty,

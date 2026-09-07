@@ -1,3 +1,5 @@
+import type { ComponentPath } from '../utils/layoutTreeUtils';
+import type { EditorExtensionHost } from '../extensions/contract';
 /**
  * canvasOverlayRegistry.ts — 캔버스 인플레이스 오버레이 레지스트리
  *
@@ -37,6 +39,8 @@ export interface OverlayBox {
  * `canvasOverlay.params`(그 kind 소유의 불투명 객체)를 그대로 전달받는다.
  */
 export interface CanvasOverlayProps {
+  /** Optional public guarded host; existing extensions remain compatible. */
+  extensionHost?: EditorExtensionHost;
   /** 편집 대상 노드(현재 패치 반영본) */
   node: EditorNode;
   /** capability `canvasOverlay.params` — 그 kind 오버레이가 해석하는 불투명 객체 */
@@ -63,7 +67,7 @@ export interface CanvasOverlayProps {
   /** 노드 패치 — 호출자가 PATCH_LAYOUT 으로 캔버스 반영 */
   onPatchNode: (patched: EditorNode) => void;
   /** 자식 삽입 — 부모 path + 인덱스에 새 노드 삽입(코어 삽입 인프라 위임) */
-  onInsertChild?: (newNode: EditorNode, parentPath: string, index: number) => void;
+  onInsertChild?: (newNode: EditorNode, parentPath: string | ComponentPath, index: number) => void;
   /** 자식 삭제 — 대상 path 노드 제거 */
   onRemoveChild?: (path: string) => void;
   /**

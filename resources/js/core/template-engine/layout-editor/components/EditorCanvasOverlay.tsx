@@ -1,3 +1,6 @@
+import { normalizeExtensionPath } from '../extensions/path';
+import { useExtensionHost } from '../extensions/useExtensionHost';
+import { ExtensionPanels } from '../extensions/ExtensionPanels';
 // e2e:allow 레이아웃 편집기 캔버스 오버레이 — 합성 더블클릭/칩 드래그/contentEditable 의존으로 Playwright 자동화 부적합, Chrome MCP 매트릭스 + 단위(useInlineEdit/inlineBindingApi/EditorCanvasOverlay.history)로 검증 (InlineParamChipEditor.tsx 와 동일 정책)
 /**
  * EditorCanvasOverlay.tsx — 편집기 캔버스 위에 떠 있는 선택/팔레트/오버레이 합성 컨테이너
@@ -599,6 +602,9 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
       `[data-editor-path="${cssEscape(selection.selectedPath)}"]`
     ) as HTMLElement | null;
   }, [frameEl, selection.selectedPath]);
+
+  const extensionHost = useExtensionHost({ state, document: docCtx,
+    selectedPath: selection.selectedPath, locked: selection.selectedLockKind !== 'none', history, nesting });
 
   const selectedPathIndexes = useMemo(
     () => (selection.selectedPath ? parseEditorPath(selection.selectedPath) : null),
@@ -1382,6 +1388,7 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
           bindingCandidates: modalBindingCandidates,
           liveElement,
           templateIdentifier: state.templateIdentifier,
+          extensionHost,
           initialTab: tabForOpen,
           branchLabel: modalBranchLabel,
           // 격리 영역 그룹 — IsolatedScopeControl scopeId 검색 후보·중복 안내.
@@ -2163,6 +2170,7 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
       data-testid="g7le-editor-canvas-overlay"
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
     >
+      <ExtensionPanels host={extensionHost} />
       {/* eslint-disable-next-line — see: empty container placeholder withdrawn; template defaultNode owns the visual cue. */}
 
       {/* 항목7 — 속성 편집 중 선택 외 영역 딤/잠금 (선택 박스는 구멍으로 남겨 밝게 유지).
@@ -2436,6 +2444,7 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
           kind-agnostic — 코어/템플릿 등록분 모두 동일 경로. 잠금 노드는 미표시. */}
       {CanvasOverlayComp && overlayContext && overlayTableBox && selection.selectedLockKind === 'none' && (
         <CanvasOverlayComp
+          extensionHost={extensionHost}
           node={overlayContext.tableNode}
           params={overlayContext.params}
           nodeBox={overlayTableBox}
@@ -2444,7 +2453,10 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
           colorScheme={state.previewColorScheme === 'dark' ? 'dark' : 'light'}
           t={editorAwareT}
           onPatchNode={patchOverlayNode}
-          onInsertChild={handleInsert}
+          onInsertChild={(node, path, index) => {
+            const normalized = normalizeExtensionPath(path);
+            if (normalized) handleInsert(node, normalized, index);
+          }}
           onRemoveChild={(path) => {
             const idx = parseEditorPath(path);
             if (!docCtx || !idx) return;
