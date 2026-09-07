@@ -45,7 +45,7 @@ function cloneItem(value: unknown, slot: StructureSlot, document: unknown, sourc
     const id = freshId(ids);
     if (typeof old === 'string' && old) mapping.set(old, id);
     owner.id = id;
-    if (typeof owner.name === 'string') owner.__source = { ...source };
+    if (typeof owner.name === 'string' && owner.__source === undefined) owner.__source = { ...source };
   }
   if (!remapReferences(clone, mapping, owners)) throw new Error('unresolved reference');
   return clone;

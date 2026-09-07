@@ -71,11 +71,13 @@ it.each(['base', 'partial', 'extension'] as const)('refuses protected descendant
   expect(run(input, { operation: 'delete', collection: children, index: 0 }).result.kind).toBe('refused');
 });
 it('remaps local DOM references while preserving external links and refuses unresolved reference expressions', () => {
-  const group = { ...node('group', 'Div'), children: [node('target'), { ...node('link', 'A'), props: { href: '#target', 'aria-controls': 'target external' } }] };
+  const target = { ...node('target'), __source: { ...source, extraProvenance: 'retain' } };
+  const group = { ...node('group', 'Div'), children: [target, { ...node('link', 'A'), props: { href: '#target', 'aria-controls': 'target external' } }] };
   const input = { ...root, children: [group] };
   const result = run(input, { operation: 'duplicate', collection: children, index: 0 });
   expect(result.result.kind).toBe('applied');
   const copy = (result.components[0].children as EditorNode[])[1].children as EditorNode[];
+  expect(copy[0].__source).toEqual(target.__source);
   expect(copy[1].props).toEqual({ href: '#' + copy[0].id, 'aria-controls': copy[0].id + ' external' });
   const linked = { ...root, props: { targetId: 'one' } };
   expect(run(linked, { operation: 'delete', collection: children, index: 0 }).result.kind).toBe('refused');
