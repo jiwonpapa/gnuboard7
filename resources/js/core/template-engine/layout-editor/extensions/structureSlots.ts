@@ -113,6 +113,8 @@ export function structureSlots(anchor: EditorNode, spec: EditorSpec | null | und
     for (const definition of definitions) {
     const params = definition.params;
     if (!['array', 'array-cell-tree'].includes(definition.kind ?? '') || !safeKey(params.arrayProp)) continue;
+    // The native command remaps standard id references only. Never clone an unknown identity contract.
+    if (params.idField !== undefined && params.idField !== 'id') continue;
     const prop = params.arrayProp;
     const props = record(node.props) ? node.props : {};
     const itemLabel = label(params.itemLabel, prop, t);

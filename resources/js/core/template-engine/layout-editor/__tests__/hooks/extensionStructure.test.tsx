@@ -157,3 +157,12 @@ it('rejects stale structure commands and pushes exactly one existing history ent
   act(() => { const snapshot = result.current.history.redo()!.snapshot; result.current.cell.set(prev => ({ ...prev!, raw: { components: snapshot } })); });
   expect(result.current.host.snapshot?.node.children).toHaveLength(3);
 });
+
+it('does not infer identity semantics for a custom array idField', () => {
+  const definition = structuredClone(spec);
+  definition.componentCapabilities!.Cards.nodeEditor!.params = { arrayProp: 'cards', idField: 'key', newItem: { key: 'reused', cellChildren: [] } };
+  const input = { ...node('root', 'Cards'), props: { cards: [{ key: 'one', cellChildren: [] }] } };
+  expect(structureSlots(input, definition, definition.nesting)).toEqual([]);
+  const changed = run(input, { operation: 'duplicate', collection: slot('props', 'cards'), index: 0 }, context, definition);
+  expect(changed.result.kind).toBe('refused'); expect(changed.components).toEqual([input]);
+});
