@@ -1,4 +1,5 @@
 import type { ComponentPath, EditorNode } from '../utils/layoutTreeUtils';
+import type { ExtensionCollection, ExtensionStructureChange } from './structureTypes';
 
 /** Public v1 protocol. All values are detached, deeply frozen snapshots. */
 export interface EditorExtensionContext {
@@ -11,15 +12,18 @@ export interface EditorExtensionContext {
   readonly: boolean;
   nodeId: string;
   path: ComponentPath;
+  iterationRoot?: ComponentPath;
 }
 export interface EditorExtensionSnapshot {
   context: EditorExtensionContext;
   node: EditorNode;
   fields?: EditorExtensionField[];
+  collections?: ExtensionCollection[];
 }
 export type EditorExtensionCommand = {
   expected: EditorExtensionContext;
-} & ({ kind: 'setText'; text: string } | { kind: 'insertChild'; node: EditorNode; index: number } | { kind: 'setControl'; control: string; value: ExtensionValue; reset?: boolean });
+} & ({ kind: 'setText'; text: string } | { kind: 'insertChild'; node: EditorNode; index: number } | { kind: 'setControl'; control: string; value: ExtensionValue; reset?: boolean }
+  | { kind: 'structure'; change: ExtensionStructureChange });
 export type EditorExtensionResult =
   | { kind: 'applied' | 'noop' }
   | { kind: 'refused'; reason: 'unavailable' | 'stale' | 'readonly' | 'target' | 'binding' | 'structure' | 'invalid' };

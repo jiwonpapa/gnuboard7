@@ -604,7 +604,7 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
   }, [frameEl, selection.selectedPath]);
 
   const extensionHost = useExtensionHost({ state, document: docCtx,
-    selectedPath: selection.selectedPath, locked: selection.selectedLockKind !== 'none', history, nesting, spec, t: editorAwareT });
+    selectedPath: selection.selectedPath, locked: !['none', 'data_bound'].includes(selection.selectedLockKind), history, nesting, spec, t: editorAwareT });
 
   const selectedPathIndexes = useMemo(
     () => (selection.selectedPath ? parseEditorPath(selection.selectedPath) : null),

@@ -5,7 +5,7 @@ import type { EditorExtensionContext, EditorExtensionMedia, ExtensionMediaResult
 export function extensionMedia(current: () => EditorExtensionContext | null): EditorExtensionMedia {
   function valid(expected: EditorExtensionContext, signal?: AbortSignal): boolean {
     const live = current();
-    return !signal?.aborted && !!live && !live.readonly && live.editMode === 'route'
+    return !signal?.aborted && !!live && !live.readonly && (live.editMode === 'route' || live.editMode === 'iteration_item' && !!live.iterationRoot?.length)
       && Object.keys(live).every(key => JSON.stringify(live[key as keyof EditorExtensionContext]) === JSON.stringify(expected?.[key as keyof EditorExtensionContext]));
   }
   async function run<T>(expected: EditorExtensionContext, signal: AbortSignal | undefined, action: () => Promise<{ ok: true; data: T } | { ok: false; message: string }>): Promise<ExtensionMediaResult<T>> {

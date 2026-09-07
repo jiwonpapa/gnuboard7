@@ -5,6 +5,15 @@
 >
 > 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)
 
+## [engine-v1.67.0] - 2026-09-07
+
+### Added
+
+- 공개 호스트의 `collections`와 guarded `structure` 명령으로 children, responsive 자식, array/group, array-cell-tree를 편집한다. 선언된 seed·허용 위치만 사용하며 출처·알 수 없는 필드·바인딩을 보존한다. 복제의 내부 ID/DOM 참조를 다시 연결하고 해석할 수 없는 참조와 외부 참조 대상 삭제는 거부한다.
+- 기존 반복 항목 편집 모드의 실제 iterationContext를 공개 문맥에 전달하고 그 원본 children 안에서만 구조·항목 편집과 첨부를 허용한다. 별도 저장·선택·이력 엔진은 만들지 않는다.
+
+기존 소비자는 선택형 collections를 사용하지 않아 번들 확장의 최소 버전 상향 대상이 없다. 새 renderer를 등록하는 API는 추가하지 않으며 지원 템플릿 manifest/export와 현재 병합된 spec이 여전히 필요하다. 로컬 NE3 후보이며 운영 배포를 뜻하지 않는다.
+
 ## [engine-v1.66.0] - 2026-09-07
 
 ### Added
