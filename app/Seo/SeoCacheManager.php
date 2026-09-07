@@ -18,6 +18,16 @@ class SeoCacheManager implements SeoCacheManagerInterface
      */
     private const INDEX_KEY = 'seo.cached_urls';
 
+    /**
+     * 저장 상한에서 인덱스를 정리한 시각을 남기는 표식 키
+     */
+    private const PRUNE_MARK_KEY = 'seo.index_pruned_at';
+
+    /**
+     * 저장 상한에서 인덱스 정리를 다시 시도하기까지의 최소 간격 (초)
+     */
+    private const PRUNE_INTERVAL_SECONDS = 60;
+
     public function __construct(private readonly CacheInterface $cache) {}
 
     /**
@@ -39,17 +49,7 @@ class SeoCacheManager implements SeoCacheManagerInterface
      */
     public function put(string $url, string $locale, string $html): void
     {
-        if (! $this->isEnabled()) {
-            return;
-        }
-
-        $key = $this->buildKey($url, $locale);
-        $ttl = $this->getCacheTtl();
-
-        $this->cache->put($key, $html, $ttl);
-
-        // URL 인덱스 업데이트
-        $this->addToIndex($url, $locale, $key);
+        $this->storePage($url, $locale, $html, null);
     }
 
     /**
@@ -149,26 +149,6 @@ class SeoCacheManager implements SeoCacheManagerInterface
     }
 
     /**
-     * URL 인덱스에 항목을 추가합니다.
-     *
-     * @param  string  $url  URL
-     * @param  string  $locale  로케일
-     * @param  string  $key  캐시 키
-     */
-    private function addToIndex(string $url, string $locale, string $key): void
-    {
-        $index = $this->getIndex();
-        $index[$key] = [
-            'url' => $url,
-            'locale' => $locale,
-            'key' => $key,
-            'cached_at' => now()->toIso8601String(),
-        ];
-
-        $this->cache->put(self::INDEX_KEY, $index, 86400 * 30); // 30일
-    }
-
-    /**
      * 캐시 인덱스를 조회합니다.
      */
     private function getIndex(): array
@@ -177,9 +157,34 @@ class SeoCacheManager implements SeoCacheManagerInterface
     }
 
     /**
-     * 유효한 캐시만 남겨 인덱스를 재구성합니다.
+     * 저장 상한에서 인덱스 정리를 시도해도 되는지 판정하고, 시도한다면 표식을 남깁니다.
+     *
+     * 정리는 인덱스 전체를 훑는다(항목마다 캐시 조회). 살아 있는 항목만으로 상한에 닿은
+     * 경로는 저장 시도마다 그 스캔을 되풀이하게 되고, 그 빈도는 봇 미스 렌더 예산만큼이다
+     * — 정리해도 자리가 나지 않는 상태에서 비용만 곱해진다. 그래서 간격으로 묶는다.
+     *
+     * @return bool 정리를 수행해도 되면 true
      */
-    private function rebuildIndex(): void
+    private function shouldAttemptPrune(): bool
+    {
+        if ($this->cache->has(self::PRUNE_MARK_KEY)) {
+            return false;
+        }
+
+        $this->cache->put(self::PRUNE_MARK_KEY, true, self::PRUNE_INTERVAL_SECONDS);
+
+        return true;
+    }
+
+    /**
+     * 유효한 캐시만 남겨 인덱스를 재구성하고 그 결과를 반환합니다.
+     *
+     * 페이지는 TTL 로 사라지지만 인덱스 항목은 남는다 — 이 메서드가 그 차이를 메우는
+     * 유일한 지점이므로, 인덱스를 근거로 판정하는 쪽(저장 상한)은 판정 전에 여기를 거친다.
+     *
+     * @return array<string, array<string, mixed>> 정리된 인덱스
+     */
+    private function rebuildIndex(): array
     {
         $index = $this->getIndex();
         $validIndex = [];
@@ -191,6 +196,8 @@ class SeoCacheManager implements SeoCacheManagerInterface
         }
 
         $this->cache->put(self::INDEX_KEY, $validIndex, 86400 * 30);
+
+        return $validIndex;
     }
 
     /**
@@ -210,6 +217,11 @@ class SeoCacheManager implements SeoCacheManagerInterface
     /**
      * 캐시 저장 시 레이아웃 정보를 함께 저장합니다.
      *
+     * 인덱스는 단일 캐시 항목에 전체 변종 배열을 담고 저장마다 통째로 다시 쓴다. 항목 수에
+     * 상한이 없으면 쿼리만 바꾼 반복 요청이 그 배열을 무한히 키운다 — 그래서 **새 URL** 은
+     * 경로당 변종 수와 전체 항목 수 상한 안에서만 저장한다. 이미 인덱스에 있는 키의 갱신은
+     * 저장 규모를 늘리지 않으므로 상한과 무관하게 쓴다.
+     *
      * @param  string  $url  URL
      * @param  string  $locale  로케일
      * @param  string  $html  HTML
@@ -217,24 +229,66 @@ class SeoCacheManager implements SeoCacheManagerInterface
      */
     public function putWithLayout(string $url, string $locale, string $html, string $layoutName): void
     {
+        $this->storePage($url, $locale, $html, $layoutName);
+    }
+
+    /**
+     * 페이지와 인덱스 항목을 저장합니다 (`put`/`putWithLayout` 공통 경로).
+     *
+     * 두 공개 메서드는 같은 자원(페이지 캐시 + 인덱스)을 쓰므로 저장 규모 상한도 같아야
+     * 한다 — 한쪽에만 두면 다른 쪽이 우회로가 되고, 인터페이스는 확장에 열려 있어
+     * "지금 호출부가 없다" 는 방어가 되지 않는다.
+     *
+     * @param  string  $url  URL (경로 + 정규화 쿼리)
+     * @param  string  $locale  로케일
+     * @param  string  $html  저장할 HTML
+     * @param  string|null  $layoutName  레이아웃명 (없으면 인덱스에 기록하지 않음)
+     */
+    private function storePage(string $url, string $locale, string $html, ?string $layoutName): void
+    {
         if (! $this->isEnabled()) {
             return;
         }
 
         $key = $this->buildKey($url, $locale);
-        $ttl = $this->getCacheTtl();
-
-        $this->cache->put($key, $html, $ttl);
-
-        // 레이아웃 정보 포함하여 인덱스 업데이트
         $index = $this->getIndex();
-        $index[$key] = [
+
+        if (! isset($index[$key])) {
+            // 상한이 세는 인덱스에는 **페이지가 이미 만료된** 항목이 섞인다 — 인덱스는
+            // 페이지보다 훨씬 오래 살고(30일 vs 기본 2시간) 저장마다 수명이 갱신되며
+            // 스스로 줄지 않는다. 여기서 한 번 정리하지 않으면 상한이 "지금 저장된 양"이
+            // 아니라 "과거에 저장한 적이 있는 양"을 재게 되어, 한 번 닿은 경로는 실제
+            // 캐시가 비어도 영영 저장이 막힌다(상한이 아니라 일방향 래치가 된다).
+            if (! SeoCacheBounds::canStore($index, $url) && $this->shouldAttemptPrune()) {
+                $index = $this->rebuildIndex();
+            }
+
+            if (! SeoCacheBounds::canStore($index, $url)) {
+                Log::debug('[SEO] 캐시 저장 상한에 도달해 저장하지 않습니다', [
+                    'url' => $url,
+                    'locale' => $locale,
+                    'entries' => count($index),
+                ]);
+
+                return;
+            }
+        }
+
+        $this->cache->put($key, $html, $this->getCacheTtl());
+
+        $entry = [
             'url' => $url,
             'locale' => $locale,
             'key' => $key,
-            'layout' => $layoutName,
-            'cached_at' => now()->toIso8601String(),
         ];
+
+        if ($layoutName !== null) {
+            $entry['layout'] = $layoutName;
+        }
+
+        $entry['cached_at'] = now()->toIso8601String();
+
+        $index[$key] = $entry;
 
         $this->cache->put(self::INDEX_KEY, $index, 86400 * 30);
     }

@@ -9,6 +9,8 @@ use App\Extension\Traits\ClearsTemplateCaches;
 use App\Http\View\Composers\TemplateComposer;
 use App\Support\AssetCssUrlRewriter;
 use App\Support\AssetUrl;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -48,6 +50,21 @@ class ExtensionBundleService
      * pid 는 재사용되므로 "그 pid 가 살아 있는가" 로는 진행 중 여부를 판정할 수 없다.
      */
     private const TEMP_BUNDLE_STALE_SECONDS = 600;
+
+    /**
+     * 캐시 미스 빌드를 (type, kind, version) 단위로 수렴시키는 잠금 키 접두사.
+     */
+    private const BUILD_LOCK_PREFIX = 'ext-bundles.build.';
+
+    /**
+     * 빌드 잠금의 보유 상한 (초). 좀비 잠금 방지용이며 실제 빌드는 밀리초 단위다.
+     */
+    private const BUILD_LOCK_TTL_SECONDS = 30;
+
+    /**
+     * 다른 프로세스의 빌드를 기다리는 상한 (초). 초과하면 잠금 없이 각자 빌드한다.
+     */
+    private const BUILD_LOCK_WAIT_SECONDS = 5;
 
     /**
      * 서비스 주입
@@ -251,22 +268,18 @@ class ExtensionBundleService
      * 디스크 캐시하며, 비프로덕션(dev/watch)에서는 캐시하지 않고 매 요청 build 해
      * rebuild 를 즉시 반영한다.
      *
+     * 프로덕션에서 **캐시 존재 확인이 빌드보다 먼저** 온다. 캐시 키는 인자만으로
+     * 계산되므로 빌드가 필요 없는데, 빌드를 앞세우면 캐시가 있어도 요청마다 활성 확장을
+     * 열거하고 산출물을 전부 읽는다. 응답은 정상 200 이라 그 반복은 타이밍 말고는 드러나지
+     * 않고, 원본이 사라지는 순간에는 멀쩡한 캐시를 두고 빈 경로가 반환되어 503 이 된다.
+     *
      * @param  string  $type  'module' | 'plugin'
      * @param  string  $kind  'js' | 'css'
      * @param  int  $version  확장 캐시 버전(ClearsTemplateCaches::getExtensionCacheVersion)
-     * @return string 캐시(또는 방금 build 한) 파일의 절대 경로. 병합 결과가 빈 문자열이면 빈 문자열.
+     * @return string 캐시(또는 방금 build 한) 파일의 절대 경로. 캐시할 수 없으면 빈 문자열.
      */
     public function getBundleFilePath(string $type, string $kind, int $version): string
     {
-        $content = $kind === 'css'
-            ? $this->buildCssBundle($type)
-            : $this->buildJsBundle($type);
-
-        // 병합할 에셋이 하나도 없으면 파일을 만들지 않는다(호출측이 빈 문자열로 판단).
-        if ($content === '') {
-            return '';
-        }
-
         $relativeName = $this->bundleFileName($type, $kind, $version);
 
         // 디스크 캐시는 **최적화**다 — 쓰기 실패가 공개 엔드포인트의 500 이 되면 안 된다.
@@ -279,15 +292,22 @@ class ExtensionBundleService
 
             // 비프로덕션은 캐시하지 않고 임시 파일로 매번 build → rebuild 즉시 반영
             if (! app()->environment('production')) {
+                $content = $this->buildBundleContent($type, $kind);
+
+                // 병합할 에셋이 하나도 없으면 파일을 만들지 않는다(호출측이 빈 문자열로 판단).
+                if ($content === '') {
+                    return '';
+                }
+
                 return $this->writeAtomically($storage, $relativeName, $content, cache: false);
             }
 
-            // 프로덕션: 동일 version 캐시가 있으면 그대로 사용
+            // 프로덕션: 동일 version 캐시가 있으면 빌드 없이 그대로 사용
             if ($storage->exists('', $relativeName)) {
                 return $storage->getBasePath('').'/'.$relativeName;
             }
 
-            return $this->writeAtomically($storage, $relativeName, $content, cache: true);
+            return $this->buildAndCacheOnce($storage, $type, $kind, $version, $relativeName);
         } catch (\Throwable $e) {
             Log::warning('확장 번들 디스크 캐시 실패 — 메모리 병합 결과로 서빙합니다', [
                 'type' => $type,
@@ -297,6 +317,85 @@ class ExtensionBundleService
             ]);
 
             return '';
+        }
+    }
+
+    /**
+     * 캐시 미스에서 한 번만 병합해 캐시 파일을 만들고 그 절대 경로를 반환합니다.
+     *
+     * 같은 (type, kind, version) 의 동시 요청은 잠금으로 하나에 수렴시킨다 — 버전 교체
+     * 직후에는 캐시가 없는 상태로 요청이 몰리고, 각자 병합하면 그 비용이 워커 수만큼 곱해진다.
+     * 잠금은 **최적화**이므로 대기 초과·저장소 장애는 실패로 바꾸지 않고 각자 빌드로 폴백한다
+     * (정적 게시 잠금 `ext-static.publish.{v}` 와 같은 저장소·같은 규율이며 키가 달라 자기
+     * 교착이 없다).
+     *
+     * 병합 결과가 비어 있어도 선언한 산출물이 **전부 존재하면**(또는 선언이 0이면) 0바이트
+     * 캐시 파일을 만든다. 그래야 정적 게시 대상이 되어 방문자가 웹서버에서 직접 받는다 —
+     * 만들지 않으면 그 구성의 모든 페이지 로드가 PHP 를 거친다. 선언한 산출물이 **소실**된
+     * 경우에만 캐시하지 않아, 호출측의 503 판정이 그대로 유지된다.
+     *
+     * @param  CoreStorageDriver  $storage  번들 디스크 스토리지
+     * @param  string  $type  'module' | 'plugin'
+     * @param  string  $kind  'js' | 'css'
+     * @param  int  $version  확장 캐시 버전
+     * @param  string  $relativeName  캐시 파일명
+     * @return string 캐시 파일의 절대 경로 (캐시하지 않았으면 빈 문자열)
+     */
+    private function buildAndCacheOnce(
+        CoreStorageDriver $storage,
+        string $type,
+        string $kind,
+        int $version,
+        string $relativeName
+    ): string {
+        $lock = null;
+        $acquired = false;
+
+        try {
+            $lock = Cache::lock(self::BUILD_LOCK_PREFIX."{$type}.{$kind}.{$version}", self::BUILD_LOCK_TTL_SECONDS);
+            $acquired = (bool) $lock->block(self::BUILD_LOCK_WAIT_SECONDS);
+        } catch (LockTimeoutException $e) {
+            // 대기 초과는 정상적인 경합이다 — 흔적만 남기고 각자 빌드한다.
+            Log::debug('확장 번들 빌드 잠금 대기 초과 — 잠금 없이 병합합니다', [
+                'type' => $type,
+                'kind' => $kind,
+                'version' => $version,
+            ]);
+        } catch (\Throwable $e) {
+            // 저장소가 잠금을 제공하지 못한다(드라이버 미지원, 캐시 디렉토리 권한 등).
+            // 번들 서빙 자체를 막지는 않으므로 사유만 남기고 계속한다.
+            Log::warning('확장 번들 빌드 잠금 획득 불가 — 잠금 없이 병합합니다', [
+                'type' => $type,
+                'kind' => $kind,
+                'version' => $version,
+                'store' => config('cache.default'),
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            // 기다리는 동안 다른 프로세스가 완성했을 수 있다 — 병합 전에 다시 본다.
+            if ($storage->exists('', $relativeName)) {
+                return $storage->getBasePath('').'/'.$relativeName;
+            }
+
+            $content = $this->buildBundleContent($type, $kind);
+
+            // 비었는데 선언한 산출물이 소실이면 캐시하지 않는다 — 배포 중 dist 가 잠깐 빈
+            // 장애가 0바이트 캐시로 굳어 정상(빈 200)으로 위장되면 안 된다.
+            if ($content === '' && $this->findMissingDeclaredAssets($type, $kind) !== []) {
+                return '';
+            }
+
+            return $this->writeAtomically($storage, $relativeName, $content, cache: true);
+        } finally {
+            if ($acquired && $lock !== null) {
+                try {
+                    $lock->release();
+                } catch (\Throwable $e) {
+                    // 해제 실패는 TTL 이 정리한다 — 서빙에는 영향이 없다.
+                }
+            }
         }
     }
 
