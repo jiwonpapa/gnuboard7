@@ -42,7 +42,7 @@
 | [service-provider.md](docs/backend/service-provider.md) | 서비스 프로바이더 안전성 | DB 접근 전 .env 파일 존재 확인 필수 |
 | [service-repository.md](docs/backend/service-repository.md) | Service-Repository 패턴 | RepositoryInterface 주입 필수 (구체 클래스 직접 주입 금지) |
 | [settings-multilingual-enrichment.md](docs/backend/settings-multilingual-enrichment.md) | Settings 카탈로그 다국어 자동 보강 | settings JSON 의 다국어 카탈로그 라벨(_cached_name 등)은 카탈로그 빌드 시점에 보강 |
-| [static-asset-publishing.md](docs/backend/static-asset-publishing.md) | 부트스트랩 리소스 정적 게시 (Static Asset Publishing) | 게시물: public/build/ext/{cache_version}/ — 수명주기 이벤트와 운영자 cu... |
+| [static-asset-publishing.md](docs/backend/static-asset-publishing.md) | 부트스트랩 리소스 정적 게시 (Static Asset Publishing) | 게시물: public/build/ext/{cache_version}/ — 수명주기 이벤트·자산 URL ... |
 | [translatable-seeders.md](docs/backend/translatable-seeders.md) | 다국어 시더 인터페이스 (Translatable Seeders) | 다국어 JSON 컬럼(name 등)을 시드하는 확장 entity 시더는 TranslatableSeede... |
 | [user-overrides.md](docs/backend/user-overrides.md) | 사용자 수정 보존 (HasUserOverrides Trait) | 모델에 `use HasUserOverrides;` + `protected array $trackable... |
 | [validation.md](docs/backend/validation.md) | 검증 (Validation) | 필수: FormRequest에서 검증 (Service에 검증 로직 배치 금지) |
@@ -198,7 +198,7 @@
 | `sirsoft-verification_nhnkcp` | 플러그인 | [AGENTS.md](plugins/_bundled/sirsoft-verification_nhnkcp/AGENTS.md) | [docs/](plugins/_bundled/sirsoft-verification_nhnkcp/docs/README.md) | 훅 0 · 라우트 2 · 모델 2 · 레이아웃 1 |
 | `gnuboard7-hello_admin_template` | 템플릿 | [AGENTS.md](templates/_bundled/gnuboard7-hello_admin_template/AGENTS.md) | [docs/](templates/_bundled/gnuboard7-hello_admin_template/docs/README.md) | 훅 0 · 라우트 1 · 모델 0 · 레이아웃 8 |
 | `gnuboard7-hello_user_template` | 템플릿 | [AGENTS.md](templates/_bundled/gnuboard7-hello_user_template/AGENTS.md) | [docs/](templates/_bundled/gnuboard7-hello_user_template/docs/README.md) | 훅 0 · 라우트 1 · 모델 0 · 레이아웃 8 |
-| `sirsoft-admin_basic` | 템플릿 | [AGENTS.md](templates/_bundled/sirsoft-admin_basic/AGENTS.md) | [docs/](templates/_bundled/sirsoft-admin_basic/docs/README.md) | 훅 0 · 라우트 29 · 모델 0 · 레이아웃 145 |
+| `sirsoft-admin_basic` | 템플릿 | [AGENTS.md](templates/_bundled/sirsoft-admin_basic/AGENTS.md) | [docs/](templates/_bundled/sirsoft-admin_basic/docs/README.md) | 훅 0 · 라우트 29 · 모델 0 · 레이아웃 146 |
 | `sirsoft-basic` | 템플릿 | [AGENTS.md](templates/_bundled/sirsoft-basic/AGENTS.md) | [docs/](templates/_bundled/sirsoft-basic/docs/README.md) | 훅 0 · 라우트 40 · 모델 0 · 레이아웃 166 |
 
 
@@ -660,7 +660,7 @@ TLS 가 앞단에서 종단되고 앱에는 HTTP 로 전달되는 구성(AWS ALB
 | 버전 키·서명 키를 기본 TTL 로 `put()` | `PERSISTENT_TTL_SECONDS`(10년) 명시 — `forever()` 는 `CacheInterface` 밖(공개 표면 변경), `put(…, 0)` 은 forget |
 | 서명 스코프를 렌더 템플릿만으로 나눔 | `{템플릿}@{호스트명}` — 다중 서버 공유 캐시에서 서버 간 mtime 차이로 요청마다 재게시가 왕복한다 |
 | `config:cache` / `route:cache` / `event:cache` / `optimize` 를 헬퍼 밖에서 `Artisan::call` | `ConfigCacheHelper::rebuild()` / `RouteCacheHelper::rebuild()` (내부가 `withPreservedContainer`) — 이 명령들은 새 Application 을 부팅하며 전역 `Container` 를 일회용 앱으로 바꿔 놓아, 그 뒤 등록되는 `app()->terminating()` 재게시 예약이 종료되지 않는 앱에 걸려 사라진다 |
-| 코어 업데이트 흐름에서 현재 프로세스의 버전·update 목록을 `config('app.version')`·`config('app.update.*')` 로 판독 | spawn 자식은 부모가 비우지 않은 이전 버전 config 캐시로 부팅한다 — 버전은 `CoreVersionChecker::getCoreVersion()`(env 우선), update 목록은 캐시 부팅이면 `CoreUpdateService::freshDiskUpdateConfig()`, 부모는 spawn 직전 `ConfigCacheHelper::clear()` |
+| 코어 업데이트 흐름에서 현재 프로세스의 버전·update 목록을 `config('app.version')`·`config('app.update.*')` 로 판독 | spawn 자식은 부모가 비우지 않은 이전 버전 config 캐시로 부팅한다 — 버전은 `CoreVersionChecker::getCoreVersion()`(업데이트 트리 안에서만 env 우선), update 목록은 캐시 부팅이면 `CoreUpdateService::freshDiskUpdateConfig()`, 부모는 spawn 직전 `ConfigCacheHelper::clear()` + `PackageManifestCacheHelper::clear()` |
 
 이 결함군은 예외도 로그도 남기지 않는다 — 게시본이 정상 200 으로 옛 내용을 내보내는 것, 또는 매일 전체 재생성이 일어나는 것이 유일한 증상이다. 재게시 누락의 안전망은 관리자 > 환경설정 > 일반 「초기 화면 정적 파일」의 [지금 다시 만들기](`POST /api/admin/settings/static-cache/republish`)이며, 상태 판정은 `ExtensionStaticCacheService::statusReport()` 한 곳이 CLI·API·화면에 공급한다.
 
@@ -681,6 +681,25 @@ TLS 가 앞단에서 종단되고 앱에는 HTTP 로 전달되는 구성(AWS ALB
 이 결함은 예외도 경고도 로그도 남기지 않는다. 이미 제공 불가한 항목이 사용자 화면에서 선택 가능한 상태로 남아 있는 것이 유일한 증상이고, 관리자 화면은 고아 표시로 정상 차단하고 있어 양쪽을 나란히 보지 않으면 드러나지 않는다.
 
 > 상세: [module-settings.md](docs/extension/module-settings.md) "카탈로그 병합 설정의 공개 응답"
+
+### vendor 를 교체한 뒤 새 PHP 프로세스를 띄우기 전에는 패키지 매니페스트를 비운다
+
+Laravel 은 `bootstrap/cache/packages.php` 가 있으면 stale 여부를 검사하지 않고 그대로 읽어 provider 를 `new` 한다. 그래서 vendor 를 바꾼 뒤 그 파일을 남겨 두면 다음에 부팅하는 프로세스가 새 vendor 에 없는 클래스를 찾다 부팅 단계에서 죽고, 예외는 부팅 전이라 앱 로그에 남지 않는다.
+
+| 금지 | 올바른 사용 |
+|------|------------|
+| vendor 교체 뒤 `proc_open`·`config:cache`·`route:cache` 등 새 부팅을 `bootstrap/cache/{packages,services}.php` 정리 없이 실행 | 부팅 직전 `PackageManifestCacheHelper::clear()`(재생성까지 필요하면 `rebuild()`) — `ConfigCacheHelper::clear()` 와 짝으로 |
+| 정리 로직을 호출부마다 `@unlink` 로 복제 | 헬퍼 단일 지점 — `clearAllCaches()` 도 같은 헬퍼를 쓴다 |
+| 자식 프로세스 보호를 부모 코드에만 두기 | 부모는 이미 배포된 옛 코드일 수 있다 — 새 버전의 `bootstrap/app.php` 가 `G7_UPDATE_IN_PROGRESS` 를 보고 스스로 비운다(App\ 클래스 미참조·실패 무시) |
+| 코어 버전 판정에서 프로세스 env `APP_VERSION` 을 무조건 우선 | env 우선은 `CoreUpdateContext::isInProgress()` 인 프로세스 트리 안에서만 — 업데이트 전에 뜬 `artisan serve`·큐 워커는 옛 값을 물고 있다 |
+| 업데이트 트리 판정을 지점마다 다시 작성 | `App\Support\CoreUpdateContext` 단일 SSoT — `CoreServiceProvider::isCoreUpdateInProgress()` 도 위임이다. `bootstrap/app.php` 의 복제본은 부팅 전이라 불가피한 예외이며 주석으로 상호 참조한다 |
+| 자동 비활성화 로그의 `core_version` 을 `config('app.version')` 으로 적기 | 판정과 같은 `CoreVersionChecker::getCoreVersion()` — 로그와 판정 근거가 갈리면 운영자가 원인을 특정할 수 없다 |
+| "이미 있으니 건너뛴다" 분기(인스톨러 vendor 재사용)가 산출물의 출처를 보지 않음 | `installed.json` 의 `dev`/`dev-package-names` 로 출처를 보고 경고 카드·로그를 남기며, 재사용 경로에서도 컴파일 캐시를 정리한다 |
+| 코어 업데이트를 마치고 상주 워커에 신호를 보내지 않음 | Step 11·핸드오프·단독 재개 사후 단계에서 `signalQueueRestart()` |
+
+이 결함군은 예외도 로그도 남기지 않는다 — 자식 프로세스가 부팅 단계에서 죽어 부모가 핸드오프로 멈추는 것, 또는 업데이트 직후 확장이 `incompatible_core` 로 꺼지는 것이 유일한 증상이다. 후자는 관리자 템플릿이 대상이면 복구 UI 자체에 도달할 수 없어 자가 회복 경로가 없다.
+
+> 상세: [core-update-system.md](docs/backend/core-update-system.md) "spawn 전 캐시 정리 계약(3계층)" · [extension-update-system.md](docs/extension/extension-update-system.md) "판정의 단일 출처와 이 플래그가 게이트하는 것"
 
 ### 설정 주입과 `.env` 우선
 

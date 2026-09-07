@@ -214,4 +214,35 @@ $app = Application::configure(basePath: dirname(__DIR__))
         });
     })->create();
 
+/*
+| Core Update: Stale Package Manifest Self-Heal — 코어 업데이트 트리 안에서 부팅하는 프로세스
+| (core:update 부모, G7_UPDATE_IN_PROGRESS=1 을 물려받은 spawn 자식, 그 안의 config:cache/route:cache
+| 일회용 앱)는 bootstrap/cache/packages.php · services.php 를 비우고 부팅한다. Laravel 은 두 파일이
+| 없을 때만 vendor/composer/installed.json 에서 다시 만들므로, vendor 교체 뒤 남은 이전 설치본의
+| 목록(dev composer 의 require-dev 전이 provider 등)으로 부팅하다 "Class ... not found" 로 죽는 일을
+| 막는다. 7.0.11 미만 부모는 spawn 직전에 비우지 않으므로 그 부모 아래에서 도는 신버전 자식의
+| 유일한 방어다 (7.0.9/7.0.10 → 7.0.11). 7.0.11+ 부모는 이미 비우므로 여기서는 no-op.
+| 규칙: App\ 클래스를 참조하지 않는다 (부팅 전이라 오토로드를 신뢰할 수 없고, 자가 치유가 자기
+| 실패로 부팅을 막아서는 안 된다). 판정은 App\Support\CoreUpdateContext::isInProgress() 와 동일 —
+| 조건을 바꾸면 양쪽을 함께 고친다.
+*/
+$g7UpdateFlag = $_ENV['G7_UPDATE_IN_PROGRESS'] ?? $_SERVER['G7_UPDATE_IN_PROGRESS'] ?? getenv('G7_UPDATE_IN_PROGRESS');
+$g7UpdateArgv = $_SERVER['argv'][1] ?? '';
+
+if ($g7UpdateFlag === '1' || $g7UpdateFlag === 1 || $g7UpdateFlag === true
+    || in_array($g7UpdateArgv, ['core:update', 'core:execute-upgrade-steps'], true)) {
+    try {
+        foreach ([$app->getCachedPackagesPath(), $app->getCachedServicesPath()] as $g7ManifestPath) {
+            if (is_file($g7ManifestPath)) {
+                @unlink($g7ManifestPath); // Windows 핸들 점유 시 실패 가능 — 무시(종전 동작)
+            }
+        }
+        clearstatcache();
+    } catch (Throwable) {
+        // 자가 치유 실패는 부팅을 막지 않는다.
+    }
+}
+
+unset($g7UpdateFlag, $g7UpdateArgv, $g7ManifestPath);
+
 return $app;
