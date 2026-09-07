@@ -153,12 +153,15 @@ HTTP/1.1 200
 | 상태코드 | 의미 | 발생 조건 |
 | --- | --- | --- |
 | 401 | Unauthenticated | 유효한 Bearer 토큰이 없거나 만료된 경우 |
+| 423 | Locked | 계정이 잠긴 경우. 응답 형태는 로그인 엔드포인트의 423 과 동일하다 (`auth.account_locked` / `auth.account_locked_permanently` — `errors.locked_until`, `errors.retry_after_seconds`, `errors.permanent`) |
 
 <!-- @generated:end -->
 
 **설명**
 
 현재 관리자 토큰을 새 Sanctum 토큰으로 교체한다. `AuthService::refreshToken()` 이 기존 토큰을 폐기하고 새 토큰을 발급하며, `data` 에는 새 `token` 과 `user`(UserResource) 가 담긴다. 만료 임박 토큰을 재발급하는 용도로, 세션 만료로 재인증이 필요한 경우(토큰 무효)에는 `401 auth.unauthenticated` 를 반환한다.
+
+**재발급도 잠금 검사를 거친다.** 유효한 기존 세션이 전제이므로 신규 로그인 우회는 아니지만, 관리자가 계정을 잠근 뒤에도 그 세션이 무기한 연장되면 잠금이 실효를 잃는다. 잠긴 계정의 재발급 요청은 `423` 으로 차단되며 기존 토큰도 폐기되지 않는다.
 
 
 ### GET /api/admin/auth/user
@@ -535,17 +538,59 @@ Content-Type: application/json
 
 **응답 필드** (`data` 내부)
 
-<!-- 실측 제외: http-422 — 응답 필드는 사람이 작성하세요. -->
+_단건 응답: `data` 객체의 필드 (`AuthService::completeTwoFactor()` 가 로그인 세션을 발급해 반환한 배열 — `user` 만 `UserResource` 로 감싼다). 성공 시 페이로드는 일반 로그인(`POST /api/auth/login`)과 동일하다._
+
+| 필드 | 타입 | 실측 예시값 | 용도/설명 |
+| --- | --- | --- | --- |
+| user | object | `{"uuid":"a234c2b1-…","name":"홍길동","is_admin":false, …}` | 로그인한 사용자 정보 (`UserResource` — 필드 전수는 `GET /api/auth/user` 응답 필드 표의 기본(코어) 필드와 동일) |
+| token | string | `75\|WgPUplvLGTv8YIj4507uIR6dEOHTXyNUed…` | 발급된 Sanctum 접근 토큰 평문 (이후 `Authorization: Bearer` 헤더로 사용, 발급 시 1회만 노출) |
+| token_type | string | `Bearer` | 토큰 타입 (항상 `Bearer`) |
+
+> 위 문서의 실측이 `422` 로 관측된 것은 유효한 challenge 없이 프로브가 호출됐기 때문이다. 정상 흐름(비밀번호 단계가 돌려준 `challenge_id` + 올바른 코드)에서는 `200` 과 위 페이로드가 반환된다.
 
 **응답 예시**
 
-<!-- 실측 제외: http-422 — 응답 예시는 사람이 작성하세요. -->
+```http
+HTTP/1.1 200
+```
+
+```json
+{
+    "success": true,
+    "message": "로그인이 성공했습니다.",
+    "data": {
+        "user": {
+            "uuid": "a234c2b1-cde8-437f-b28b-23323be2b98d",
+            "name": "API 문서 샘플 사용자",
+            "email": "apidoc-sample-user@example.com",
+            "language": "ko",
+            "status": "active",
+            "is_admin": false,
+            "is_owner": true,
+            "abilities": {
+                "can_read": true,
+                "can_create": true,
+                "can_update": true,
+                "can_delete": true,
+                "can_assign_roles": true
+            }
+        },
+        "token": "{MASKED}",
+        "token_type": "Bearer"
+    }
+}
+```
+
+> `user` 객체는 지면 절약을 위해 축약했습니다. 실제로는 `UserResource` 필드 전수가 내려옵니다.
 
 **에러 응답**
 
 | 상태코드 | 의미 | 발생 조건 |
 | --- | --- | --- |
+| 401 | Unauthorized | 코드가 틀렸거나(`auth.two_factor_failed`), challenge 의 `purpose` 가 `login` 이 아니거나, 확인된 사용자가 없거나 `active` 상태가 아닌 경우. **세 사유를 같은 응답으로 뭉뚱그린다** — 구분해 내보내면 challenge 유효성 탐색에 쓰인다 |
 | 422 | Unprocessable Entity | `challenge_id`/`code` 형식 위반 |
+| 423 | Locked | 로그인 실패 누적으로 계정이 잠긴 경우. 응답 형태는 `POST /api/auth/login` 의 423 과 동일하다 (`auth.account_locked` / 무기한이면 `auth.account_locked_permanently` — `errors.locked_until`, `errors.retry_after_seconds`, `errors.permanent`) |
+| 429 | Too Many Requests | `throttle:auth-login` 초과 (로그인과 같은 제한을 공유하므로 코드 대입 시도도 함께 억제된다) |
 
 <!-- @generated:end -->
 
@@ -554,6 +599,8 @@ Content-Type: application/json
 비밀번호 단계가 돌려준 challenge 를 확인해 로그인을 완료한다. 로그인과 동일한 요청 제한(`throttle:auth-login`)이 걸려 코드 대입 시도도 함께 억제된다.
 
 challenge 의 `purpose` 가 `login` 인지 먼저 대조한다 — 대조하지 않으면 회원가입·비밀번호 재설정 등 다른 흐름에서 발급된 challenge 로 로그인할 수 있다. 코드 확인에 성공하기 전에는 어떤 경우에도 토큰이 발급되지 않는다.
+
+**계정 잠금은 이 단계에서 다시 검사한다.** 세션을 여는 것은 비밀번호 단계가 아니라 이 엔드포인트이므로, challenge 를 받은 뒤 잠긴 계정은 여기서 `423` 으로 차단된다. 잠기기 전에 발급받은 challenge 를 잠긴 뒤에 완료하는 것만으로 잠금을 우회할 수 없다. 차단은 로그인 완료 훅(`core.auth.after_login`)보다 앞서므로 실패 횟수·잠금 해제 시각도 초기화되지 않는다.
 
 
 ### POST /api/auth/logout
@@ -1150,6 +1197,7 @@ HTTP/1.1 200
 | --- | --- | --- |
 | 401 | Unauthenticated | 유효한 Bearer 토큰이 없거나 만료된 경우 |
 | 403 | Forbidden | 요구 권한(`core.auth.refresh`)이 없는 경우 |
+| 423 | Locked | 계정이 잠긴 경우. 응답 형태는 로그인 엔드포인트의 423 과 동일하다 (`auth.account_locked` / `auth.account_locked_permanently` — `errors.locked_until`, `errors.retry_after_seconds`, `errors.permanent`). 잠긴 계정은 기존 세션으로도 토큰을 연장할 수 없으며, 차단 시 기존 토큰도 폐기되지 않는다 |
 
 <!-- @generated:end -->
 

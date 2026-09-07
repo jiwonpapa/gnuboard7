@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -16,9 +17,13 @@ use Illuminate\Support\Facades\Log;
  * 한 번 비워진 뒤 재생성되지 않아 성능 이점이 영구히 사라진다 — 이를 단일 SSoT 로 막는다.
  *
  * 정책: 환경 무관 항상 재생성. config:cache 는 그 자체로 부팅 비용을
- * 절감하고, G7 설정은 config 캐시에 박제되지 않고 매 요청 SettingsServiceProvider /
- * CoreServiceProvider 의 런타임 Config::set() 으로 재주입되므로(설정 stale 없음),
- * 항상 켜두는 것이 이득이다. local 개발 시 config/*.php 수정이 즉시 반영되지 않는 점은
+ * 절감하고, G7 설정은 config 캐시에 박제되지 않고 부팅 때 SettingsServiceProvider /
+ * CoreServiceProvider 의 런타임 Config::set() 으로 재주입되므로 항상 켜두는 것이 이득이다.
+ *
+ * 주의: "매 요청 재주입되므로 stale 없음" 은 FPM 전제였다. 큐 워커·schedule:work·Reverb
+ * 처럼 프로세스가 상주하는 환경에서는 부팅이 한 번뿐이라 저장 후에도 옛 값이 남는다.
+ * 그래서 저장 경로가 `ExtensionSettingsMirror` 로 in-memory 미러를 직접 다시 채운다
+ * (docs/backend/admin-settings-access.md "config 미러 갱신 시점" 참조). local 개발 시 config/*.php 수정이 즉시 반영되지 않는 점은
  * 개발자가 `php artisan config:clear` 로 대응하는 개발자 책임 영역이다.
  */
 class ConfigCacheHelper
@@ -48,11 +53,35 @@ class ConfigCacheHelper
         }
 
         try {
-            Artisan::call('config:cache');
+            self::withPreservedContainer(static fn () => Artisan::call('config:cache'));
         } catch (\Throwable $e) {
             Log::warning('config 캐시 재생성 실패 (config:clear 로 stale 은 제거됨 — 다음 요청은 비캐시 부팅)', [
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * 콜백 실행 뒤 전역 컨테이너 인스턴스를 원래 앱으로 되돌립니다.
+     *
+     * `config:cache` 는 신선한 설정을 얻기 위해 **새 Application 을 부팅**하는데, `Application` 생성자가
+     * `Container::setInstance()` 를 호출하므로 그 순간부터 `app()` 헬퍼가 실행 중인 앱이 아니라 그
+     * 일회용 앱을 가리킨다(파사드는 별도 참조라 그대로다). 같은 프로세스에서 그 뒤에 등록되는
+     * `app()->terminating()` 콜백은 종료되지 않는 앱에 걸려 **영원히 실행되지 않는다** — 설정 저장
+     * 뒤의 확장 캐시 버전 bump 가 예약한 정적 재게시가 그렇게 조용히 사라졌다(#651 F5 실측: 버전은
+     * 올랐는데 게시는 다음 렌더의 자가 치유까지 미뤄짐). 예외도 로그도 없고, 자가 치유가 한 렌더
+     * 뒤에 덮어 주므로 "한 박자 늦게 반영" 으로만 나타난다.
+     *
+     * @param  callable  $callback  전역 인스턴스를 바꿔 놓을 수 있는 작업
+     */
+    public static function withPreservedContainer(callable $callback): void
+    {
+        $app = Container::getInstance();
+
+        try {
+            $callback();
+        } finally {
+            Container::setInstance($app);
         }
     }
 

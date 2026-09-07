@@ -1,13 +1,17 @@
 <?php
 
+use App\Exceptions\CannotModifyProtectedRoleException;
+use App\Exceptions\CannotModifySuperAdminException;
 use App\Exceptions\CoreVersionMismatchException;
 use App\Exceptions\IdentityVerificationRequiredException;
+use App\Exceptions\PermissionEscalationException;
 use App\Helpers\ResponseHelper;
 use App\Http\Middleware\AdminMiddleware;
 use App\Http\Middleware\CheckTemplateDependencies;
 use App\Http\Middleware\CheckUserStatus;
 use App\Http\Middleware\DatabaseCredentialGuard;
 use App\Http\Middleware\EnforceIdentityPolicy;
+use App\Http\Middleware\EnsureDebugMode;
 use App\Http\Middleware\ExtensionMiddlewareGate;
 use App\Http\Middleware\GzipEncodeResponse;
 use App\Http\Middleware\MaintenanceModePage;
@@ -66,11 +70,17 @@ $app = Application::configure(basePath: dirname(__DIR__))
         web: __DIR__.'/../routes/web.php',
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
-        channels: __DIR__.'/../routes/channels.php',
         health: '/up',
         then: function () {
-            // DevTools 라우트 (디버그 모드에서만 활성화)
-            Route::middleware('api')
+            // DevTools 라우트 — 디버그 모드 게이트를 **그룹 단위**로 건다.
+            //
+            // 이 한 줄이 `routes/devtools.php` 의 8개 라우트(GET·POST·DELETE) 전부를 덮는다.
+            // 게이트를 핸들러 안에 흩어 두면 라우트를 추가할 때마다 함께 적어야 하고, 빠뜨려도
+            // 예외·로그가 남지 않아 그 라우트만 조용히 열린다(공개#128 — DELETE clear 가
+            // production 에서 미인증 200 으로 storage/debug-dump 를 지웠다).
+            //
+            // `api` 그룹 전체가 아니라 devtools 래퍼에만 붙이는 것이 유일한 안전 지점이다.
+            Route::middleware(['api', 'debug.gate'])
                 ->group(base_path('routes/devtools.php'));
         },
     )
@@ -156,6 +166,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
             'seo' => SeoMiddleware::class,
             'identity.policy' => EnforceIdentityPolicy::class,
             'extension.middleware' => ExtensionMiddlewareGate::class,
+            'debug.gate' => EnsureDebugMode::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -173,6 +184,19 @@ $app = Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (IdentityVerificationRequiredException $e, Request $request) {
             if ($request->expectsJson() || $request->is('api/*')) {
                 return ResponseHelper::identityRequired($e->getPayload());
+            }
+        });
+
+        // 등급 상한(rank ceiling) / 권한 상승 차단 예외 → HTTP 403 (KVE-2026-1919).
+        // 컨트롤러 catch 가 우선 처리하지만, 새 호출부가 로컬 catch 없이 이 예외를 던져도
+        // 조용한 500 대신 일관된 403 이 되도록 전역 렌더러를 둔다(심층 방어). 메시지는 예외
+        // 생성자가 lang 키로 설정한 것을 그대로 쓴다 — 컨트롤러 매핑과 동일 문구.
+        $exceptions->render(function (PermissionEscalationException|CannotModifySuperAdminException|CannotModifyProtectedRoleException $e, Request $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ], 403);
             }
         });
 

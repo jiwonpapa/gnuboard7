@@ -44,6 +44,7 @@ return [
         'secret_password_incorrect' => 'Secret post password is incorrect.',
         // Secret post filtering messages
         'secret_post_content' => 'This is a secret post. Please enter the password to view the content.',
+        'secret_post_title' => 'Secret post',
         'deleted_post_title' => 'Deleted post',
         'deleted_post_content' => 'This post has been deleted.',
         'blinded_post_content' => 'This post has been blinded by administrator.',
@@ -122,6 +123,7 @@ return [
         // Comment availability
         'post_blinded' => 'You cannot comment on a blinded post.',
         'post_deleted' => 'You cannot comment on a deleted post.',
+        'post_secret' => 'You cannot comment on a secret post you are not allowed to view.',
     ],
 
     // Additional comment messages
@@ -225,6 +227,7 @@ return [
         'permission_denied' => 'Permission denied.',
         'validation_failed' => 'Validation failed.',
         'duplicate_report' => 'You have already reported this content.',
+        'operation_failed' => 'An error occurred while processing the operation.',
     ],
 
     // Warning messages

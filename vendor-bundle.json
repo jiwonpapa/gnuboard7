@@ -1,15 +1,15 @@
 {
     "schema_version": "1.0",
-    "generated_at": "2026-07-10T21:33:36+00:00",
+    "generated_at": "2026-08-28T13:27:33+00:00",
     "generator": "g7 vendor-bundle:build",
     "target": "core",
-    "composer_json_sha256": "76294945639dbbe4b6d054c0aea4b78377a55bcdffcd1c9136beb294bc7cfc90",
-    "composer_lock_sha256": "b4d173c40088a78c9fe42b3ca6d23436bee6cc850a17bb653cbc1aca59ca3a81",
-    "zip_sha256": "d5d21fdd930350332d2d58e5ab386ba9203795f72f7767eb3c214d4702152245",
-    "zip_size": 14750349,
-    "package_count": 104,
+    "composer_json_sha256": "3c7e6e17966f09f12a0282b12b18eba46c5c4f06d63c2355a514a3160af1d77a",
+    "composer_lock_sha256": "46c98077af8fb505bc14f783dd55bcaa65713c2bd7a59e62e808e63c740b5587",
+    "zip_sha256": "7e8fae4dc821a54d9c931761538bf520355db629c884a80224dd63f2f39e03a4",
+    "zip_size": 15281555,
+    "package_count": 106,
     "php_requirement": "^8.2",
-    "g7_version": "7.0.3",
+    "g7_version": "7.0.10",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -98,17 +98,17 @@
         },
         {
             "name": "guzzlehttp/guzzle",
-            "version": "7.12.3",
+            "version": "7.15.5",
             "type": "library"
         },
         {
             "name": "guzzlehttp/promises",
-            "version": "2.5.0",
+            "version": "2.5.3",
             "type": "library"
         },
         {
             "name": "guzzlehttp/psr7",
-            "version": "2.12.3",
+            "version": "2.13.1",
             "type": "library"
         },
         {
@@ -158,7 +158,7 @@
         },
         {
             "name": "league/commonmark",
-            "version": "2.8.2",
+            "version": "2.10.0",
             "type": "library"
         },
         {
@@ -169,6 +169,11 @@
         {
             "name": "league/flysystem",
             "version": "3.35.1",
+            "type": "library"
+        },
+        {
+            "name": "league/flysystem-aws-s3-v3",
+            "version": "3.35.2",
             "type": "library"
         },
         {
@@ -218,12 +223,12 @@
         },
         {
             "name": "nette/schema",
-            "version": "v1.3.5",
+            "version": "v1.3.6",
             "type": "library"
         },
         {
             "name": "nette/utils",
-            "version": "v4.1.4",
+            "version": "v4.1.5",
             "type": "library"
         },
         {
@@ -239,6 +244,11 @@
         {
             "name": "phpoption/phpoption",
             "version": "1.9.5",
+            "type": "library"
+        },
+        {
+            "name": "predis/predis",
+            "version": "v2.4.1",
             "type": "library"
         },
         {
@@ -363,7 +373,7 @@
         },
         {
             "name": "symfony/deprecation-contracts",
-            "version": "v3.7.0",
+            "version": "v3.7.1",
             "type": "library"
         },
         {

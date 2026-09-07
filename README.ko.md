@@ -1,16 +1,12 @@
 <p align="center"><a href="README.md">English</a> | 한국어</p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/그누보드7-Gnuboard7-000000?style=for-the-badge&labelColor=0066FF&logoColor=white" height="200" alt="그누보드7 (Gnuboard7)">
-</p>
+# 그누보드7
+
+**모던 아키텍처로 다시 태어난 대한민국 대표 오픈소스 CMS**
+A modern, extensible CMS platform built with Laravel + React
 
 <p align="center">
-  <strong>모던 아키텍처로 다시 태어난 대한민국 대표 오픈소스 CMS</strong><br>
-  A modern, extensible CMS platform built with Laravel + React
-</p>
-
-<p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-7.0.6-blue" alt="Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/version-7.0.10-blue" alt="Version"></a>
   <a href="#"><img src="https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php&logoColor=white" alt="PHP"></a>
   <a href="#"><img src="https://img.shields.io/badge/Laravel-12.x-FF2D20?logo=laravel&logoColor=white" alt="Laravel"></a>
   <a href="#"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React"></a>
@@ -71,7 +67,7 @@ Laravel과 React를 기반으로, 보안부터 아키텍처까지 처음부터 �
 
 | 구분 | 기술 |
 |------|------|
-| **백엔드** | PHP 8.2+, Laravel 12.x, MySQL 8.0+, Redis 6.0+ |
+| **백엔드** | PHP 8.2+, Laravel 12.x, MySQL 8.0+ / MariaDB 10.3+, Redis 6.0+ |
 | **프론트엔드** | React 19, Vite, Tailwind CSS 4 (다크 모드 지원) |
 | **인증** | Laravel Sanctum (Bearer 토큰) |
 | **테스트** | PHPUnit 11.x, Vitest |
@@ -353,10 +349,12 @@ HookManager::doAction('sirsoft-ecommerce.order.after_confirm', $order);
 
 ### 시스템 요구사항
 
-- PHP 8.2+ (필수 확장 30개 포함)
+- PHP 8.2+ (필수 확장 16개 포함 — `ctype`, `curl`, `dom`, `fileinfo`, `json`, `mbstring`, `openssl`, `pdo_mysql`, `tokenizer`, `xml`, `zip` 등. `gd`/`imagick`, `intl`, `redis`, `bcmath` 등은 해당 기능을 쓸 때만 필요하며 전체 목록은 [docs/requirements.md](docs/requirements.md) 참조)
 - MySQL 8.0+ 또는 MariaDB 10.3+ (utf8mb4)
-- Node.js 20+ (빌드 시에만 필요)
 - Composer 2.x
+- Node.js 20+ (프론트엔드 에셋을 직접 빌드할 때만 필요)
+- 웹 서버(Apache 또는 Nginx) — 문서 루트를 `public/` 으로 지정
+- Redis 6.0+ (선택 — 프로덕션의 캐시·큐에 권장)
 
 ### 설치
 
@@ -399,6 +397,7 @@ cp .env.example .env
 | **sirsoft-marketing** | 마케팅 도구 |
 | **sirsoft-ckeditor5** | CKEditor 5 에디터 |
 | **sirsoft-gdpr** | 개인정보 보호(GDPR) |
+| **sirsoft-message_bizppurio** | 비즈뿌리오 메시지 발송 (문자·카카오 알림톡) |
 
 ### 템플릿
 
@@ -421,6 +420,7 @@ cp .env.example .env
 | **g7-plugin-sirsoft-daum_postcode-ja** | 다음 우편번호 플러그인 일본어 |
 | **g7-plugin-sirsoft-gdpr-ja** | 개인정보 보호(GDPR) 플러그인 일본어 |
 | **g7-plugin-sirsoft-marketing-ja** | 마케팅 플러그인 일본어 |
+| **g7-plugin-sirsoft-message_bizppurio-ja** | 비즈뿌리오 메시지 발송 플러그인 일본어 |
 | **g7-plugin-sirsoft-pay_kginicis-ja** | KG이니시스 결제 플러그인 일본어 |
 | **g7-plugin-sirsoft-pay_nicepayments-ja** | 나이스페이먼츠 결제 플러그인 일본어 |
 | **g7-plugin-sirsoft-pay_nhnkcp-ja** | NHN KCP 결제 플러그인 일본어 |
@@ -513,14 +513,16 @@ cp .env.example .env
 <p>
   <a href="https://github.com/jiwonpapa" title="jiwonpapa"><img src="https://github.com/jiwonpapa.png" width="48" alt="jiwonpapa"></a>
   <a href="https://github.com/glitter-gim" title="glitter-gim"><img src="https://github.com/glitter-gim.png" width="48" alt="glitter-gim"></a>
+  <a href="https://github.com/Tuwasduliebst" title="Tuwasduliebst"><img src="https://github.com/Tuwasduliebst.png" width="48" alt="Tuwasduliebst"></a>
+  <a href="https://github.com/lyg-kaban" title="lyg-kaban"><img src="https://github.com/lyg-kaban.png" width="48" alt="lyg-kaban"></a>
   <a href="https://github.com/jordy-bitree" title="jordy-bitree"><img src="https://github.com/jordy-bitree.png" width="48" alt="jordy-bitree"></a>
   <a href="https://github.com/laelbe" title="laelbe"><img src="https://github.com/laelbe.png" width="48" alt="laelbe"></a>
   <a href="https://github.com/bigmsg" title="bigmsg"><img src="https://github.com/bigmsg.png" width="48" alt="bigmsg"></a>
-  <a href="https://github.com/hwaryeon1234" title="hwaryeon1234"><img src="https://github.com/hwaryeon1234.png" width="48" alt="hwaryeon1234"></a>
   <a href="https://github.com/abc101" title="abc101"><img src="https://github.com/abc101.png" width="48" alt="abc101"></a>
-  <a href="https://github.com/yks118" title="yks118"><img src="https://github.com/yks118.png" width="48" alt="yks118"></a>
-  <a href="https://github.com/kitrio" title="kitrio"><img src="https://github.com/kitrio.png" width="48" alt="kitrio"></a>
+  <a href="https://github.com/hwaryeon1234" title="hwaryeon1234"><img src="https://github.com/hwaryeon1234.png" width="48" alt="hwaryeon1234"></a>
   <a href="https://github.com/koojunho" title="koojunho"><img src="https://github.com/koojunho.png" width="48" alt="koojunho"></a>
+  <a href="https://github.com/kitrio" title="kitrio"><img src="https://github.com/kitrio.png" width="48" alt="kitrio"></a>
+  <a href="https://github.com/yks118" title="yks118"><img src="https://github.com/yks118.png" width="48" alt="yks118"></a>
   <a href="https://github.com/movielee2020" title="movielee2020"><img src="https://github.com/movielee2020.png" width="48" alt="movielee2020"></a>
   <a href="https://github.com/ChoDongHyeon" title="ChoDongHyeon"><img src="https://github.com/ChoDongHyeon.png" width="48" alt="ChoDongHyeon"></a>
   <a href="https://github.com/comtylove-netizen" title="comtylove-netizen"><img src="https://github.com/comtylove-netizen.png" width="48" alt="comtylove-netizen"></a>

@@ -34,6 +34,7 @@ return [
         'secret_password_required' => '非公開投稿のパスワードが必要です。',
         'secret_password_incorrect' => '非公開投稿のパスワードが一致しません。',
         'secret_post_content' => '非公開投稿です。内容を表示するにはパスワードを入力してください。',
+        'secret_post_title' => '非公開投稿',
         'deleted_post_title' => '削除された投稿',
         'deleted_post_content' => '削除された投稿です。',
         'blinded_post_content' => '管理者によってブロック処理された投稿です。',
@@ -103,6 +104,7 @@ return [
         'verify_password_failed' => 'パスワードの確認に失敗しました。',
         'post_blinded' => 'ブロック処理された投稿にはコメントを作成できません。',
         'post_deleted' => '削除された投稿にはコメントを作成できません。',
+        'post_secret' => '閲覧権限のない秘密投稿にはコメントを作成できません。',
     ],
     'comments' => [
         'comments_disabled' => 'この掲示板はコメント機能が無効化されています。',
@@ -181,6 +183,7 @@ return [
         'permission_denied' => '権限がありません。',
         'validation_failed' => '入力値が正しくありません。',
         'duplicate_report' => '既に通報された履歴があります。',
+        'operation_failed' => '処理中にエラーが発生しました。',
     ],
     'warnings' => [
         'category_removal_attempted' => '使用中のカテゴリーの削除が試みられました。',
