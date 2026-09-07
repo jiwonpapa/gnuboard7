@@ -1,5 +1,7 @@
 import { findNodeByPath, insertNode, patchNode, type ComponentPath, type EditorNode } from '../utils/layoutTreeUtils';
 import { classifyLockKind } from '../hooks/useElementSelection';
+import { changeExtensionField } from './fields';
+import type { EditorSpec } from '../spec/specTypes';
 import { canDrop } from '../dnd/nestingRules';
 import type { NestingSpec } from '../spec/specTypes';
 import type { EditorExtensionCommand, EditorExtensionContext, EditorExtensionResult } from './contract';
@@ -27,7 +29,7 @@ export function editableRouteNode(root: EditorNode, path: ComponentPath): Editor
 /** Host-side validation; it never trusts an extension's readonly flag or proposed source. */
 export function prepareExtensionCommand(
   components: EditorNode[], current: EditorExtensionContext | null,
-  command: EditorExtensionCommand, nesting: NestingSpec | null | undefined,
+  command: EditorExtensionCommand, nesting: NestingSpec | null | undefined, spec?: EditorSpec | null,
 ): { result: EditorExtensionResult; components: EditorNode[] } {
   const refuse = (reason: Extract<EditorExtensionResult, { kind: 'refused' }>['reason']) =>
     ({ result: { kind: 'refused' as const, reason }, components });
@@ -43,6 +45,13 @@ export function prepareExtensionCommand(
     if (!plain(node.text) || !plain(command.text)) return refuse('binding');
     if (node.text === command.text) return { result: { kind: 'noop' }, components };
     const next = patchNode(root, current.path, existing => ({ ...existing, text: command.text }));
+    return { result: { kind: 'applied' }, components: next.children as EditorNode[] };
+  }
+  if (command.kind === 'setControl') {
+    const changed = changeExtensionField(node, spec, command.control, command.value, command.reset === true);
+    if (!changed) return refuse('invalid');
+    if (JSON.stringify(changed) === JSON.stringify(node)) return { result: { kind: 'noop' }, components };
+    const next = patchNode(root, current.path, () => changed);
     return { result: { kind: 'applied' }, components: next.children as EditorNode[] };
   }
   if (command.kind !== 'insertChild') return refuse('invalid');

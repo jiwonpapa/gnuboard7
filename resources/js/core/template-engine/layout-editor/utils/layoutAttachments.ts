@@ -23,7 +23,7 @@ import { buildAuthHeaders } from './authToken';
 /** 첨부 1건 — 백엔드 LayoutAttachmentResource 필드 */
 export interface LayoutAttachment {
   id: number | string;
-  layout_name: string;
+  layout_name: string | null;
   original_name: string;
   mime_type: string;
   size: number;
@@ -50,14 +50,16 @@ function encodeId(value: string): string {
  */
 export async function listLayoutAttachments(
   templateIdentifier: string,
-  layoutName: string,
+  layoutName: string | null,
+  signal?: AbortSignal,
 ): Promise<AttachmentResult<LayoutAttachment[]>> {
   const url =
     `/api/admin/templates/${encodeId(templateIdentifier)}/layout-attachments` +
-    `?layout_name=${encodeURIComponent(layoutName)}`;
+    (layoutName === null ? '' : `?layout_name=${encodeURIComponent(layoutName)}`);
   try {
     const res = await fetch(url, {
       method: 'GET',
+      signal,
       headers: buildAuthHeaders(),
       credentials: 'same-origin',
     });
@@ -87,6 +89,7 @@ export async function uploadLayoutAttachment(
   templateIdentifier: string,
   layoutName: string,
   file: File,
+  signal?: AbortSignal,
 ): Promise<AttachmentResult<LayoutAttachment>> {
   const url = `/api/admin/templates/${encodeId(templateIdentifier)}/layout-attachments`;
   const form = new FormData();
@@ -95,6 +98,7 @@ export async function uploadLayoutAttachment(
   try {
     const res = await fetch(url, {
       method: 'POST',
+      signal,
       headers: buildAuthHeaders(),
       body: form,
       credentials: 'same-origin',

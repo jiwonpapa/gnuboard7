@@ -5,6 +5,15 @@
 >
 > 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)
 
+## [engine-v1.66.0] - 2026-09-07
+
+### Added
+
+- 공개 확장 호스트에 현재 spec의 제한된 내용·스타일 필드와 `setControl` 명령을 제공한다. 기존 recipe, 출처·세션 검사, Undo/Redo를 공유하고 바인딩·알 수 없는 필드·다크/반응형 값을 보존한다 (extensions/fields, command, useExtensionHost).
+- 표준 Img의 비율·맞춤 프리셋과 페이지/템플릿 범위 첨부 목록·업로드를 제공한다. 취소·선택/문서 전환 이후 응답을 거부하고 업로드 자체는 노드를 수정하지 않는다 (extensions/media, layoutAttachments).
+
+기존 공개 API와 첨부 클라이언트 호출 방식은 유지한다. 기존 번들 확장은 새 선택형 필드/media를 사용하지 않아 최소 버전 변경 대상이 없다. 소비자는 fields/media capability를 확인해야 하며 이 버전은 별도 로컬 후보이다.
+
 ## [engine-v1.65.0] - 2026-09-07
 
 ### Added

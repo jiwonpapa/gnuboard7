@@ -1384,5 +1384,12 @@
     "invalid": "Not a valid JSON format.",
     "must_be_object": "Must be a JSON object, e.g. { \"name\": value }",
     "invalid_keys": "Names must start with a letter and use only letters, digits, _: {keys}"
+  },
+  "extension": {
+    "image_ratio": "Image ratio",
+    "image_fit": "Image fit",
+    "original_ratio": "Original ratio",
+    "cover": "Cover",
+    "contain": "Contain"
   }
 }

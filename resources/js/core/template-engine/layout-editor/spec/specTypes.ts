@@ -289,7 +289,7 @@ export interface EditorControlSpec {
   /** 친화 라벨 — `$t:...` 다국어 키 */
   label?: string;
   /** apply 타입 — `classToken`/`styleProp`/`cssVar`/`propValue` (원칙 4.8) */
-  apply?: string;
+  apply?: string | import('./recipeEngine').RecipeApply;
   /** apply 대상 키(스타일 속성명/클래스 토큰/CSS 변수명/prop 경로 등) */
   target?: string | string[];
   /** select 위젯 등의 선택지 */

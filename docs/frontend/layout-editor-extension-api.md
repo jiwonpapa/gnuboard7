@@ -14,3 +14,14 @@ NodeEditorProps/WidgetProps/CanvasOverlayProps의 선택형 extensionHost도 같
 지원: 현재 route 일반 페이지, ID가 있는 직접 소유 노드. base/partial/extension/반복 인스턴스와 다른 모드는 v1 변경 대상이 아니다. 전체 저장 충돌·원격 권한 변경의 최종 판정은 기존 서버 API가 담당한다.
 
 검증: extensionHost.test.tsx, useLayoutDocument.test.ts, useLayoutDocument.patchDocumentRaw.test.tsx, useLayoutDocument.saveGuard.test.tsx. 실제 PB 소비자의 저장·재열기 증거는 PB NE1 감사에 별도로 기록한다. 이 코드는 G7 로컬 확장 후보이며 upstream에 포함되었다고 주장하지 않는다.
+
+
+## NE2 additive capabilities (engine-v1.66.0)
+
+`snapshot.fields` exposes detached field descriptors from the currently merged editor spec. Each field includes `id`, translated `label`, `kind`, `group`, scalar `value`, `options`, `editable`, `custom`, and `source`. Finite style presets reuse the existing recipe engine. Missing means the original/template default remains active; reset removes only that field/group. Unmatched custom values are preserved until the user deliberately changes that control. Bound source/targets stay readonly. No arbitrary CSS/HTML/JS input is added. The standard basic Img also has host-owned `core:image-ratio` and `core:image-fit` finite CSS presentation controls, only when the template declares its source field. Installed template files are not changed.
+
+`execute({kind:'setControl', expected, control, value, reset?:boolean})` revalidates context and the live spec, then patches once and pushes one existing history entry. Empty alt is an explicit empty string; reset removes alt. Literal links accept HTTP(S), site-absolute, fragment, mailto and tel URLs; image sources accept HTTP(S) or site-absolute URLs. Unknown/protected controls or expressions are refused without mutation.
+
+`host.media.list({expected,scope:'page'|'template',signal?})` and `host.media.upload({expected,file,signal?})` call the existing authenticated attachment client. Page filters and upload ownership use the captured layout; template scope omits the layout filter. Results are `{ok:true,data}` or `{ok:false,reason}` and are revalidated after completion. Cancel cannot promise server-side file deletion if the server already accepted the upload. Neither method applies a node or deletes an attachment. Consumers must explicitly select a returned asset with setControl. All media is optional; older consumers and hosts keep the NE1 text workflow.
+
+Current extension panel edits common/base styles. Existing responsive/dark overrides are preserved; extensions do not infer arbitrary spec/renderer or array support. Further editing scope is tracked separately in NE3/NE5.
