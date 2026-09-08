@@ -225,9 +225,13 @@ $app = Application::configure(basePath: dirname(__DIR__))
 | 규칙: App\ 클래스를 참조하지 않는다 (부팅 전이라 오토로드를 신뢰할 수 없고, 자가 치유가 자기
 | 실패로 부팅을 막아서는 안 된다). 판정은 App\Support\CoreUpdateContext::isInProgress() 와 동일 —
 | 조건을 바꾸면 양쪽을 함께 고친다.
+| argv 채널은 명령줄 SAPI 에서만 읽는다. CGI/FPM 은 register_argc_argv=On 이면 $_SERVER['argv'] 를
+| 쿼리스트링을 '+' 로 쪼갠 값으로 채우므로(`GET /?x+core:update` → argv[1] === 'core:update'), 이 게이트가
+| 없으면 비인증 웹 요청이 요청마다 매니페스트를 지우고 다시 만들게 한다. env 플래그 채널은 웹 요청으로
+| 주입할 수 없어 그대로 두며, 웹 요청 안에서 시작하는 업데이트 흐름은 그 플래그를 프로세스 안에서 세운다.
 */
 $g7UpdateFlag = $_ENV['G7_UPDATE_IN_PROGRESS'] ?? $_SERVER['G7_UPDATE_IN_PROGRESS'] ?? getenv('G7_UPDATE_IN_PROGRESS');
-$g7UpdateArgv = $_SERVER['argv'][1] ?? '';
+$g7UpdateArgv = in_array(PHP_SAPI, ['cli', 'phpdbg'], true) ? ($_SERVER['argv'][1] ?? '') : '';
 
 if ($g7UpdateFlag === '1' || $g7UpdateFlag === 1 || $g7UpdateFlag === true
     || in_array($g7UpdateArgv, ['core:update', 'core:execute-upgrade-steps'], true)) {

@@ -122,6 +122,48 @@ class CoreUpdateContextTest extends TestCase
     }
 
     /**
+     * 웹 SAPI 에서는 argv 를 인정하지 않는다.
+     *
+     * CGI/FPM 은 `register_argc_argv=On` 이면 `$_SERVER['argv']` 를 쿼리스트링을 `+` 로 쪼갠 값으로
+     * 채운다 — `GET /?x+core:update` 가 `argv[1] === 'core:update'` 를 만든다(2026-09-08 php-cgi 실측).
+     * 그 SAPI 에서 argv 를 믿으면 비인증 요청이 업데이트 트리로 판정되어 `bootstrap/app.php` 의
+     * 자가 치유가 요청마다 매니페스트를 지운다.
+     *
+     * @effects CoreUpdateContext_ignores_argv_outside_console_sapi
+     */
+    #[Test]
+    public function 웹_sapi_에서는_위조_가능한_argv_를_인정하지_않는다(): void
+    {
+        // register_argc_argv=On 인 FPM 이 `?x+core:update` 로 만드는 형태.
+        $_SERVER['argv'] = ['x', 'core:update'];
+
+        foreach (['fpm-fcgi', 'cgi-fcgi', 'apache2handler', 'litespeed', 'cli-server'] as $sapi) {
+            $this->assertFalse(CoreUpdateContext::isInProgress($sapi), "{$sapi} 에서는 argv 로 트리 안이 되면 안 된다");
+        }
+
+        foreach (['cli', 'phpdbg'] as $sapi) {
+            $this->assertTrue(CoreUpdateContext::isInProgress($sapi), "{$sapi} 에서는 argv 보조 판정이 유효하다");
+        }
+    }
+
+    /**
+     * env 플래그 채널은 SAPI 와 무관하다 — 웹 요청으로는 주입할 수 없고, 웹 요청 안에서 시작하는
+     * 업데이트 흐름이 프로세스 안에서 세우는 채널이다.
+     *
+     * @effects CoreUpdateContext_env_flag_is_honored_regardless_of_sapi
+     */
+    #[Test]
+    public function env_플래그는_웹_sapi_에서도_인정한다(): void
+    {
+        $_ENV['G7_UPDATE_IN_PROGRESS'] = '1';
+        $_SERVER['argv'] = ['index.php'];
+
+        foreach (['fpm-fcgi', 'cgi-fcgi', 'cli'] as $sapi) {
+            $this->assertTrue(CoreUpdateContext::isInProgress($sapi), "{$sapi} 에서도 env 플래그는 트리 안이다");
+        }
+    }
+
+    /**
      * `hasEnvFlag()` 는 argv 보조 판정을 섞지 않는다 — 섞으면 단독 실행이 spawn 자식으로
      * 오판되어 사전·사후 단계를 통째로 건너뛴다.
      */
@@ -143,9 +185,9 @@ class CoreUpdateContextTest extends TestCase
      * 드러나지 않는다. 그래서 두 조건이 같은지를 여기서 잠근다 — 종전에는 양쪽 주석의 상호
      * 참조가 유일한 방어였다.
      *
-     * 대조 항목은 판정을 이루는 네 축 전부다: 환경변수 이름 · 읽는 채널 3종 · 참으로 받는 값
-     * 3종 · argv 로 인정하는 커맨드 목록(리플렉션으로 이 클래스에서 파생 — 손으로 적으면
-     * 커맨드가 하나 늘어도 통과한다).
+     * 대조 항목은 판정을 이루는 다섯 축 전부다: 환경변수 이름 · 읽는 채널 3종 · 참으로 받는 값
+     * 3종 · argv 로 인정하는 커맨드 목록 · argv 를 신뢰하는 SAPI 목록(뒤의 둘은 리플렉션으로 이
+     * 클래스에서 파생 — 손으로 적으면 항목이 하나 늘어도 통과한다).
      */
     #[Test]
     public function bootstrap_자가치유_조건이_이_판정기와_동형이다(): void
@@ -194,6 +236,34 @@ class CoreUpdateContextTest extends TestCase
                 "'{$command}'",
                 $block,
                 "자가 치유 블록의 argv 판정에 `{$command}` 가 없다 — 그 커맨드로 도는 자식은 방어를 받지 못한다"
+            );
+        }
+
+        // ⑤ argv 를 신뢰하는 SAPI — 목록은 이 클래스에서 파생한다. 게이트가 빠지면 register_argc_argv=On 인
+        //    CGI/FPM 에서 `?x+core:update` 한 번에 자가 치유가 켜진다.
+        $sapis = $reflection->getConstant('CONSOLE_SAPIS');
+
+        $this->assertIsArray($sapis);
+        $this->assertNotEmpty($sapis, 'SAPI 목록이 비면 이 대조는 공허하게 통과한다');
+        $this->assertStringContainsString(
+            'PHP_SAPI',
+            $block,
+            '자가 치유 블록의 argv 판정에 SAPI 게이트가 없다 — 웹 요청이 쿼리스트링으로 매니페스트 삭제를 켤 수 있다'
+        );
+
+        foreach ($sapis as $sapi) {
+            $this->assertStringContainsString(
+                "'{$sapi}'",
+                $block,
+                "자가 치유 블록의 SAPI 게이트에 `{$sapi}` 가 없다 — 그 SAPI 로 도는 명령줄 자식은 argv 방어를 받지 못한다"
+            );
+        }
+
+        foreach (['fpm-fcgi', 'cgi-fcgi', 'apache2handler'] as $webSapi) {
+            $this->assertStringNotContainsString(
+                "'{$webSapi}'",
+                $block,
+                "자가 치유 블록이 웹 SAPI `{$webSapi}` 의 argv 를 신뢰한다"
             );
         }
     }

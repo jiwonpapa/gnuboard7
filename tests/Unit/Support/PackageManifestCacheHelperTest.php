@@ -79,10 +79,11 @@ class PackageManifestCacheHelperTest extends TestCase
         $this->assertSame($this->packagesPath, $this->app->getCachedPackagesPath(), '전제: env 재지정이 경로를 정한다');
         $this->assertSame($this->servicesPath, $this->app->getCachedServicesPath(), '전제: env 재지정이 경로를 정한다');
 
-        PackageManifestCacheHelper::clear();
+        $remaining = PackageManifestCacheHelper::clear();
 
         $this->assertFileDoesNotExist($this->packagesPath);
         $this->assertFileDoesNotExist($this->servicesPath);
+        $this->assertSame([], $remaining, '전부 지웠으면 남은 파일이 없다');
     }
 
     /**
@@ -93,10 +94,74 @@ class PackageManifestCacheHelperTest extends TestCase
     {
         $this->assertFileDoesNotExist($this->packagesPath, '전제: 파일이 없다');
 
-        PackageManifestCacheHelper::clear();
+        $remaining = PackageManifestCacheHelper::clear();
 
         $this->assertFileDoesNotExist($this->packagesPath);
         $this->assertFileDoesNotExist($this->servicesPath);
+        $this->assertSame([], $remaining, '원래 없던 파일은 "지우지 못한 파일" 이 아니다');
+    }
+
+    /**
+     * 지우지 못한 파일은 경로로 돌려주고, 지울 수 있는 형제 파일은 그대로 지운다.
+     *
+     * 호출부(spawn 직전)가 이 목록을 업그레이드 로그에 남긴다 — 권한·소유권 불일치면 자식의 자가
+     * 치유도 같은 이유로 실패해 증상은 「Class not found」 그대로인데, 그 기록이 원인을 가리키는
+     * 유일한 흔적이다. 삭제 실패는 플랫폼마다 실제로 만든다: Windows 는 열린 핸들이, POSIX 는 부모
+     * 디렉토리의 쓰기 권한이 삭제를 막는다.
+     *
+     * @effects PackageManifestCacheHelper_clear_returns_paths_it_could_not_remove
+     */
+    #[Test]
+    public function clear_는_지우지_못한_파일의_경로를_돌려준다(): void
+    {
+        File::put($this->packagesPath, "<?php return [];\n");
+        File::put($this->servicesPath, "<?php return [];\n");
+
+        $release = $this->makeUndeletable($this->packagesPath);
+
+        try {
+            $remaining = PackageManifestCacheHelper::clear();
+        } finally {
+            $release();
+        }
+
+        $this->assertSame([$this->packagesPath], $remaining, '지우지 못한 파일만 경로로 돌려준다');
+        $this->assertFileExists($this->packagesPath, '삭제가 막힌 파일은 그대로 남는다');
+        $this->assertFileDoesNotExist($this->servicesPath, '지울 수 있는 형제 파일은 지운다');
+    }
+
+    /**
+     * 파일을 현재 프로세스가 삭제할 수 없는 상태로 만들고, 되돌리는 클로저를 반환합니다.
+     *
+     * Windows 는 읽기 전용 속성(0444)이 삭제를 막고(PHP 7.3+ 는 파일을 `FILE_SHARE_DELETE` 로 열어
+     * 열린 핸들로는 막히지 않는다 — 실측), POSIX 는 부모 디렉토리의 쓰기 권한이 삭제를 막는다(root 는
+     * 권한을 우회하므로 이 방법으로 실패를 만들 수 없다).
+     *
+     * @param  string  $path  삭제를 막을 파일
+     * @return \Closure 원상 복구 클로저
+     */
+    private function makeUndeletable(string $path): \Closure
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->assertTrue(chmod($path, 0444), '전제: 읽기 전용 속성을 건다');
+
+            return static function () use ($path): void {
+                if (is_file($path)) {
+                    chmod($path, 0644);
+                }
+            };
+        }
+
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('root 는 디렉토리 권한으로 삭제 실패를 만들 수 없다 — 비-root 로 실행해야 이 축이 측정된다');
+        }
+
+        $dir = dirname($path);
+        $this->assertTrue(chmod($dir, 0555), '전제: 부모 디렉토리의 쓰기 권한을 뺀다');
+
+        return static function () use ($dir): void {
+            chmod($dir, 0755);
+        };
     }
 
     /**

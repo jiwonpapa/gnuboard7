@@ -692,6 +692,8 @@ Laravel 은 `bootstrap/cache/packages.php` 가 있으면 stale 여부를 검사�
 | 정리 로직을 호출부마다 `@unlink` 로 복제 | 헬퍼 단일 지점 — `clearAllCaches()` 도 같은 헬퍼를 쓴다 |
 | 자식 프로세스 보호를 부모 코드에만 두기 | 부모는 이미 배포된 옛 코드일 수 있다 — 새 버전의 `bootstrap/app.php` 가 `G7_UPDATE_IN_PROGRESS` 를 보고 스스로 비운다(App\ 클래스 미참조·실패 무시) |
 | 코어 버전 판정에서 프로세스 env `APP_VERSION` 을 무조건 우선 | env 우선은 `CoreUpdateContext::isInProgress()` 인 프로세스 트리 안에서만 — 업데이트 전에 뜬 `artisan serve`·큐 워커는 옛 값을 물고 있다 |
+| 업데이트 커맨드 argv 판정을 SAPI 게이트 없이 두기 | argv 는 명령줄 SAPI(`cli`·`phpdbg`)에서만 읽는다 — CGI/FPM 은 `register_argc_argv=On` 이면 `$_SERVER['argv']` 를 쿼리스트링에서 채워(`?x+core:update`) 비인증 웹 요청이 업데이트 트리로 판정되고, 자가 치유가 요청마다 매니페스트를 지운다. env 플래그 채널은 웹에서 주입할 수 없으므로 그대로 둔다 |
+| 매니페스트 삭제 실패를 `@unlink` 로 삼키기 | `clear()` 가 지우지 못한 경로를 돌려주고 spawn 직전 호출부가 업그레이드 로그에 경고로 남긴다 — 권한·소유권 불일치면 자식도 같은 이유로 실패해 증상은 제보와 같고, 이 경고가 원인을 가리키는 유일한 흔적이다 |
 | 업데이트 트리 판정을 지점마다 다시 작성 | `App\Support\CoreUpdateContext` 단일 SSoT — `CoreServiceProvider::isCoreUpdateInProgress()` 도 위임이다. `bootstrap/app.php` 의 복제본은 부팅 전이라 불가피한 예외이며 주석으로 상호 참조한다 |
 | 자동 비활성화 로그의 `core_version` 을 `config('app.version')` 으로 적기 | 판정과 같은 `CoreVersionChecker::getCoreVersion()` — 로그와 판정 근거가 갈리면 운영자가 원인을 특정할 수 없다 |
 | "이미 있으니 건너뛴다" 분기(인스톨러 vendor 재사용)가 산출물의 출처를 보지 않음 | `installed.json` 의 `dev`/`dev-package-names` 로 출처를 보고 경고 카드·로그를 남기며, 재사용 경로에서도 컴파일 캐시를 정리한다 |

@@ -919,7 +919,17 @@ class CoreUpdateCommand extends Command
         // dev composer(require-dev 전이 의존성 laravel/mcp 의 McpServiceProvider 포함)로 깔렸다면
         // 자식은 새 vendor 에 없는 provider 를 new 하다 부팅 단계에서 죽는다 (7.0.9→7.0.10 실사례).
         // 부모 메모리의 매니페스트는 영향받지 않고, Step 11 이 package:discover 로 다시 만든다.
-        PackageManifestCacheHelper::clear();
+        //
+        // 지우지 못한 파일(권한·소유권 불일치)은 로그에 남긴다. 그 상태면 자식의 자가 치유도 같은
+        // 권한으로 실패하므로 증상은 이전 설치본 provider 의 「Class not found」 그대로이고, 이 기록이
+        // 권한이 원인이라는 유일한 흔적이다.
+        $remainingManifests = PackageManifestCacheHelper::clear();
+        if ($remainingManifests !== []) {
+            $manifestWarning = 'spawn 직전 패키지 매니페스트 삭제 실패 — 자식이 이전 설치본의 provider 목록으로 부팅할 수 있습니다 (권한·소유권 확인): '
+                .implode(', ', $remainingManifests);
+            $log($manifestWarning);
+            $this->warn($manifestWarning);
+        }
 
         $process = proc_open($commandLine, $descriptors, $pipes, base_path(), $env);
         if (! is_resource($process)) {

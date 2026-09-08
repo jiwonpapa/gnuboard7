@@ -15,6 +15,12 @@ namespace App\Support;
  * `$env` 로 전파되지만, `variables_order` 에 `E` 가 없는 호스팅에서는 `$_ENV` 가 비어 있을 수
  * 있어 argv 보조 판정을 함께 둔다.
  *
+ * argv 채널은 명령줄 SAPI 에서만 읽는다. CGI/FPM 은 `register_argc_argv=On` 이면 `$_SERVER['argv']`
+ * 를 쿼리스트링을 `+` 로 쪼갠 값으로 채우므로(`GET /?x+core:update` → `argv[1] === 'core:update'`),
+ * 그 SAPI 에서 argv 를 믿으면 비인증 웹 요청이 업데이트 트리로 판정되어 `bootstrap/app.php` 의
+ * 자가 치유가 요청마다 매니페스트를 지운다. env 플래그 채널은 웹 요청으로 주입할 수 없어 SAPI 와
+ * 무관하게 인정한다 — 웹 요청 안에서 시작하는 업데이트 흐름은 그 플래그를 프로세스 안에서 세운다.
+ *
  * 주의: `bootstrap/app.php` 의 자가 치유 블록은 부팅 전이라 이 클래스를 참조할 수 없어
  * 같은 판정을 순수 PHP 로 복제한다. 조건을 바꾸면 그쪽도 함께 고친다.
  */
@@ -26,19 +32,29 @@ final class CoreUpdateContext
     private const UPDATE_COMMANDS = ['core:update', 'core:execute-upgrade-steps'];
 
     /**
+     * argv 보조 판정을 신뢰하는 SAPI — 명령줄 프로세스만. 웹 SAPI 의 argv 는 쿼리스트링에서 채워질 수 있다.
+     */
+    private const CONSOLE_SAPIS = ['cli', 'phpdbg'];
+
+    /**
      * 현재 프로세스가 코어 업데이트 트리(부모 core:update 또는 그 spawn 자식) 안에 있는지 판정합니다.
      *
      * 판정 조건 (OR):
      *   1. 환경변수 `G7_UPDATE_IN_PROGRESS=1` — 부모가 시작 시 설정하고 spawn 자식에 전파
-     *   2. artisan 커맨드 이름이 `core:update` / `core:execute-upgrade-steps` — 1 이 전파되지
-     *      않은 극단 상황 대비 보조 판정
+     *   2. 명령줄 SAPI 에서 artisan 커맨드 이름이 `core:update` / `core:execute-upgrade-steps` —
+     *      1 이 전파되지 않은 극단 상황 대비 보조 판정. 웹 SAPI 에서는 읽지 않는다
      *
+     * @param  string|null  $sapi  판정에 쓸 SAPI 이름. 기본은 `PHP_SAPI` 이며, 테스트가 웹 SAPI 를 주입할 때만 지정
      * @return bool 업데이트 트리 안이면 true
      */
-    public static function isInProgress(): bool
+    public static function isInProgress(?string $sapi = null): bool
     {
         if (self::hasEnvFlag()) {
             return true;
+        }
+
+        if (! in_array($sapi ?? PHP_SAPI, self::CONSOLE_SAPIS, true)) {
+            return false;
         }
 
         $argv = $_SERVER['argv'] ?? [];

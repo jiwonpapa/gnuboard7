@@ -56,6 +56,8 @@ axes:
   parent_generation: [pre_7_0_11, 7_0_11_plus]                       # 부모가 spawn 직전 매니페스트를 비우는 세대인가 (이미 배포된 7.0.9·7.0.10 은 비우지 않는다)
   child_self_heal_flag: [present, absent]                            # 자식이 G7_UPDATE_IN_PROGRESS 를 물려받았는가 (자가 치유 게이트)
   process_context: [update_tree, long_lived_outside_update]          # 버전 판독 범위 — 상주 프로세스(artisan serve·큐 워커)는 트리 밖이다
+  argv_sapi: [console, web_with_forged_query_argv]                   # argv 보조 판정을 읽는 SAPI — CGI/FPM 은 register_argc_argv=On 이면 `?x+core:update` 로 argv 를 위조할 수 있다
+  manifest_unlink_result: [removed, left_by_permission]              # spawn 직전 매니페스트 삭제 결과 — 지우지 못한 파일은 업그레이드 로그에 남긴다
   vendor_dev_packages: [present, absent, unknown]                    # 운영 vendor 에 require-dev 가 섞여 있는가 (installed.json 판정)
   composer_step_branch: [reinstalled, skipped_unchanged]             # Step 6 이 vendor 를 교체했는가 스킵했는가
 
@@ -70,6 +72,7 @@ exclusions:
   - { parent_generation: 7_0_11_plus, package_manifest_state: stale_dev_provider, reason: "7.0.11+ 부모는 spawn 직전에 매니페스트를 비우므로 자식이 stale 을 보는 상태 자체가 성립하지 않는다 — 계층 ② 검증은 pre_7_0_11 부모에서만 의미가 있다" }
   - { process_context: long_lived_outside_update, child_self_heal_flag: present, reason: "플래그를 물고 있으면 정의상 업데이트 트리 안이다 — 모순" }
   - { vendor_dev_packages: unknown, composer_step_branch: skipped_unchanged, reason: "판정 불가(installed.json 부재)에서는 감지 로그 자체가 출력되지 않아 분기가 구분되지 않는다" }
+  - { argv_sapi: web_with_forged_query_argv, child_self_heal_flag: present, reason: "env 플래그는 웹 요청으로 주입할 수 없다 — 위조 argv 축은 플래그 부재 상태에서만 의미가 있다" }
 
 effects:
   # §2 spawn_failure_mode + failSpawnWithMode
@@ -130,6 +133,10 @@ effects:
   - PackageManifestCacheHelper_clear_unlinks_packages_and_services_at_configured_paths
   - clearAllCaches_rebuilds_package_manifest_via_helper
   - CoreUpdateContext_isInProgress_detects_env_flag_or_update_argv
+  - CoreUpdateContext_ignores_argv_outside_console_sapi
+  - CoreUpdateContext_env_flag_is_honored_regardless_of_sapi
+  - PackageManifestCacheHelper_clear_returns_paths_it_could_not_remove
+  - spawnUpgradeStepsProcess_logs_manifest_files_it_could_not_remove
   - getCoreVersion_prefers_env_APP_VERSION_only_inside_update_tree
   - getCoreVersion_ignores_env_APP_VERSION_outside_update_tree
   - getCoreVersion_falls_back_to_config_when_env_absent_inside_update_tree

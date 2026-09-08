@@ -12,7 +12,7 @@ use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\TestCase;
 
 /**
- * stale 패키지 매니페스트로 인한 spawn 자식 부팅 실패 회귀 테스트 (dev-g7 #658).
+ * [case:backend-31] stale 패키지 매니페스트로 인한 spawn 자식 부팅 실패 회귀 테스트 (dev-g7 #658).
  *
  * 회귀 시나리오 (sir.kr 제보, 7.0.9 → 7.0.10):
  *   운영 사이트가 `composer install`(옵션 없음)로 깔린 dev 설치본이면
@@ -203,6 +203,88 @@ class CoreUpdateCommandStalePackageManifestTest extends TestCase
     }
 
     /**
+     * 계층 ①: spawn 직전에 매니페스트를 지우지 못하면 그 파일을 업그레이드 로그에 남긴다.
+     *
+     * 권한·소유권 불일치로 삭제가 막히면 자식의 자가 치유도 같은 권한으로 같은 이유로 실패해
+     * 증상은 이전 설치본 provider 의 「Class not found」 그대로다 — 이 경고가 원인이 권한이라는
+     * 유일한 흔적이다. 삭제 실패는 실제로 만든다(Windows: 열린 핸들 / POSIX: 부모 디렉토리 쓰기
+     * 권한 제거). 자식은 존재하지 않는 php 바이너리로 부팅 불가하게 두어 `proc_open` 앞의 동작만
+     * 관측한다.
+     *
+     * @effects spawnUpgradeStepsProcess_logs_manifest_files_it_could_not_remove
+     */
+    #[Test]
+    public function spawn_직전_매니페스트를_지우지_못하면_업그레이드_로그에_남은_파일을_경고한다(): void
+    {
+        if (! function_exists('proc_open')) {
+            $this->markTestSkipped('proc_open 미지원 환경');
+        }
+
+        config(['app.update.spawn_failure_mode' => 'abort']);
+        config(['process.php_binary' => base_path('storage/framework/testing/no-such-php-binary')]);
+
+        $this->writeStaleManifests();
+
+        $release = $this->makeUndeletable($this->packagesPath);
+        $logged = [];
+
+        try {
+            try {
+                $this->invokeSpawn(function (string $line) use (&$logged): void {
+                    $logged[] = $line;
+                });
+                $this->fail('자식이 부팅할 수 없으므로 abort 모드에서 UpgradeHandoffException 이 발생해야 한다');
+            } catch (UpgradeHandoffException) {
+                // 기대된 경로 — 아래 단언이 본 검증이다.
+            }
+        } finally {
+            $release();
+        }
+
+        $this->assertFileExists($this->packagesPath, '삭제가 막힌 packages.php 는 남는다');
+        $this->assertFileDoesNotExist($this->servicesPath, '지울 수 있는 services.php 는 지운다');
+
+        $warnings = array_values(array_filter($logged, static fn (string $line): bool => str_contains($line, '패키지 매니페스트 삭제 실패')));
+        $this->assertCount(1, $warnings, '지우지 못한 파일이 있으면 업그레이드 로그에 경고 한 줄을 남긴다');
+        $this->assertStringContainsString($this->packagesPath, $warnings[0], '경고는 지우지 못한 파일의 경로를 지목한다');
+        $this->assertStringNotContainsString($this->servicesPath, $warnings[0], '지운 파일은 경고에 싣지 않는다');
+    }
+
+    /**
+     * 파일을 현재 프로세스가 삭제할 수 없는 상태로 만들고, 되돌리는 클로저를 반환합니다.
+     *
+     * Windows 는 읽기 전용 속성(0444)이 삭제를 막고(PHP 7.3+ 는 파일을 `FILE_SHARE_DELETE` 로 열어
+     * 열린 핸들로는 막히지 않는다 — 실측), POSIX 는 부모 디렉토리의 쓰기 권한이 삭제를 막는다(root 는
+     * 권한을 우회하므로 이 방법으로 실패를 만들 수 없다).
+     *
+     * @param  string  $path  삭제를 막을 파일
+     * @return \Closure 원상 복구 클로저
+     */
+    private function makeUndeletable(string $path): \Closure
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->assertTrue(chmod($path, 0444), '전제: 읽기 전용 속성을 건다');
+
+            return static function () use ($path): void {
+                if (is_file($path)) {
+                    chmod($path, 0644);
+                }
+            };
+        }
+
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('root 는 디렉토리 권한으로 삭제 실패를 만들 수 없다 — 비-root 로 실행해야 이 축이 측정된다');
+        }
+
+        $dir = dirname($path);
+        $this->assertTrue(chmod($dir, 0555), '전제: 부모 디렉토리의 쓰기 권한을 뺀다');
+
+        return static function () use ($dir): void {
+            chmod($dir, 0755);
+        };
+    }
+
+    /**
      * 존재하지 않는 provider 를 등재한 stale 매니페스트 두 개를 만든다.
      */
     private function writeStaleManifests(): void
@@ -218,9 +300,10 @@ class CoreUpdateCommandStalePackageManifestTest extends TestCase
     /**
      * `spawnUpgradeStepsProcess` 를 리플렉션으로 호출합니다.
      *
+     * @param  \Closure|null  $log  업그레이드 로그 클로저. 생략하면 버린다
      * @return bool spawn 성공 여부
      */
-    private function invokeSpawn(): bool
+    private function invokeSpawn(?\Closure $log = null): bool
     {
         $command = app(CoreUpdateCommand::class);
 
@@ -242,7 +325,7 @@ class CoreUpdateCommandStalePackageManifestTest extends TestCase
         $method = new \ReflectionMethod(CoreUpdateCommand::class, 'spawnUpgradeStepsProcess');
         $method->setAccessible(true);
 
-        return (bool) $method->invoke($command, '9.9.8', '9.9.9', true, fn () => null);
+        return (bool) $method->invoke($command, '9.9.8', '9.9.9', true, $log ?? fn () => null);
     }
 
     /**

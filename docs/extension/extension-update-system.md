@@ -238,6 +238,8 @@ $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
 
 `isCoreUpdateInProgress()` 는 env 외에 `$argv[1]` 이 `core:update` / `core:execute-upgrade-steps` 인 경우도 true 판정 — env 전파 실패 극단 상황 방어용. 하지만 `php -r '...'` 로 기동되는 spawn (inline 스크립트) 은 argv 판정이 되지 않으므로 env 전파가 유일한 수단입니다.
 
+argv 판정은 명령줄 SAPI(`cli`·`phpdbg`)에서만 유효합니다. 웹 요청의 `$_SERVER['argv']` 는 `register_argc_argv` 설정에 따라 쿼리스트링에서 채워지므로 신뢰하지 않으며, 웹 요청 안에서 업데이트 흐름을 시작하는 코드는 env 플래그를 프로세스 안에서 세워 판정을 받습니다.
+
 #### 판정의 단일 출처와 이 플래그가 게이트하는 것
 
 `CoreServiceProvider::isCoreUpdateInProgress()` 는 `App\Support\CoreUpdateContext::isInProgress()` 위임입니다. 같은 플래그가 서로 다른 계층에서 셋을 게이트하므로 판정이 갈라지면 그중 한 경로만 조용히 다르게 동작합니다.

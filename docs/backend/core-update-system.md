@@ -280,11 +280,13 @@ config 캐시와 같은 문제가 **패키지 매니페스트**(`bootstrap/cache
 
 | 계층 | 위치 | 막는 실패 | 잠그는 테스트 |
 |------|------|-----------|--------------|
-| ① 부모 선정리 | `CoreUpdateCommand::spawnUpgradeStepsProcess()` 가 `proc_open` 직전 `PackageManifestCacheHelper::clear()` | 7.0.11+ 부모가 띄우는 자식의 부팅 실패 | `CoreUpdateCommandStalePackageManifestTest` |
-| ② 자식 자가 치유 | `bootstrap/app.php` 가 `G7_UPDATE_IN_PROGRESS=1`(또는 업데이트 argv)이면 두 파일을 스스로 삭제 | **이미 배포된** 7.0.9·7.0.10 부모 아래에서 도는 신버전 자식 — 그 부모 코드는 고칠 수 없다 | 같은 테스트 (플래그 유·무 대조군 포함) |
+| ① 부모 선정리 | `CoreUpdateCommand::spawnUpgradeStepsProcess()` 가 `proc_open` 직전 `PackageManifestCacheHelper::clear()`. 지우지 못한 파일이 있으면 그 경로를 업그레이드 로그에 경고로 남긴다 — 권한·소유권 불일치면 자식의 계층 ② 도 같은 이유로 실패해 증상은 제보와 같은 「Class not found」 인데, 이 경고가 원인을 가리키는 유일한 흔적이다 | 7.0.11+ 부모가 띄우는 자식의 부팅 실패 | `CoreUpdateCommandStalePackageManifestTest` |
+| ② 자식 자가 치유 | `bootstrap/app.php` 가 `G7_UPDATE_IN_PROGRESS=1`(또는 명령줄 SAPI 에서의 업데이트 argv)이면 두 파일을 스스로 삭제 | **이미 배포된** 7.0.9·7.0.10 부모 아래에서 도는 신버전 자식 — 그 부모 코드는 고칠 수 없다 | 같은 테스트 (플래그 유·무 대조군 포함) |
 | ③ 버전 판독 범위 | `CoreVersionChecker::getCoreVersion()` 의 env 우선은 `CoreUpdateContext::isInProgress()` 트리 안에서만 | 업데이트 **전에** 뜬 `php artisan serve`·큐 워커가 옛 `APP_VERSION` 을 물고 확장을 `incompatible_core` 로 끄는 것 | `CoreVersionCheckerEnvPriorityTest` · `CoreUpdateContextTest` |
 
-계층 ②는 `config:cache`/`route:cache` 가 만드는 in-process 일회용 앱에도 발동한다 — 그 부팅도 `bootstrap/app.php` 를 다시 require 하고 플래그를 상속하기 때문이다. 웹 요청·`queue:work`·운영자 셸은 플래그도 argv 도 없어 no-op 이다.
+계층 ②는 `config:cache`/`route:cache` 가 만드는 in-process 일회용 앱에도 발동한다 — 그 부팅도 `bootstrap/app.php` 를 다시 require 하고 플래그를 상속하기 때문이다. 웹 요청·`queue:work`·운영자 셸은 플래그가 없어 no-op 이다.
+
+argv 채널은 명령줄 SAPI(`cli`·`phpdbg`)에서만 읽는다. CGI/FPM 은 `register_argc_argv=On` 이면 `$_SERVER['argv']` 를 쿼리스트링을 `+` 로 쪼갠 값으로 채우므로(`GET /?x+core:update` → `argv[1] === 'core:update'`), 그 게이트가 없으면 비인증 웹 요청이 요청마다 매니페스트를 지우고 다시 만들게 된다. env 플래그 채널은 웹 요청으로 주입할 수 없어 그대로 두며, 웹 요청 안에서 시작되는 업데이트 흐름은 그 플래그를 프로세스 안에서 세워 판정된다.
 
 계층 ③의 판정은 `App\Support\CoreUpdateContext` 가 단독으로 소유하고 `CoreServiceProvider::isCoreUpdateInProgress()` 가 그리로 위임한다. 자동 비활성화 로그의 `core_version` 도 같은 게터를 쓴다 — 로그가 `config('app.version')` 을 적고 판정은 env 로 하면 운영자가 보는 근거와 실제 판정이 어긋난다.
 

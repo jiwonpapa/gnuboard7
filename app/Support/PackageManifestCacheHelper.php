@@ -25,22 +25,35 @@ class PackageManifestCacheHelper
      * 경로는 `Application` 의 게터로 읽어 `APP_PACKAGES_CACHE`/`APP_SERVICES_CACHE` 환경변수
      * 재지정을 존중한다(테스트 격리가 이 경로 재지정에 의존한다).
      *
-     * 삭제 실패(권한 · Windows 파일 핸들 점유)는 치명적이지 않다 — 종전 상태로 남을 뿐이며
-     * 코어 업데이트의 마지막 단계(`clearAllCaches()`)가 다시 시도한다.
+     * 삭제 실패(권한 · 소유권 불일치 · Windows 파일 핸들 점유)는 예외로 올리지 않는다 — 부팅 직전에
+     * 불리므로 실패가 흐름을 막으면 안 되고, 코어 업데이트의 마지막 단계(`clearAllCaches()`)가 다시
+     * 시도한다. 대신 지우지 못한 파일의 경로를 돌려준다. spawn 직전 호출부는 그 목록을 업그레이드
+     * 로그에 남긴다 — 그 상태면 자식의 자가 치유도 같은 권한으로 같은 이유로 실패해 증상은 이전
+     * 설치본 provider 의 「Class not found」 그대로인데, 이 기록이 권한이 원인이라는 유일한 흔적이다.
      *
-     * @return void
+     * @return array<int, string> 삭제하지 못하고 남은 파일의 절대 경로. 전부 지웠거나 원래 없었으면 빈 배열
      */
-    public static function clear(): void
+    public static function clear(): array
     {
         $app = app();
+        $remaining = [];
 
         foreach ([$app->getCachedServicesPath(), $app->getCachedPackagesPath()] as $path) {
-            if (is_file($path)) {
-                @unlink($path);
+            if (! is_file($path)) {
+                continue;
+            }
+
+            if (! @unlink($path)) {
+                clearstatcache(true, $path);
+                if (is_file($path)) {
+                    $remaining[] = $path;
+                }
             }
         }
 
         clearstatcache();
+
+        return $remaining;
     }
 
     /**
