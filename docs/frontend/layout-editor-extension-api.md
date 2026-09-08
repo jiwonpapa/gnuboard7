@@ -35,3 +35,11 @@ Current extension panel edits common/base styles. Existing responsive/dark overr
 `iterationRoot` is present only in the host's existing iteration_item mode. Only the route-owned original template subtree can be modified; rendered instance indexes do not identify stored nodes. The iteration definition and external host content remain protected, with the existing host save isolation. Bound field values remain readonly. A raw route view of an iteration is not editable through this capability. Context changes invalidate commands and media responses. No template files, renderer registry, page routes or server permissions are rewritten by these APIs.
 
 Native collection identity uses `id`. A spec with a different `idField` is not exposed to native structure commands; its original source and existing editor remain intact. Supporting another identity/reference contract requires an explicit adapter and tests.
+
+## 선택 조합 재사용 (engine-v1.68.0 후보)
+
+선택형 `host.compositions.export({expected,signal})`는 현재 선택의 `g7.editor-composition/v1` JSON 문자열을 반환한다. `insert({expected,snapshot,collection,index,signal})`는 그 문자열과 현재 snapshot의 불투명 collection ID를 받는다. 등록 전역 메서드는 추가하지 않는다.
+
+템플릿/manifest/spec/nesting 서명의 정확 일치, 현재 renderer·G7 첨부 목록, 출처·ID·참조·허용 위치를 검증한다. 모든 비동기 완료 후 문맥을 다시 확인한다. 삽입은 기존 문서와 history 한 항목으로 적용하며 저장은 호출하지 않는다. 평문 구조는 같은 템플릿의 다른 페이지에 삽입할 수 있고 바인딩/actions/조건/외부 DOM 참조가 있으면 원래 layout으로 제한한다. 반복 모드·보호된 합성/상속 영역·비표준 구조의 내보내기는 현재 거부한다. 기존 원본을 삭제/정규화하지 않는다.
+
+조합 저장소 구현은 확장 소유이며 이 계약은 PB API나 사용자 라이브러리 DB를 알지 않는다. G7 첨부 URL은 현재 템플릿의 실제 목록과 비교한다. 일반 정적/외부 URL의 원격 생존 여부 검사를 제공하는 계약은 아니다.

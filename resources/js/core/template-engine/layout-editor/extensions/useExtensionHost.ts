@@ -3,12 +3,15 @@ import type { LayoutEditorState } from '../LayoutEditorContext';
 import type { UseLayoutDocumentResult } from '../hooks/useLayoutDocument';
 import type { UseEditorHistoryReturn } from '../hooks/useEditorHistory';
 import { parseEditorPath } from '../hooks/useElementSelection';
-import { findNodeByPath, type EditorNode } from '../utils/layoutTreeUtils';
+import { findNodeByPath, patchNode, type EditorNode } from '../utils/layoutTreeUtils';
 import type { EditorSpec, NestingSpec } from '../spec/specTypes';
 import { readExtensionFields } from './fields';
 import { extensionMedia } from './media';
 import { editableExtensionNode, frozenCopy, prepareExtensionCommand } from './command';
 import { structureSlots } from './structureSlots';
+import { extensionCompositions } from './compositions';
+import { insertComposition } from './compositionDocument';
+import { ComponentRegistry } from '../../ComponentRegistry';
 import type { EditorExtensionContext, EditorExtensionHost, EditorExtensionSnapshot } from './contract';
 
 type Inputs = {
@@ -60,6 +63,31 @@ export function useExtensionHost(inputs: Inputs): EditorExtensionHost {
   return {
     protocol: 'g7.layout-editor/1', snapshot,
     media: extensionMedia(() => read()?.context ?? null),
+    compositions: extensionCompositions(() => {
+      const snapshot = read();
+      const registry = ComponentRegistry.getInstance();
+      if (!snapshot || registry.getTemplateId() !== snapshot.context.templateIdentifier || registry.getLoadingState() !== 'loaded') return null;
+      return { snapshot, rules: { spec: live.current.spec, nesting: live.current.nesting,
+        manifest: registry.getManifest(), hasComponent: name => registry.hasComponent(name) } };
+    }, (expected, payload, collection, index) => {
+      const latest = read();
+      const { document, history, spec, nesting } = live.current;
+      const cell = document?.readExtensionDocument?.();
+      if (!latest || latest.context.readonly || latest.context.editMode !== 'route' || !document || !cell?.value
+        || JSON.stringify(latest.context) !== JSON.stringify(expected)) return { kind: 'refused', reason: 'stale' };
+      const root = { children: (cell.value.raw.components ?? []) as EditorNode[] };
+      const anchor = editableExtensionNode(root, expected);
+      if (!anchor) return { kind: 'refused', reason: 'target' };
+      const registry = ComponentRegistry.getInstance();
+      const changed = insertComposition(anchor, payload, collection, index, root, {
+        spec, nesting, manifest: registry.getManifest(), hasComponent: name => registry.hasComponent(name),
+      });
+      if (!changed) return { kind: 'refused', reason: 'structure' };
+      const next = patchNode(root, expected.path, () => changed).children as EditorNode[];
+      document.patchLayout(() => next);
+      history.push({ actionKind: 'insert', label: 'extension:composition', snapshot: next });
+      return { kind: 'applied' };
+    }),
     execute(command) {
       try {
         command = frozenCopy(command);

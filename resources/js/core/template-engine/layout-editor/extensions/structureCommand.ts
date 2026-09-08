@@ -25,7 +25,7 @@ function identityOwners(value: unknown, nodeItems: boolean, spec: EditorSpec | n
   }
   return owners;
 }
-function cloneItem(value: unknown, slot: StructureSlot, document: unknown, source: EditorNode['__source'],
+export function cloneStructureItem(value: unknown, slot: Pick<StructureSlot, 'nodeItems' | 'cellProp'>, document: unknown, source: EditorNode['__source'],
   spec: EditorSpec | null | undefined, nesting: NestingSpec | null | undefined): unknown {
   const clone: unknown = structuredClone(value);
   const ids = allIds(document);
@@ -81,7 +81,7 @@ export function changeStructure(anchor: EditorNode, command: ExtensionStructureC
   try {
     if (command.operation === 'insert') {
       if (index > slot.values.length || !slot.seeds.has(command.choice)) return null;
-      const value = cloneItem(slot.seeds.get(command.choice), slot, document, anchor.__source, spec, nesting);
+      const value = cloneStructureItem(slot.seeds.get(command.choice), slot, document, anchor.__source, spec, nesting);
       if (!slot.accepts(value)) return null;
       slot.values.splice(index, 0, value);
     } else {
@@ -98,7 +98,7 @@ export function changeStructure(anchor: EditorNode, command: ExtensionStructureC
         if (hasOutsideReference(document, original, allIds(value))) return null;
         slot.values.splice(index, 1);
       } else if (command.operation === 'duplicate') {
-        const cloned = cloneItem(value, slot, document, anchor.__source, spec, nesting);
+        const cloned = cloneStructureItem(value, slot, document, anchor.__source, spec, nesting);
         slot.values.splice(index + 1, 0, cloned);
       } else if (command.operation === 'move') {
         const destination = slots.find(item => item.view.id === command.destination);

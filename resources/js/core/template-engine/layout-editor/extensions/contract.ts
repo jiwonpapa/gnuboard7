@@ -1,4 +1,5 @@
 import type { ComponentPath, EditorNode } from '../utils/layoutTreeUtils';
+import type { EditorExtensionCompositions } from './compositions';
 import type { ExtensionCollection, ExtensionStructureChange } from './structureTypes';
 
 /** Public v1 protocol. All values are detached, deeply frozen snapshots. */
@@ -32,6 +33,7 @@ export interface EditorExtensionHost {
   snapshot: EditorExtensionSnapshot | null;
   execute: (command: EditorExtensionCommand) => EditorExtensionResult;
   media?: EditorExtensionMedia;
+  compositions?: EditorExtensionCompositions;
 }
 
 export type ExtensionValue = string | number | boolean | null;
