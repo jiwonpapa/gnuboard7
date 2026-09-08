@@ -1,0 +1,13 @@
+feature: layout-atomic-content-save
+description: template_layouts 저장 경합 및 본문/이력 원자성. 확장 레이아웃 저장은 별도 계약.
+axes:
+  operation: [stale_write, history_failure, save, restore, concurrent_write]
+effects:
+  - winning_content_preserved
+  - content_and_history_rolled_back
+  - baseline_and_snapshot_committed
+  - restored_revision_invalidates_editor
+  - one_concurrent_writer_succeeds
+test_files:
+  - tests/Feature/Api/Admin/LayoutAtomicSaveTest.php
+  - tests/Feature/Api/Admin/LayoutConcurrentSaveTest.php

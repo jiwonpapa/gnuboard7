@@ -106,12 +106,14 @@ class LayoutVersionRepository implements LayoutVersionRepositoryInterface
                 ->firstOrFail();
 
             // 2. 레이아웃 모델 조회 및 복원 직전 content 보관 (변경 요약 기준)
-            $layout = TemplateLayout::findOrFail($layoutId);
+            $layout = TemplateLayout::query()->lockForUpdate()->findOrFail($layoutId);
             $currentContent = $layout->content;
 
             // 3. 레이아웃을 복원할 content로 업데이트
             $layout->update([
                 'content' => $versionToRestore->content,
+                'extends' => $versionToRestore->content['extends'] ?? null,
+                'lock_version' => (int) $layout->lock_version + 1,
             ]);
 
             // 4. 복원 결과를 새 버전으로 저장 — content 는 복원된 내용(versionToRestore),

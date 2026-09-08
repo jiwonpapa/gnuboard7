@@ -4,10 +4,12 @@ namespace App\Repositories;
 
 use App\Contracts\Repositories\LayoutRepositoryInterface;
 use App\Enums\LayoutSourceType;
+use App\Exceptions\ConcurrentModificationException;
 use App\Models\TemplateLayout;
 use App\Models\TemplateLayoutVersion;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Collection as SupportCollection;
+use Illuminate\Support\Facades\DB;
 
 class LayoutRepository implements LayoutRepositoryInterface
 {
@@ -324,8 +326,9 @@ class LayoutRepository implements LayoutRepositoryInterface
     /**
      * 레이아웃 content + lock_version 동시 갱신 (낙관적 잠금)
      *
-     * Service 가 호출 직전에 expected_lock_version 검증을 마친 상태로,
-     * 본 메서드는 content 교체와 lock_version 증가를 한 번의 UPDATE 로 수행한다.
+     * 행 잠금 안에서 newLockVersion - 1과 현재 버전을 비교한 뒤 저장한다.
+     * Service의 사전 조회 이후 발생한 경쟁 저장도 거부하며, 바깥 트랜잭션이
+     * 있으면 버전 이력 저장이 끝날 때까지 잠금을 유지한다.
      *
      * @param  int  $id  레이아웃 ID
      * @param  array  $content  전체 레이아웃 JSON content
@@ -334,15 +337,27 @@ class LayoutRepository implements LayoutRepositoryInterface
      */
     public function updateContent(int $id, array $content, int $newLockVersion): TemplateLayout
     {
-        $layout = TemplateLayout::findOrFail($id);
+        return DB::transaction(function () use ($id, $content, $newLockVersion): TemplateLayout {
+            // 현재 읽기 + 행 잠금: 사전 조회 이후 다른 저장이 끝났어도 최신 버전으로 판정한다.
+            // Model::save()를 유지해 casts, timestamps, 모델 이벤트도 기존 경로를 따른다.
+            $layout = TemplateLayout::query()->lockForUpdate()->findOrFail($id);
+            $expectedVersion = $newLockVersion - 1;
+            $currentVersion = (int) $layout->lock_version;
+            if ($currentVersion !== $expectedVersion) {
+                throw new ConcurrentModificationException(
+                    currentVersion: $currentVersion,
+                    expectedVersion: $expectedVersion,
+                    resource: "template_layouts:{$id}",
+                );
+            }
 
-        $layout->content = $content;
-        $layout->extends = $content['extends'] ?? null;
-        $layout->lock_version = $newLockVersion;
+            $layout->content = $content;
+            $layout->extends = $content['extends'] ?? null;
+            $layout->lock_version = $newLockVersion;
+            $layout->save();
 
-        $layout->save();
-
-        return $layout->fresh();
+            return $layout->fresh();
+        });
     }
 
     /**

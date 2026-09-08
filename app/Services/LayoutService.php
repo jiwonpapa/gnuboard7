@@ -18,6 +18,7 @@ use App\Models\TemplateLayout;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class LayoutService
@@ -1415,59 +1416,64 @@ class LayoutService
         // 필터 훅 - 데이터 변형
         $data = HookManager::applyFilters('core.layout.filter_update_data', $data, $templateId, $name);
 
-        // 레이아웃 조회
-        $layout = $this->layoutRepository->findByName($templateId, $name);
+        // 본문·잠금 버전·이력은 함께 커밋한다. 저장소의 행 잠금은 이력 적재까지 유지된다.
+        $layout = DB::transaction(function () use ($templateId, $name, $data): TemplateLayout {
+            // 레이아웃 조회
+            $layout = $this->layoutRepository->findByName($templateId, $name);
 
-        if (! $layout) {
-            throw new ModelNotFoundException(
-                "Layout not found: template_id={$templateId}, name={$name}"
-            );
-        }
+            if (! $layout) {
+                throw new ModelNotFoundException(
+                    "Layout not found: template_id={$templateId}, name={$name}"
+                );
+            }
 
-        // 낙관적 잠금 — expected_lock_version 검증
-        // FormRequest 가 의무화하므로 누락 시 422 에서 차단되지만, 직접 호출 안전망으로 가드.
-        $expectedVersion = isset($data['expected_lock_version'])
-            ? (int) $data['expected_lock_version']
-            : null;
-        $currentVersion = (int) ($layout->lock_version ?? 0);
+            // 낙관적 잠금 — expected_lock_version 검증
+            // FormRequest 가 의무화하므로 누락 시 422 에서 차단되지만, 직접 호출 안전망으로 가드.
+            $expectedVersion = isset($data['expected_lock_version'])
+                ? (int) $data['expected_lock_version']
+                : null;
+            $currentVersion = (int) ($layout->lock_version ?? 0);
 
-        if ($expectedVersion !== null && $expectedVersion !== $currentVersion) {
-            throw new ConcurrentModificationException(
-                currentVersion: $currentVersion,
-                expectedVersion: $expectedVersion,
-                resource: "template_layouts:{$layout->id}",
-            );
-        }
+            if ($expectedVersion !== null && $expectedVersion !== $currentVersion) {
+                throw new ConcurrentModificationException(
+                    currentVersion: $currentVersion,
+                    expectedVersion: $expectedVersion,
+                    resource: "template_layouts:{$layout->id}",
+                );
+            }
 
-        // content 키가 있으면 추출 (UpdateLayoutContentRequest 사용 시)
-        $updateData = $data['content'] ?? $data;
+            // content 키가 있으면 추출 (UpdateLayoutContentRequest 사용 시)
+            $updateData = $data['content'] ?? $data;
 
-        $oldContent = $layout->content;
+            $oldContent = $layout->content;
 
-        // 레이아웃 업데이트 (lock_version 1 증가)
-        $layout = $this->layoutRepository->updateContent($layout->id, $updateData, $currentVersion + 1);
+            // 레이아웃 업데이트 (lock_version 1 증가)
+            $layout = $this->layoutRepository->updateContent($layout->id, $updateData, $currentVersion + 1);
 
-        // 버전 히스토리 저장 — 저장 시점 content 스냅샷. 모든 템플릿 유형(admin/user)이 대상이다.
-        // (종전엔 user 템플릿만 버전을 남겼으나, admin/user 구분 없이 모든 템플릿이 편집 가능해진
-        //  현 정책에 맞춰 제한을 제거한다.)
-        // changes_summary 는 직전 저장본 대비 이번 저장본의 변경을 기록한다.
-        // (종전엔 버전 2건을 만들고 그중 하나가 자기 자신과 비교돼 changes_summary 가 항상 0 이었다 —
-        //  최신 버전의 변경 요약이 0 으로 보여 수정 전/후 구분이 불가했던 결함 수정.)
-        // 첫 수정 시 수정 전 원본을 baseline 버전으로 먼저 백업한다(이력이 하나도 없을 때만).
-        // 이게 없으면 첫 수정본만 v1 으로 남아 "수정 전 상태"로 복원할 수 없다.
-        // baseline 의 changes_summary 는 비교 대상이 없어 0(빈 요약) — 최초 원본 표식.
-        $hasHistory = $this->versionRepository->getNextVersion($layout->id) > 1;
-        if (! $hasHistory) {
-            $this->versionRepository->saveVersion($layout->id, $oldContent, null);
-        }
+            // 버전 히스토리 저장 — 저장 시점 content 스냅샷. 모든 템플릿 유형(admin/user)이 대상이다.
+            // (종전엔 user 템플릿만 버전을 남겼으나, admin/user 구분 없이 모든 템플릿이 편집 가능해진
+            //  현 정책에 맞춰 제한을 제거한다.)
+            // changes_summary 는 직전 저장본 대비 이번 저장본의 변경을 기록한다.
+            // (종전엔 버전 2건을 만들고 그중 하나가 자기 자신과 비교돼 changes_summary 가 항상 0 이었다 —
+            //  최신 버전의 변경 요약이 0 으로 보여 수정 전/후 구분이 불가했던 결함 수정.)
+            // 첫 수정 시 수정 전 원본을 baseline 버전으로 먼저 백업한다(이력이 하나도 없을 때만).
+            // 이게 없으면 첫 수정본만 v1 으로 남아 "수정 전 상태"로 복원할 수 없다.
+            // baseline 의 changes_summary 는 비교 대상이 없어 0(빈 요약) — 최초 원본 표식.
+            $hasHistory = $this->versionRepository->getNextVersion($layout->id) > 1;
+            if (! $hasHistory) {
+                $this->versionRepository->saveVersion($layout->id, $oldContent, null);
+            }
 
-        // 이번 저장본을 새 버전으로 적재 — 직전(oldContent) 대비 변경 요약 기록.
-        $savedVersion = $this->versionRepository->saveVersion($layout->id, $updateData, $oldContent);
+            // 이번 저장본을 새 버전으로 적재 — 직전(oldContent) 대비 변경 요약 기록.
+            $savedVersion = $this->versionRepository->saveVersion($layout->id, $updateData, $oldContent);
 
-        // 저장 응답에 현재(최신) 버전 번호 동봉 — 편집기 라우트 트리 버전
-        // 배지가 저장 직후 재fetch 없이 동기화되도록 transient 속성으로 부착한다
-        // (LayoutResource 가 current_version 으로 직렬화 — DB 컬럼 아님).
-        $layout->setAttribute('current_version', $savedVersion->version);
+            // 저장 응답에 현재(최신) 버전 번호 동봉 — 편집기 라우트 트리 버전
+            // 배지가 저장 직후 재fetch 없이 동기화되도록 transient 속성으로 부착한다
+            // (LayoutResource 가 current_version 으로 직렬화 — DB 컬럼 아님).
+            $layout->setAttribute('current_version', $savedVersion->version);
+
+            return $layout;
+        });
 
         // 캐시 무효화
         $this->clearDependentLayoutsCache($templateId, $name);

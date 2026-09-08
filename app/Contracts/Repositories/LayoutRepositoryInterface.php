@@ -127,8 +127,9 @@ interface LayoutRepositoryInterface
     /**
      * 레이아웃 content + lock_version 동시 갱신 (낙관적 잠금)
      *
-     * Service 가 호출 직전에 expected_lock_version 검증을 마친 상태로,
-     * 본 메서드는 content 교체와 lock_version 증가를 한 번의 UPDATE 로 수행한다.
+     * 행 잠금 안에서 newLockVersion - 1과 현재 버전을 비교한 뒤 저장한다.
+     * Service의 사전 조회 이후 발생한 경쟁 저장도 거부하며, 바깥 트랜잭션이
+     * 있으면 버전 이력 저장이 끝날 때까지 잠금을 유지한다.
      *
      * @param  int  $id  레이아웃 ID
      * @param  array  $content  전체 레이아웃 JSON content
@@ -180,9 +181,9 @@ interface LayoutRepositoryInterface
      * 특정 템플릿의 모든 레이아웃 이름 조회
      *
      * @param  int  $templateId  템플릿 ID
-     * @return \Illuminate\Support\Collection<int, string> 레이아웃 이름 컬렉션
+     * @return SupportCollection<int, string> 레이아웃 이름 컬렉션
      */
-    public function getLayoutNamesByTemplateId(int $templateId): \Illuminate\Support\Collection;
+    public function getLayoutNamesByTemplateId(int $templateId): SupportCollection;
 
     /**
      * 특정 모듈의 모든 레이아웃 조회
