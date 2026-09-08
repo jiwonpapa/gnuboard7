@@ -369,6 +369,8 @@ cp .env.example .env
 # 3. 브라우저에서 /install 접속 → 설치 마법사 진행
 ```
 
+> Composer 의존성은 설치 마법사가 운영용 구성(`--no-dev`)으로 자동 설치합니다. 직접 설치하려면 `composer install --no-dev --optimize-autoloader` 를 사용하세요.
+
 > 상세 설치 가이드는 [INSTALL.md](INSTALL.md)를 참조하세요.
 
 ---

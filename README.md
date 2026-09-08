@@ -369,8 +369,11 @@ Every verification point — signup, password reset, sensitive operations, the m
 git clone https://github.com/gnuboard/g7.git
 cd g7
 
-# 2. Install PHP dependencies
-composer install
+# 2. (Optional) Install PHP dependencies — you can skip this step:
+#    the setup wizard installs them automatically with the production
+#    configuration when vendor/ is absent. Do not use a plain composer
+#    install on a production site; it pulls in development packages.
+composer install --no-dev --optimize-autoloader
 
 # 3. Copy the environment file
 cp .env.example .env
