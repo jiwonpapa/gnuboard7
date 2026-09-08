@@ -79,7 +79,7 @@ class LayoutService
      *
      * @since engine-v1.50.0 `$sourceMeta` 옵션 추가 — 편집 모드 출처 메타 부여
      */
-    public function mergeLayouts(array $parentLayout, array $childLayout, ?array $sourceMeta = null): array
+    public function mergeLayouts(array $parentLayout, array $childLayout, ?array $sourceMeta = null, ?string $childLayoutName = null): array
     {
         // Before 훅 - 병합 전 데이터 검증/변환
         HookManager::doAction('core.layout.before_merge', $parentLayout, $childLayout);
@@ -99,11 +99,14 @@ class LayoutService
             $childLayout['data_sources'] ?? []
         );
 
+        $childLayoutName ??= $childLayout['layout_name'] ?? $childLayout['name'] ?? null;
+
         // 3. components 병합 (부모의 slot을 자식 slots로 교체)
         $mergedComponents = $this->mergeComponents(
             $parentLayout['components'] ?? [],
             $childLayout['slots'] ?? [],
-            $sourceMeta
+            $sourceMeta,
+            $childLayoutName
         );
 
         // 4. modals 병합 (자식 우선, 부모와 자식 모두 포함)
@@ -115,7 +118,6 @@ class LayoutService
         // 5. init_actions/initActions 병합 (부모 먼저, 자식 나중에 실행)
         // initActions와 init_actions 둘 다 지원 (하위 호환)
         // 편집 모드($sourceMeta 비-null)면 항목별 __source 출처 부착.
-        $childLayoutName = $childLayout['layout_name'] ?? $childLayout['name'] ?? null;
         $parentInitActions = $parentLayout['initActions'] ?? $parentLayout['init_actions'] ?? [];
         $childInitActions = $childLayout['initActions'] ?? $childLayout['init_actions'] ?? [];
         $mergedInitActions = $this->mergeInitActions(
@@ -369,9 +371,9 @@ class LayoutService
      *
      * @since engine-v1.50.0 `$sourceMeta` 옵션 추가
      */
-    private function mergeComponents(array $parentComponents, array $childSlots, ?array $sourceMeta = null): array
+    private function mergeComponents(array $parentComponents, array $childSlots, ?array $sourceMeta = null, ?string $childLayoutName = null): array
     {
-        return $this->replaceSlots($parentComponents, $childSlots, $sourceMeta);
+        return $this->replaceSlots($parentComponents, $childSlots, $sourceMeta, $childLayoutName);
     }
 
     /**
@@ -655,7 +657,7 @@ class LayoutService
      *
      * @since engine-v1.50.0 `$sourceMeta` 옵션 추가
      */
-    private function replaceSlots(array $components, array $slots, ?array $sourceMeta = null): array
+    private function replaceSlots(array $components, array $slots, ?array $sourceMeta = null, ?string $childLayoutName = null): array
     {
         $result = [];
 
@@ -696,7 +698,7 @@ class LayoutService
                     $resultComponent['__source'] = $sourceMeta;
                     $resultComponent['children'] = $this->markSourceMeta(
                         $resultComponent['children'],
-                        ['kind' => 'route', 'layout' => $sourceMeta['layout'] ?? '']
+                        ['kind' => 'route', 'layout' => $childLayoutName ?? '']
                     );
                 }
 
@@ -718,7 +720,8 @@ class LayoutService
                     $resultComponent['children'] = $this->replaceSlots(
                         $component['children'],
                         $slots,
-                        $sourceMeta
+                        $sourceMeta,
+                        $childLayoutName
                     );
                 }
 
@@ -957,7 +960,7 @@ class LayoutService
                 $sourceMeta = $withSourceMeta
                     ? ['kind' => 'base', 'layout' => $parentLayoutName]
                     : null;
-                $mergedLayout = $this->mergeLayouts($parentLayout, $layoutData, $sourceMeta);
+                $mergedLayout = $this->mergeLayouts($parentLayout, $layoutData, $sourceMeta, $withSourceMeta ? $layoutName : null);
 
                 // 상속 체인 보존 — 자식 서빙 시 base 를 target_layout 으로 하는 overlay
                 // (예: 헤더 통화 슬롯 주입)가 매칭되도록 부모 이름을 비-렌더 메타로 남긴다.

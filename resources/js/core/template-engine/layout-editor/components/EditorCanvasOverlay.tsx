@@ -1,4 +1,5 @@
 import { normalizeExtensionPath } from '../extensions/path';
+import type { CompositionRenderer } from '../extensions/compositionDocument';
 import { useExtensionHost } from '../extensions/useExtensionHost';
 import { ExtensionPanels } from '../extensions/ExtensionPanels';
 // e2e:allow 레이아웃 편집기 캔버스 오버레이 — 합성 더블클릭/칩 드래그/contentEditable 의존으로 Playwright 자동화 부적합, Chrome MCP 매트릭스 + 단위(useInlineEdit/inlineBindingApi/EditorCanvasOverlay.history)로 검증 (InlineParamChipEditor.tsx 와 동일 정책)
@@ -102,6 +103,8 @@ import { getPendingValue } from '../hooks/pendingCustomTranslations';
 import { trackEditorI18n } from '../devtools/editorTrackers';
 
 export interface EditorCanvasOverlayProps {
+  /** Renderer facts from the same isolated template instance used by the canvas. */
+  compositionRenderer?: CompositionRenderer | null;
   /** frame DOM (PreviewCanvas 가 ref 로 전달) */
   frameEl: HTMLElement | null;
   /** 편집 대상 템플릿의 컴포넌트 매니페스트 (components.json) */
@@ -604,7 +607,7 @@ export function EditorCanvasOverlay(props: EditorCanvasOverlayProps): React.Reac
   }, [frameEl, selection.selectedPath]);
 
   const extensionHost = useExtensionHost({ state, document: docCtx,
-    selectedPath: selection.selectedPath, locked: !['none', 'data_bound'].includes(selection.selectedLockKind), history, nesting, spec, t: editorAwareT });
+    renderer: props.compositionRenderer, selectedPath: selection.selectedPath, locked: !['none', 'data_bound'].includes(selection.selectedLockKind), history, nesting, spec, t: editorAwareT });
 
   const selectedPathIndexes = useMemo(
     () => (selection.selectedPath ? parseEditorPath(selection.selectedPath) : null),

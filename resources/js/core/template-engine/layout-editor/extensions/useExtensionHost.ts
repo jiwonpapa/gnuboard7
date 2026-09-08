@@ -10,8 +10,7 @@ import { extensionMedia } from './media';
 import { editableExtensionNode, frozenCopy, prepareExtensionCommand } from './command';
 import { structureSlots } from './structureSlots';
 import { extensionCompositions } from './compositions';
-import { insertComposition } from './compositionDocument';
-import { ComponentRegistry } from '../../ComponentRegistry';
+import { insertComposition, type CompositionRenderer } from './compositionDocument';
 import type { EditorExtensionContext, EditorExtensionHost, EditorExtensionSnapshot } from './contract';
 
 type Inputs = {
@@ -22,6 +21,7 @@ type Inputs = {
   history: UseEditorHistoryReturn<EditorNode[]>;
   nesting: NestingSpec | null | undefined;
   spec?: EditorSpec | null;
+  renderer?: CompositionRenderer | null;
   t?: (key: string) => string;
 };
 
@@ -65,10 +65,9 @@ export function useExtensionHost(inputs: Inputs): EditorExtensionHost {
     media: extensionMedia(() => read()?.context ?? null),
     compositions: extensionCompositions(() => {
       const snapshot = read();
-      const registry = ComponentRegistry.getInstance();
-      if (!snapshot || registry.getTemplateId() !== snapshot.context.templateIdentifier || registry.getLoadingState() !== 'loaded') return null;
-      return { snapshot, rules: { spec: live.current.spec, nesting: live.current.nesting,
-        manifest: registry.getManifest(), hasComponent: name => registry.hasComponent(name) } };
+      const renderer = live.current.renderer;
+      if (!snapshot || !renderer || renderer.templateIdentifier !== snapshot.context.templateIdentifier) return null;
+      return { snapshot, rules: { spec: live.current.spec, nesting: live.current.nesting, ...renderer } };
     }, (expected, payload, collection, index) => {
       const latest = read();
       const { document, history, spec, nesting } = live.current;
@@ -78,10 +77,9 @@ export function useExtensionHost(inputs: Inputs): EditorExtensionHost {
       const root = { children: (cell.value.raw.components ?? []) as EditorNode[] };
       const anchor = editableExtensionNode(root, expected);
       if (!anchor) return { kind: 'refused', reason: 'target' };
-      const registry = ComponentRegistry.getInstance();
-      const changed = insertComposition(anchor, payload, collection, index, root, {
-        spec, nesting, manifest: registry.getManifest(), hasComponent: name => registry.hasComponent(name),
-      });
+      const renderer = live.current.renderer;
+      if (!renderer || renderer.templateIdentifier !== expected.templateIdentifier) return { kind: 'refused', reason: 'unavailable' };
+      const changed = insertComposition(anchor, payload, collection, index, root, { spec, nesting, ...renderer });
       if (!changed) return { kind: 'refused', reason: 'structure' };
       const next = patchNode(root, expected.path, () => changed).children as EditorNode[];
       document.patchLayout(() => next);

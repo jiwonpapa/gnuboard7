@@ -85,7 +85,10 @@ it('rejects malformed data and preserves canonical key ordering', () => {
   expect(canonical({ b: 1, a: {} })).toBe(canonical({ a: {}, b: 1 }));
 });
 it('uses one real host history entry with Undo/Redo and refuses stale asynchronous reuse', async () => {
-  const registry = ComponentRegistry.getInstance();
+  const registry = ComponentRegistry.createIsolatedInstance();
+  const adminRegistry = ComponentRegistry.getInstance();
+  vi.spyOn(adminRegistry, 'getTemplateId').mockReturnValue('admin-theme');
+  const renderer = { templateIdentifier: 'theme', manifest: null, hasComponent: (name: string) => registry.hasComponent(name) };
   vi.spyOn(registry, 'getTemplateId').mockReturnValue('theme'); vi.spyOn(registry, 'getLoadingState').mockReturnValue('loaded');
   vi.spyOn(registry, 'getManifest').mockReturnValue(null); vi.spyOn(registry, 'hasComponent').mockReturnValue(true);
   const { result } = renderHook(() => {
@@ -94,7 +97,7 @@ it('uses one real host history entry with Undo/Redo and refuses stale asynchrono
       patchLayout: (patch: (nodes: EditorNode[]) => EditorNode[]) => cell.set(prev => prev ? { ...prev, raw: { ...prev.raw, components: patch(prev.raw.components as EditorNode[]) } } : prev),
     } as UseLayoutDocumentResult;
     const state = { templateIdentifier: 'theme', editMode: 'route', selectedRoute: { path: '/source', layoutName: 'source' } } as LayoutEditorState;
-    return { cell, history, host: useExtensionHost({ state, document, selectedPath: '0', locked: false, history, spec, nesting: spec.nesting }) };
+    return { cell, history, host: useExtensionHost({ state, document, selectedPath: '0', locked: false, history, spec, nesting: spec.nesting, renderer }) };
   });
   act(() => { result.current.cell.set({ layoutName: 'source', raw: { components: [node] }, lockVersion: 1 }); result.current.history.push({ snapshot: [node] }); });
   const host = result.current.host; const expected = host.snapshot!.context;

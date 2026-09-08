@@ -5,6 +5,13 @@
 >
 > 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)
 
+## [engine-v1.68.1] - 2026-09-08
+
+### Fixed
+
+- 조합 호환 검증이 관리자 셸 singleton 대신 실제 편집 캔버스의 격리 renderer를 사용하도록 연결했다.
+- 상속 슬롯 본문의 출처 layout을 부모 이름으로 기록하던 오류를 수정했다. 부모 wrapper와 자식 route 소유를 구분하고 일반 공개 응답의 메타 부재를 유지한다.
+
 ## [engine-v1.68.0] - 2026-09-08
 
 ### Added

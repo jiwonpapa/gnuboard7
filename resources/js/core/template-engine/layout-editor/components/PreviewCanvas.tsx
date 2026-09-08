@@ -1214,6 +1214,8 @@ export function PreviewCanvas(props: PreviewCanvasProps = {}): React.ReactElemen
           }}
         >
           <EditorCanvasOverlay
+            compositionRenderer={{ templateIdentifier: componentRegistry.getTemplateId(),
+              manifest: componentRegistry.getManifest(), hasComponent: name => componentRegistry.hasComponent(name) }}
             frameEl={frameEl}
             manifest={manifest}
             nesting={nesting}

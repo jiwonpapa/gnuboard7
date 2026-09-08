@@ -43,3 +43,7 @@ Native collection identity uses `id`. A spec with a different `idField` is not e
 템플릿/manifest/spec/nesting 서명의 정확 일치, 현재 renderer·G7 첨부 목록, 출처·ID·참조·허용 위치를 검증한다. 모든 비동기 완료 후 문맥을 다시 확인한다. 삽입은 기존 문서와 history 한 항목으로 적용하며 저장은 호출하지 않는다. 평문 구조는 같은 템플릿의 다른 페이지에 삽입할 수 있고 바인딩/actions/조건/외부 DOM 참조가 있으면 원래 layout으로 제한한다. 반복 모드·보호된 합성/상속 영역·비표준 구조의 내보내기는 현재 거부한다. 기존 원본을 삭제/정규화하지 않는다.
 
 조합 저장소 구현은 확장 소유이며 이 계약은 PB API나 사용자 라이브러리 DB를 알지 않는다. G7 첨부 URL은 현재 템플릿의 실제 목록과 비교한다. 일반 정적/외부 URL의 원격 생존 여부 검사를 제공하는 계약은 아니다.
+
+NE4 renderer 검증은 PreviewCanvas의 격리된 편집 대상 ComponentRegistry에서 전달한 manifest·hasComponent를 사용한다. 관리자 셸의 singleton registry를 편집 대상 registry로 간주하지 않는다.
+
+NE4 출처 검증: 상속 슬롯의 route 노드는 실제 자식 layout 이름으로 표기한다. LayoutService는 부모 wrapper 소유와 자식 슬롯 소유를 별도로 전달한다. 기존 G7 content API의 빈 객체/배열 정규화는 PB 스냅샷 형식 보존과 별개이며, G7 저장 전후 전체 JSON 종류 보장은 후속 호환 감사 대상이다.

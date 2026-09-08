@@ -19,6 +19,7 @@ export interface CompositionRules {
   manifest: unknown;
   hasComponent: (name: string) => boolean;
 }
+export type CompositionRenderer = Pick<CompositionRules, 'manifest' | 'hasComponent'> & { templateIdentifier: string | null };
 /** Canonical JSON makes object key order irrelevant, without normalizing source values. */
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';

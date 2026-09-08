@@ -1,6 +1,7 @@
 feature: editor-extension-host
 description: 공개 선택 항목 확장 명령의 소유권 및 이력 보존
 test_files:
+  - tests/Unit/Services/LayoutCompositionSourceTest.php
   - resources/js/core/template-engine/layout-editor/__tests__/hooks/extensionHost.test.tsx
   - resources/js/core/template-engine/layout-editor/__tests__/hooks/extensionFields.test.ts
   - resources/js/core/template-engine/layout-editor/__tests__/hooks/extensionStructure.test.tsx
@@ -21,9 +22,13 @@ effects:
   - scoped_iteration_template
   - composition_compatibility_assets_and_scope
   - composition_original_history_and_reference_remap
+  - isolated_canvas_renderer_not_admin_singleton
+  - child_route_layout_source_not_parent_wrapper
 notes: |
   extensionHost.test.tsx의 source 테이블과 개별 테스트로 검증한다.
   실제 소비자 저장 재열기는 PB nativeEditorContract.spec.ts에 별도 기록한다.
   NE2 extensionFields.test.ts는 필드별 보존, 바인딩/출처/문맥 거부, 현재 spec 적용과 reset,
   첨부 page/template 범위, upload 소유권, cancel/revision/layout/readonly/unmount 늦은 응답을 검증한다.
   실제 API 업로드 및 렌더/저장/재열기는 PB nativeEditorContract.spec.ts의 NAT-02로 확인한다.
+
+# NE4 출처 회귀: tests/Unit/Services/LayoutCompositionSourceTest.php — 부모 wrapper/base, 자식 route/layout, 중첩 전파, 운영 메타 부재.
