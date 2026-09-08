@@ -343,6 +343,9 @@
       "mode_tile": "Tile",
       "upload_failed": "Image upload failed"
     },
+    "number": {
+      "placeholder": "Enter a number"
+    },
     "dimension": {
       "placeholder": "e.g. 320px, 50%, 24rem, auto"
     },
@@ -356,6 +359,11 @@
       "right": "Right",
       "bottom": "Bottom",
       "left": "Left"
+    },
+    "bound_value": {
+      "notice": "Bound to data (filled automatically)",
+      "replace": "Replace with a fixed value",
+      "restore": "Restore the data binding"
     }
   },
   "recipe": {

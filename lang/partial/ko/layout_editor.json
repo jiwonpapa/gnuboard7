@@ -343,6 +343,9 @@
       "mode_tile": "타일",
       "upload_failed": "이미지 업로드에 실패했습니다"
     },
+    "number": {
+      "placeholder": "숫자 입력"
+    },
     "dimension": {
       "placeholder": "예: 320px, 50%, 24rem, auto"
     },
@@ -356,6 +359,11 @@
       "right": "오른쪽",
       "bottom": "아래",
       "left": "왼쪽"
+    },
+    "bound_value": {
+      "notice": "데이터 연결 값입니다(자동으로 채워집니다)",
+      "replace": "직접 지정으로 바꾸기",
+      "restore": "데이터 연결로 되돌리기"
     }
   },
   "recipe": {
