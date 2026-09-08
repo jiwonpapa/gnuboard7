@@ -12,6 +12,7 @@ use App\Rules\ValidParentLayout;
 use App\Rules\ValidPermissionStructure;
 use App\Rules\ValidSlotStructure;
 use App\Rules\WhitelistedEndpoint;
+use App\Support\LayoutJson;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Contracts\Validation\Validator;
@@ -26,6 +27,20 @@ use Illuminate\Validation\Rule;
  */
 class UpdateLayoutContentRequest extends FormRequest
 {
+    private ?string $originalJson = null;
+
+    /** 검증된 값과 출처 마스킹을 유지하며 JSON 컨테이너 종류만 되돌린다. */
+    public function validated($key = null, $default = null)
+    {
+        $values = parent::validated();
+        if ($this->originalJson !== null && isset($values['content'])) {
+            $original = $this->stripInheritedFromLayoutContent(LayoutJson::decode($this->originalJson));
+            $values['content'] = LayoutJson::preserveKinds($values['content'], $original);
+        }
+
+        return data_get($values, $key, $default);
+    }
+
     /**
      * 사용자가 이 요청을 수행할 권한이 있는지 확인
      *
@@ -51,6 +66,14 @@ class UpdateLayoutContentRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         $content = $this->input('content');
+        if (is_string($content) && is_object(json_decode($content))) {
+            $this->originalJson = $content;
+        } elseif (is_array($content)) {
+            $body = json_decode($this->getContent());
+            if ($body instanceof \stdClass && isset($body->content) && $body->content instanceof \stdClass) {
+                $this->originalJson = json_encode($body->content, JSON_THROW_ON_ERROR);
+            }
+        }
 
         // content가 JSON 문자열인 경우 배열로 변환
         if (is_string($content)) {
@@ -461,6 +484,11 @@ class UpdateLayoutContentRequest extends FormRequest
      */
     public function withValidator(Validator $validator): void
     {
+        // 전체 content 규칙을 통과한 미지 필드도 편집 원본에 보존한다.
+        if ($validator instanceof \Illuminate\Validation\Validator) {
+            $validator->excludeUnvalidatedArrayKeys = false;
+        }
+
         $validator->after(function (Validator $v): void {
             $waitFor = $this->input('content.transition_overlay.wait_for');
             if (! is_array($waitFor) || empty($waitFor)) {

@@ -73,6 +73,22 @@ describe('useEditorShortcuts — 디스패치/가드', () => {
     expect(copy).toHaveBeenCalledTimes(1);
   });
 
+  it('확장 버튼의 Enter와 접이식/선택 컨트롤 기본 키를 보존한다', () => {
+    const openProps = vi.fn();
+    const save = vi.fn();
+    setup({ openProps, save }, true);
+    for (const tag of ['button', 'summary']) {
+      const control = document.createElement(tag);
+      const child = document.createElement('span');
+      control.appendChild(child);
+      const event = key('Enter', {}, child);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(openProps).not.toHaveBeenCalled();
+    key('s', { ctrl: true }, document.createElement('button'));
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   /** @effects shortcut_dispatch_guards_input_and_modal */
   it('입력칸 포커스 시 가로채지 않음', () => {
     const copy = vi.fn();

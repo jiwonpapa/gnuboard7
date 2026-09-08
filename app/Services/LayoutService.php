@@ -16,8 +16,10 @@ use App\Extension\Traits\ClearsTemplateCaches;
 use App\Helpers\PermissionHelper;
 use App\Models\TemplateLayout;
 use App\Models\User;
+use App\Support\LayoutJson;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class LayoutService
@@ -1283,6 +1285,10 @@ class LayoutService
             }
         }
 
+        if ($withSourceMeta && $childRow !== null) {
+            $layout = LayoutJson::editorResponse($layout, LayoutJson::decode($childRow->getRawOriginal('content')), $layoutName);
+        }
+
         // After 훅 - 레이아웃 조회 후
         HookManager::doAction('core.layout.after_get', $layout, $templateIdentifier, $layoutName, $template);
 
@@ -1412,6 +1418,12 @@ class LayoutService
      */
     public function updateLayout(int $templateId, string $name, array $data): TemplateLayout
     {
+        return DB::transaction(fn () => $this->updateLockedLayout($templateId, $name, $data));
+    }
+
+    /** 최신 행 잠금부터 본문·버전 이력까지 하나의 트랜잭션으로 저장한다. */
+    private function updateLockedLayout(int $templateId, string $name, array $data): TemplateLayout
+    {
         // Before 훅 - 레이아웃 업데이트 전
         HookManager::doAction('core.layout.before_update', $templateId, $name, $data);
 
@@ -1419,7 +1431,7 @@ class LayoutService
         $data = HookManager::applyFilters('core.layout.filter_update_data', $data, $templateId, $name);
 
         // 레이아웃 조회
-        $layout = $this->layoutRepository->findByName($templateId, $name);
+        $layout = $this->layoutRepository->findByNameForUpdate($templateId, $name);
 
         if (! $layout) {
             throw new ModelNotFoundException(
@@ -1445,7 +1457,7 @@ class LayoutService
         // content 키가 있으면 추출 (UpdateLayoutContentRequest 사용 시)
         $updateData = $data['content'] ?? $data;
 
-        $oldContent = $layout->content;
+        $oldContent = LayoutJson::decode($layout->getRawOriginal('content'));
 
         // 레이아웃 업데이트 (lock_version 1 증가)
         $layout = $this->layoutRepository->updateContent($layout->id, $updateData, $currentVersion + 1);

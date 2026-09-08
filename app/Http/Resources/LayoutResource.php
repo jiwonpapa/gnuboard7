@@ -3,6 +3,8 @@
 namespace App\Http\Resources;
 
 use App\Support\LayoutDescription;
+use App\Support\LayoutJson;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 
 class LayoutResource extends BaseApiResource
@@ -55,7 +57,9 @@ class LayoutResource extends BaseApiResource
     public function toArray(Request $request): array
     {
         $content = $this->getValue('content', []);
-        $contentJson = is_array($content) ? json_encode($content, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) : '{}';
+        $rawContent = $this->resource instanceof Model
+            ? $this->resource->getRawOriginal('content') : null;
+        $contentJson = is_string($rawContent) ? json_encode(LayoutJson::decode($rawContent), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) : (is_array($content) ? json_encode($content, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) : '{}');
         $name = $this->getValue('name');
 
         return [

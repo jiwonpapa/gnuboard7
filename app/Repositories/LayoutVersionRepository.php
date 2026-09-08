@@ -6,6 +6,7 @@ use App\Contracts\Repositories\LayoutVersionRepositoryInterface;
 use App\Models\TemplateLayout;
 use App\Models\TemplateLayoutVersion;
 use App\Repositories\Concerns\CalculatesJsonContentDiff;
+use App\Support\LayoutJson;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
@@ -106,19 +107,20 @@ class LayoutVersionRepository implements LayoutVersionRepositoryInterface
                 ->firstOrFail();
 
             // 2. 레이아웃 모델 조회 및 복원 직전 content 보관 (변경 요약 기준)
-            $layout = TemplateLayout::findOrFail($layoutId);
-            $currentContent = $layout->content;
+            $layout = TemplateLayout::whereKey($layoutId)->lockForUpdate()->firstOrFail();
+            $currentContent = LayoutJson::decode($layout->getRawOriginal('content'));
 
             // 3. 레이아웃을 복원할 content로 업데이트
             $layout->update([
-                'content' => $versionToRestore->content,
+                'content' => LayoutJson::decode($versionToRestore->getRawOriginal('content')),
+                'lock_version' => (int) $layout->lock_version + 1,
             ]);
 
             // 4. 복원 결과를 새 버전으로 저장 — content 는 복원된 내용(versionToRestore),
             //    changes_summary 는 복원 직전(currentContent) 대비 변경이다. 따라서 복원으로
             //    내용이 줄면 "삭제", 늘면 "추가"로 정확히 기록된다(종전엔 content 로 복원 직전
             //    상태를 저장하고 방향도 거꾸로라, 복원인데 "추가"로 표기되던 결함 수정).
-            return $this->saveVersion($layoutId, $versionToRestore->content, $currentContent);
+            return $this->saveVersion($layoutId, LayoutJson::decode($versionToRestore->getRawOriginal('content')), $currentContent);
         });
     }
 

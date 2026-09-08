@@ -46,7 +46,11 @@ export function useEditorShortcuts(params: UseEditorShortcutsParams): void {
     if (!enabled || typeof window === 'undefined') return;
 
     const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.defaultPrevented) return;
       if (isEditableTarget(e.target)) return;
+      // 버튼·링크·접이식/선택 컨트롤의 기본 키 동작을 캔버스 명령이 가로채지 않는다.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.target instanceof Element
+        && e.target.closest('button, a[href], summary, [role="button"], [role="radio"], [role="tab"]')) return;
 
       const ev = eventCombo(e);
       const spec = matchShortcut(ev);

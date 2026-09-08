@@ -3,6 +3,8 @@
 namespace App\Http\Resources;
 
 use App\Models\User;
+use App\Support\LayoutJson;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 
 class LayoutVersionResource extends BaseApiResource
@@ -59,7 +61,8 @@ class LayoutVersionResource extends BaseApiResource
         // 단건 조회 시에만 content 원본 전체를 노출 — 버전 비교 diff 가 slots/extends 등
         // 분해되지 않는 키까지 비교하려면 원본 전체가 필요하다. 목록에는 제외(비대화 회피).
         if ($this->includeFullContent) {
-            $payload['full_content'] = is_array($content) ? $content : [];
+            $rawContent = $this->resource instanceof Model ? $this->resource->getRawOriginal('content') : null;
+            $payload['full_content'] = is_string($rawContent) ? LayoutJson::decode($rawContent) : (is_array($content) ? $content : []);
         }
 
         return $payload;

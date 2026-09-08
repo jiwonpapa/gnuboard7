@@ -103,6 +103,12 @@ class LayoutRepository implements LayoutRepositoryInterface
             ->first();
     }
 
+    /** 저장 트랜잭션 안에서 버전 비교와 갱신 대상을 잠근다. */
+    public function findByNameForUpdate(int $templateId, string $name): ?TemplateLayout
+    {
+        return TemplateLayout::where('template_id', $templateId)->where('name', $name)->lockForUpdate()->first();
+    }
+
     /**
      * 특정 레이아웃을 영구 삭제 (템플릿 ID와 이름으로)
      *
