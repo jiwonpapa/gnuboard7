@@ -1433,6 +1433,8 @@ lazy 번들(편집기/devtools)이 코어 런타임(DynamicRenderer·엔진 싱�
 - 확장 에셋 절대경로는 `getBuiltAssetAbsolutePaths()`(=`getModulePath()`/`getPluginPath()`) 만 쓴다. `base_path("modules"|"plugins")` 직접 조립은 `_bundled` 경로 오해석 → 빈 번들.
 - concat 루프는 확장별 try/catch — 실패 확장만 skip 하고 나머지 병합을 지속한다.
 - 번들 파일명에 확장 캐시 버전을 포함(`{type}.{version}.{js,css}`). 조합 변경 시 version bump → 새 파일명 → 자동 재생성. 구파일 GC 는 `ext-bundles:cleanup` + `{module,plugin,template}:cache-clear` 가 담당한다. prod 은 version-in-path 디스크 캐시, 비프로덕션은 매 요청 concat.
+- 프로덕션은 캐시 파일 존재를 **빌드보다 먼저** 확인한다. 캐시 키는 `(type, kind, version)` 만으로 계산되는데 빌드를 앞세우면 캐시 적중에도 매 요청 활성 확장 열거·파일 읽기가 일어나고, 원본이 소실되면 멀쩡한 캐시를 두고 503 이 된다. 캐시 미스는 같은 키의 잠금으로 1회 빌드에 수렴하고 잠금 뒤 캐시를 재확인하며, 잠금 대기 초과·저장소 장애는 실패가 아니라 각자 빌드로 폴백한다.
+- 병합 결과가 비어도 선언 산출물이 전부 존재하거나 선언이 0이면 0바이트 캐시 파일을 만들어 정적 게시까지 간다. 만들지 않으면 그 구성의 자산 URL 이 API 로 폴백해 방문자의 모든 페이지 로드가 PHP 를 거친다. 캐시하지 않는 것은 산출물 소실(503 판정 보존)·병합 단계에서 건너뛴 확장이 있는 결과(굳지 않도록 매 요청 재시도)·디스크 쓰기 실패뿐이다.
 
 ### 빌드 명령어 (Artisan)
 
