@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Api\Admin;
 
+use App\Contracts\Repositories\LayoutRepositoryInterface;
 use App\Contracts\Repositories\LayoutVersionRepositoryInterface;
 use App\Exceptions\ConcurrentModificationException;
 use App\Models\Template;
@@ -20,6 +21,11 @@ use Tests\TestCase;
 class LayoutAtomicSaveTest extends TestCase
 {
     use DatabaseTransactions;
+
+    public function test_atomic_writer_capability_is_advertised(): void
+    {
+        $this->assertSame('g7.layout.content.row-lock.v1', LayoutRepositoryInterface::ATOMIC_CONTENT_CAPABILITY);
+    }
 
     private function layout(): TemplateLayout
     {

@@ -10,6 +10,9 @@ use Illuminate\Support\Collection as SupportCollection;
 
 interface LayoutRepositoryInterface
 {
+    /** updateContent serializes revision checks; LayoutService commits content and history together. */
+    public const ATOMIC_CONTENT_CAPABILITY = 'g7.layout.content.row-lock.v1';
+
     /**
      * 특정 템플릿의 모든 레이아웃 조회
      *
