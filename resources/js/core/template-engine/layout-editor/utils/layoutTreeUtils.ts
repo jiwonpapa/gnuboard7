@@ -31,6 +31,11 @@ export interface NodeSource {
   extensionIdentifier?: string;
   /** 확장 로케일 표시명(예: `게시판`) — 식별자와 함께 표시 */
   extensionName?: string;
+  /**
+   * overlay 확장 `injections[]` 순번 — 백엔드가 주입 시점에 부여. 확장 편집 모드 저장이 호스트
+   * 병합 트리에서 추출한 노드를 원래 injection 으로 되돌리는 열쇠(extension_point 주입은 없음).
+   */
+  injectionIndex?: number;
 }
 
 /**

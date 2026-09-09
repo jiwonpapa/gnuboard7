@@ -5,6 +5,21 @@
 >
 > 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)
 
+## [engine-v1.66.1] - 2026-09-09
+
+### Fixed
+
+#### 확장 편집 모드 저장 — overlay injections 보존
+- 호스트 병합 모드에서 추출한 확장 노드에 `__injectionIndex` 가 없어 `reassembleContent` 가 전부 버리고 `injections[].components: []` 를 PUT 하던 결함 수정 — 백엔드가 `__source.injectionIndex` 로 실어 주는 순번을 읽고, 없으면 원본 injection 의 노드 id 로 되돌린다 (useExtensionDocument.ts `reassembleOverlayContent`)
+- 되돌리지 못한 노드가 있고 원본에 잃을 컴포넌트가 있으면 PUT 하지 않고 `guard_extension_reassembly` 를 돌려준다 — `SaveFeedbackBanner` 가 자동 dismiss 없는 오류 배너로 표시 (`g7le-save-banner-guard-extension-reassembly`)
+- `NodeSource.injectionIndex` 타입 추가 (layoutTreeUtils.ts)
+
+#### 409 배너 버전 표기
+- 서버(`ResponseHelper::error`)가 `errors` 아래에 싣는 `current_version`/`your_version` 을 읽지 못해 「최신 버전: -1」 로 표시되던 결함 수정 — `utils/conflictVersion.ts` `readConflictVersion` 단일 판독(`errors.{key}` 우선, 최상위 폴백)을 레이아웃 저장·확장 저장·inject_props 교차 저장 세 경로가 공유
+
+### Notes
+- 편집기 재로드 stale(부팅 시점 `cache_version` 키)은 서버 `PublicLayoutController::serve` 캐시 키를 서버 현재 버전으로 고정해 해소 — 클라이언트 nonce 규약(`?v={cacheVersion}.{nonce}`)은 그대로다
+
 ## [engine-v1.66.0] - 2026-09-08
 
 ### Added
