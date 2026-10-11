@@ -12,7 +12,7 @@ use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\TestCase;
 
 /**
- * [case:backend-31] stale 패키지 매니페스트로 인한 spawn 자식 부팅 실패 회귀 테스트 (dev-g7 #658).
+ * [case:backend-32] stale 패키지 매니페스트로 인한 spawn 자식 부팅 실패 회귀 테스트 (dev-g7 #658).
  *
  * 회귀 시나리오 (sir.kr 제보, 7.0.9 → 7.0.10):
  *   운영 사이트가 `composer install`(옵션 없음)로 깔린 dev 설치본이면
@@ -53,7 +53,9 @@ class CoreUpdateCommandStalePackageManifestTest extends TestCase
         parent::setUp();
 
         $uniq = uniqid();
-        $this->relativePackagesPath = "storage/framework/testing/stale-manifest-{$uniq}/packages.php";
+        // POSIX 삭제 실패는 부모 권한으로 만든다. services.php 와 부모를 공유하면
+        // 지울 수 있어야 하는 대조 파일까지 함께 잠기므로 packages 만 격리한다.
+        $this->relativePackagesPath = "storage/framework/testing/stale-manifest-{$uniq}/packages/packages.php";
         $this->relativeServicesPath = "storage/framework/testing/stale-manifest-{$uniq}/services.php";
         $this->packagesPath = base_path($this->relativePackagesPath);
         $this->servicesPath = base_path($this->relativeServicesPath);
@@ -81,7 +83,7 @@ class CoreUpdateCommandStalePackageManifestTest extends TestCase
         }
         $this->originalEnv = [];
 
-        $dir = dirname($this->packagesPath);
+        $dir = dirname($this->servicesPath);
         if (File::isDirectory($dir)) {
             File::deleteDirectory($dir);
         }
